@@ -63,6 +63,20 @@ jobs:
           name: integration-test-reports
           path: build/reports/tests/
 
+  model:
+    name: Model and importers (python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: model
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # the runner's python 3 (>= 3.11, stdlib only): no setup-python to pin
+      - run: python3 --version
+      - run: python3 apply.py --validate-only
+      - run: python3 -m unittest -v
+
   format:
     name: Format (prettier)
     runs-on: ubuntu-latest
