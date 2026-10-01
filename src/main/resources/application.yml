@@ -1,0 +1,22 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: caja-backend
+
+wasichai:
+  database:
+    host: ${WASICHAI_DB_HOST:localhost}
+    # compose.yml publica postgres en 5434. nunca 5432: puede haber un postgres de otra app ahí
+    port: ${WASICHAI_DB_PORT:5434}
+    name: ${WASICHAI_DB_NAME:caja}
+    username: ${WASICHAI_DB_USERNAME:caja}
+    password: ${WASICHAI_DB_PASSWORD:caja}
+  seed:
+    # admin@wasichai.local / admin. solo para desarrollo: apagarlo en cualquier entorno real
+    dev: ${WASICHAI_SEED_DEV:true}
+  security:
+    jwt:
+      # solo para desarrollo. un despliegue real pone WASICHAI_JWT_SECRET (>= 32 bytes)
+      secret: ${WASICHAI_JWT_SECRET:caja-dev-only-secret-change-me-0123456789}
