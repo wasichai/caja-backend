@@ -50,6 +50,12 @@ class CobroController(
         return ResponseEntity.status(if (cobro.emitido) HttpStatus.CREATED else HttpStatus.OK).body(cobro)
     }
 
+    // lo que costaría cobrar esas órdenes, sin cobrarlas: ningún total sale del cliente
+    @PostMapping("/cobros/vista-previa")
+    suspend fun vistaPrevia(
+        @RequestBody body: VistaPreviaDeOrdenes
+    ) = cobros.vistaPrevia(body)
+
     @GetMapping("/cajas")
     suspend fun cajas(
         @RequestParam(required = false) page: Int?,

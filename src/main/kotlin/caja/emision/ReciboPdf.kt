@@ -3,6 +3,7 @@ package caja.emision
 import caja.cobro.Caja
 import caja.cobro.LineaRecibo
 import caja.cobro.Recibo
+import caja.cobro.lineasEnOrden
 import caja.cobro.nombreImpreso
 import caja.comun.LIMA
 import org.springframework.stereotype.Component
@@ -35,7 +36,7 @@ class ReciboPdf(
         cajero = recibo.cajero!!,
         pagador = nombreImpreso(recibo.pagadorNombre, recibo.pagadorDocumento),
         documento = recibo.pagadorDocumento?.takeIf { recibo.pagadorNombre != null },
-        lineas = lineas.sortedBy { it.orden }.map { LineaImpresa(it.concepto!!, it.detalle, it.referenciaExterna, soles(it.monto!!)) },
+        lineas = lineasEnOrden(lineas).map { LineaImpresa(it.concepto!!, it.detalle, it.referenciaExterna, soles(it.monto!!)) },
         total = soles(recibo.total!!),
         actualizadoA = recibo.actualizadoA!!.format(FECHA),
         formaPago = recibo.formaPago!!,

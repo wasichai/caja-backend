@@ -8,7 +8,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
+import wasichai.core.common.ConflictException
 import wasichai.core.common.ForbiddenException
+import wasichai.core.common.NotFoundException
 import wasichai.core.common.ValidationException
 import java.math.BigDecimal
 import java.time.Instant
@@ -86,6 +88,50 @@ class CobranzaTest {
         assertTrue(motivoNoCobrable(anulada, hoy)!!.contains("la retiró"))
         assertTrue(motivoNoCobrable(futura, hoy)!!.contains("es exigible desde el ${hoy.plusDays(1)}"))
         assertTrue(motivoNoCobrable(futura, hoy)!!.contains(futura.id!!))
+    }
+
+    // lo que impide cobrar unas órdenes: lo mismo para el cobro (que lanza el primero) y la vista previa (que los dice)
+
+    @Test
+    fun `lo que impide el cobro va en el orden del cobro, primero la que no existe y luego la que no es cobrable`() {
+        val buena = orden()
+        val pagada = orden(estado = PAGADA, recibo = UUID.randomUUID().toString())
+        val falta = UUID.randomUUID().toString()
+        val leidas = listOf(buena, pagada).associateBy { it.id!! }
+
+        val impedimentos = impedimentosDelCobro(listOf(pagada.id!!, falta, buena.id!!), leidas, hoy)
+
+        assertEquals(2, impedimentos.size)
+        assertTrue(impedimentos[0] is NotFoundException && impedimentos[0].message.contains(falta), impedimentos.toString())
+        assertTrue(impedimentos[1] is ConflictException && impedimentos[1].message.contains(pagada.id), impedimentos.toString())
+        assertTrue(impedimentosDelCobro(listOf(buena.id), leidas, hoy).isEmpty())
+    }
+
+    @Test
+    fun `ordenes de dos sistemas impiden el cobro con un 400 en ordenes`() {
+        val rentas = orden()
+        val mercados = orden(sistemaOrigen = "mercados")
+
+        val impedimento = impedimentosDelCobro(listOf(rentas.id!!, mercados.id!!), listOf(rentas, mercados).associateBy { it.id!! }, hoy).single()
+
+        assertEquals("ordenes", (impedimento as ValidationException).violations.single().field)
+        assertTrue(motivo(impedimento).contains("«mercados»"), motivo(impedimento))
+    }
+
+    @Test
+    fun `la linea de una orden copia su sistema, concepto, detalle, referencia e importe`() {
+        val orden = orden(importe = BigDecimal("150.50")).copy(detalle = "predio U-0001")
+
+        val linea = lineaDeOrden(orden)
+
+        assertEquals(orden.id, linea.orden)
+        assertEquals("rentas", linea.sistemaOrigen)
+        assertEquals(orden.concepto, linea.concepto)
+        assertEquals("predio U-0001", linea.detalle)
+        assertEquals(orden.referenciaExterna, linea.referenciaExterna)
+        assertEquals(BigDecimal("150.50"), linea.monto)
+        assertNull(linea.tasa)
+        assertNull(linea.cantidad)
     }
 
     // el cuerpo de PAGO_REGISTRADO: las claves de rentas.json, los importes en cadena
@@ -184,6 +230,12 @@ class CobranzaTest {
         assertEquals(hoy, fechaDePago(" ", hoy))
         assertEquals(hoy, fechaDePago("2026-10-02", hoy))
         listOf("2026-10-01", "2026-10-03", "02/10/2026").forEach { assertEquals("fecha_de_pago", rechazado { fechaDePago(it, hoy) }, it) }
+    }
+
+    @Test
+    fun `la fecha de cobro de las tasas sigue la misma regla, sobre su campo`() {
+        assertEquals(hoy, fechaDePago(null, hoy, "fecha_de_cobro"))
+        assertEquals("fecha_de_cobro", rechazado { fechaDePago("2026-10-01", hoy, "fecha_de_cobro") })
     }
 
     @Test

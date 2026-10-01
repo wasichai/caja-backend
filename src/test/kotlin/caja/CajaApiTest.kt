@@ -10,6 +10,7 @@ import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 import wasichai.test.WasichaiIntegrationTest
 import java.io.File
+import java.time.LocalDate
 import java.util.UUID
 
 // la base de las pruebas de integración de la api de caja (portada de SrtmApiTest): antes de cada prueba, el modelo
@@ -280,6 +281,35 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         val codigo: String,
         val serie: String
     )
+
+    // una tasa nueva del TUPA en una vigencia, con un área nueva: su id. el importe es de la prueba, no de una tarifa
+    // real
+    protected fun nuevaTasa(
+        codigo: String,
+        importe: String,
+        desde: LocalDate,
+        hasta: LocalDate? = null,
+        descripcion: String = "CONSTANCIA DE LA PRUEBA $codigo"
+    ): String {
+        val area = registro("area", mapOf("codigo" to "A-${unico()}", "nombre" to "ÁREA DE LA PRUEBA", "activa" to true))
+        return registro(
+            "tasa",
+            mapOf(
+                "codigo" to codigo,
+                "descripcion" to descripcion,
+                "partida_presupuestal" to "1.3.1.1.1.1",
+                "importe" to importe,
+                "vigencia_desde" to desde.toString(),
+                "vigencia_hasta" to hasta?.toString(),
+                "documento_fuente" to "ORDENANZA DE LA PRUEBA",
+                "clave_vigencia" to "$codigo|$desde",
+                "area" to area
+            )
+        )
+    }
+
+    // un código de tasa nuevo, único en la base compartida
+    protected fun codigoDeTasa(): String = "T-${unico()}"
 
     // los registros de un objeto que cumplen los filtros, leídos como admin por la api de core
     protected fun registros(

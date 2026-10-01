@@ -1,8 +1,13 @@
 package caja.cobro
 
+import caja.comun.Importe
+import caja.comun.LIMA
 import tools.jackson.databind.json.JsonMapper
+import wasichai.core.common.ConflictException
 import wasichai.core.common.ForbiddenException
+import wasichai.core.common.NotFoundException
 import wasichai.core.common.ValidationException
+import wasichai.core.common.WasichaiException
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.format.DateTimeParseException
@@ -75,6 +80,122 @@ fun motivoNoCobrable(
             else -> "es exigible desde el ${orden.fechaExigibilidad} y se está cobrando al $fecha"
         }
 }
+
+// lo que impide cobrar esas órdenes a esa fecha, en el orden en que el cobro lo decide: las que no existen (404), dos
+// sistemas (400 en ordenes) y las que no se pueden cobrar (409). vacío si se pueden cobrar todas. el cobro lanza el
+// primero; la vista previa los dice todos. una sola fuente: ninguno de los dos decide por su cuenta
+fun impedimentosDelCobro(
+    porId: List<String>,
+    leidas: Map<String, OrdenDeCobro>,
+    fecha: LocalDate
+): List<WasichaiException> {
+    val faltan = porId.filter { it !in leidas }.map { NotFoundException("No hay ninguna orden de cobro $it") }
+    val ordenes = porId.mapNotNull(leidas::get)
+    val sistemas = ordenes.takeIf { it.isNotEmpty() }?.let { listOfNotNull(impedimento { sistemaUnico(it) }) }.orEmpty()
+    val noCobrables = ordenes.mapNotNull { orden -> motivoNoCobrable(orden, fecha)?.let(::ConflictException) }
+    return faltan + sistemas + noCobrables
+}
+
+private fun impedimento(regla: () -> Unit): WasichaiException? =
+    try {
+        regla()
+        null
+    } catch (e: WasichaiException) {
+        e
+    }
+
+// el impedimento en una frase, para la vista previa: un 400 lleva su motivo en la violación
+fun motivo(impedimento: WasichaiException): String =
+    if (impedimento.violations.isEmpty()) {
+        impedimento.message
+    } else {
+        "${impedimento.message}: ${impedimento.violations.joinToString("; ") { it.message }}"
+    }
+
+// la línea del recibo de una orden: su sistema, su concepto, su detalle, su referencia y su importe
+fun lineaDeOrden(orden: OrdenDeCobro): LineaRecibo =
+    LineaRecibo(
+        orden = orden.id,
+        sistemaOrigen = orden.sistemaOrigen,
+        concepto = orden.concepto,
+        detalle = orden.detalle,
+        referenciaExterna = orden.referenciaExterna,
+        monto = orden.importe
+    )
+
+// las líneas de un recibo en un orden fijo: las de órdenes por id de orden, las de tasas por su concepto. nacen en la
+// misma transacción con el mismo created_at, y el reenvío y el papel tienen que decir lo mismo que la primera vez
+fun lineasEnOrden(lineas: List<LineaRecibo>): List<LineaRecibo> = lineas.sortedWith(compareBy({ it.orden }, { it.concepto }, { it.tasa }, { it.id }))
+
+// una línea como sale por la api, con sus importes a la fecha del recibo (regla 9). codigos: el código de cada tasa
+// por su id, para las líneas de tasa
+fun lineaRespuesta(
+    linea: LineaRecibo,
+    fecha: LocalDate,
+    codigos: Map<String, String> = emptyMap()
+): LineaRespuesta =
+    LineaRespuesta(
+        ordenId = linea.orden,
+        sistemaOrigen = linea.sistemaOrigen,
+        concepto = linea.concepto!!,
+        detalle = linea.detalle,
+        referenciaExterna = linea.referenciaExterna,
+        monto = Importe.de(linea.monto!!, fecha),
+        codigo = linea.tasa?.let(codigos::get),
+        cantidad = linea.cantidad,
+        precioUnitario = linea.precioUnitario?.let { Importe.de(it, fecha) }
+    )
+
+// la respuesta de un cobro: el recibo con sus líneas y, si lo tiene, su evento. sin evento (una tasa), SIN_EVENTO
+fun respuestaDelCobro(
+    recibo: Recibo,
+    lineas: List<LineaRecibo>,
+    evento: PagoEvento?,
+    emitido: Boolean,
+    codigos: Map<String, String> = emptyMap()
+): CobroRespuesta {
+    val fecha = recibo.actualizadoA!!
+    return CobroRespuesta(
+        recibo =
+            ReciboRespuesta(
+                numeroImpreso = recibo.numeroImpreso!!,
+                serie = recibo.serie!!,
+                numero = recibo.numero!!,
+                cajero = recibo.cajero!!,
+                formaPago = recibo.formaPago!!,
+                tipoPago = recibo.tipoPago!!,
+                emitidoEn =
+                    recibo.emitidoEn!!
+                        .atZone(LIMA)
+                        .toOffsetDateTime()
+                        .toString(),
+                total = Importe.de(recibo.total!!, fecha),
+                lineas = lineasEnOrden(lineas).map { lineaRespuesta(it, fecha, codigos) }
+            ),
+        pagoId = evento?.eventoId,
+        estadoDelPago =
+            when {
+                evento == null -> SIN_EVENTO
+                evento.estado == EVENTO_PENDIENTE -> EN_TRANSITO
+                else -> evento.estado!!
+            },
+        emitido = emitido
+    )
+}
+
+// lo que costaría cobrar esas líneas: el total es el del recibo (totalDe), y cobrable si nada lo impide
+fun vistaPrevia(
+    lineas: List<LineaRecibo>,
+    fecha: LocalDate,
+    impedimentos: List<WasichaiException>,
+    codigos: Map<String, String> = emptyMap()
+): VistaPrevia =
+    VistaPrevia(
+        lineas = lineas.map { lineaRespuesta(it, fecha, codigos) },
+        total = lineas.takeIf { it.isNotEmpty() }?.let { Importe.de(totalDe(it.map { l -> l.monto!! }), fecha) },
+        cobrable = impedimentos.isEmpty(),
+        motivos = impedimentos.map(::motivo)
+    )
 
 // el nombre para el papel, o el motivo por el que no lo hay: nunca la cadena vacía, que se lee como un defecto de
 // impresión (Pagador.nombreImpreso de caja)
@@ -164,21 +285,22 @@ fun claveDeIdempotencia(valor: String?): String? {
     return clave
 }
 
-// el día del cobro es hoy en Lima (QuienYCuando de caja, SOLO_HOY): si viene, solo se admite hoy. cobrar «ayer» abriría
-// un turno de ayer
+// el día del cobro es hoy en Lima (QuienYCuando de caja, SOLO_HOY), en fecha_de_pago o en fecha_de_cobro: si viene,
+// solo se admite hoy. cobrar «ayer» abriría un turno de ayer
 fun fechaDePago(
     valor: String?,
-    hoy: LocalDate
+    hoy: LocalDate,
+    campo: String = "fecha_de_pago"
 ): LocalDate {
     val texto = valor?.trim()?.ifEmpty { null } ?: return hoy
     val pedida =
         try {
             LocalDate.parse(texto)
         } catch (_: DateTimeParseException) {
-            throw ValidationException("Fecha inválida", "fecha_de_pago", "una fecha AAAA-MM-DD")
+            throw ValidationException("Fecha inválida", campo, "una fecha AAAA-MM-DD")
         }
     if (pedida != hoy) {
-        throw ValidationException("Solo se cobra hoy", "fecha_de_pago", "solo admite el día de hoy ($hoy): omita el campo")
+        throw ValidationException("Solo se cobra hoy", campo, "solo admite el día de hoy ($hoy): omita el campo")
     }
     return pedida
 }
