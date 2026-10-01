@@ -58,7 +58,7 @@ class CajaSmokeTest : WasichaiIntegrationTest() {
     fun `una ruta de caja sin token da 401`() {
         client
             .get()
-            .uri("/api/caja/ping")
+            .uri("/api/caja/cajas")
             .exchange()
             .expectStatus()
             .isUnauthorized

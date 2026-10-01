@@ -28,4 +28,12 @@ class FronteraDeLaOrdenTest {
                 .toList()
         assertEquals(emptyList<String>(), campos.filter { campo -> prohibidos.any { campo.startsWith(it) } }, campos.toString())
     }
+
+    @Test
+    fun `lo que manda el sistema de origen y lo que se guarda tampoco`() {
+        listOf(NuevaOrden::class.java, OrdenDeCobro::class.java, OrdenRespuesta::class.java).forEach { tipo ->
+            val campos = tipo.declaredFields.map { it.name.lowercase() }
+            assertEquals(emptyList<String>(), campos.filter { campo -> prohibidos.any { campo.startsWith(it) } }, tipo.simpleName)
+        }
+    }
 }
