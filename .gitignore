@@ -28,3 +28,6 @@ logs/
 
 # node tooling (commitlint, husky, prettier)
 node_modules/
+
+# python
+__pycache__/

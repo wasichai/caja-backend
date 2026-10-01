@@ -4,6 +4,8 @@
 *.kts
 *.py
 docs/
+# model.json is laid out by hand; model/apply.py validates it, and the python there keeps its hand formatting
+model/
 gradle/
 build/
 .gradle/

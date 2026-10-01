@@ -1,0 +1,153 @@
+{
+  "enums": {},
+  "objects": [
+    {
+      "name": "area",
+      "label": "Área",
+      "pluralLabel": "Áreas",
+      "description": "Dependencia de la municipalidad a la que se imputa lo que recauda una caja, y que fija las tasas (model/data/ejemplos/cajas.csv).",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "Como la nombra la municipalidad, por ejemplo A-10. Es la clave con la que cajas y tasas la buscan."
+        },
+        {
+          "name": "nombre",
+          "label": "Nombre",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "activa",
+          "label": "Activa",
+          "type": "BOOLEAN",
+          "required": true,
+          "description": "Un área que ya no se usa se da de baja, no se borra."
+        }
+      ]
+    },
+    {
+      "name": "caja",
+      "label": "Caja",
+      "pluralLabel": "Cajas",
+      "description": "Ventanilla de cobro (model/data/ejemplos/cajas.csv). Las cajas tributarias no tienen área.",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "Como la nombra la municipalidad, por ejemplo C-10."
+        },
+        {
+          "name": "nombre",
+          "label": "Nombre",
+          "type": "TEXT",
+          "required": true,
+          "description": "El rótulo de la ventanilla."
+        },
+        {
+          "name": "serie",
+          "label": "Serie",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "La serie de sus recibos: de 1 a 5 caracteres, en mayúsculas, única en la municipalidad. Es lo que impide que dos ventanillas compitan por el mismo correlativo."
+        },
+        {
+          "name": "activa",
+          "label": "Activa",
+          "type": "BOOLEAN",
+          "required": true,
+          "description": "Una caja que ya no se usa se da de baja, no se borra."
+        }
+      ]
+    },
+    {
+      "name": "tasa",
+      "label": "Tasa",
+      "pluralLabel": "Tasas",
+      "description": "Tarifa de un trámite o servicio del TUPA en una vigencia. La cifra es un dato publicado desde la normativa verificada, no un literal del código. Clave natural: codigo y vigencia_desde, que clave_vigencia reúne en un campo.",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "TEXT",
+          "required": true,
+          "description": "El código de la tasa en el TUPA. Se repite en cada vigencia."
+        },
+        {
+          "name": "descripcion",
+          "label": "Descripción",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "partida_presupuestal",
+          "label": "Partida presupuestal",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "importe",
+          "label": "Importe",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La tarifa en soles, con hasta 2 decimales y no negativa."
+        },
+        {
+          "name": "vigencia_desde",
+          "label": "Vigencia desde",
+          "type": "DATE",
+          "required": true
+        },
+        {
+          "name": "vigencia_hasta",
+          "label": "Vigencia hasta",
+          "type": "DATE",
+          "description": "Vacía: sigue vigente. Si está, no es anterior a vigencia_desde."
+        },
+        {
+          "name": "documento_fuente",
+          "label": "Documento fuente",
+          "type": "TEXT",
+          "required": true,
+          "description": "La norma o el TUPA de donde sale la tarifa."
+        },
+        {
+          "name": "clave_vigencia",
+          "label": "Clave de vigencia",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<codigo>|<vigencia_desde en ISO>. Reemplaza la unicidad compuesta (codigo, vigencia_desde), que wasichai no tiene."
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "caja_area",
+      "label": "Área",
+      "inverseLabel": "Cajas",
+      "source": "caja",
+      "target": "area",
+      "fieldName": "area",
+      "required": false
+    },
+    {
+      "name": "tasa_area",
+      "label": "Área",
+      "inverseLabel": "Tasas",
+      "source": "tasa",
+      "target": "area",
+      "fieldName": "area",
+      "required": true
+    }
+  ]
+}

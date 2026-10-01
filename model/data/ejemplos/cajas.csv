@@ -1,0 +1,6 @@
+codigo,nombre,serie,codigoArea,nombreArea
+C-01,Caja tributaria 1,001,,
+C-02,Caja tributaria 2,002,,
+C-10,Caja de tasas - Tramite documentario,010,A-10,TRAMITE DOCUMENTARIO
+C-11,Caja de tasas - Rentas,011,A-11,RENTAS
+C-12,Caja de tasas - Desarrollo urbano,012,A-12,DESARROLLO URBANO

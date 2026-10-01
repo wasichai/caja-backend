@@ -1,0 +1,337 @@
+"""End-to-end tests for apply.py's CLI against a fake Core.
+
+Run: cd model && python3 -m unittest -v
+"""
+import io
+import json
+import os
+import socket
+import tempfile
+import unittest
+from contextlib import redirect_stdout, redirect_stderr
+
+import apply
+from fake_core import FakeCore
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.json")
+
+OBJECTS = 3
+RELATIONSHIPS = 2
+OBJECT_ORDER = ["area", "caja", "tasa"]
+RELATIONSHIP_ORDER = ["caja_area", "tasa_area"]
+
+
+def load_model():
+    with open(MODEL_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def core_fields(model, obj_name, drop=(), options=None):
+    """What Core answers for an object that has model.json's fields, minus `drop`; `options` overrides enum options."""
+    obj = next(o for o in model["objects"] if o["name"] == obj_name)
+    fields = []
+    for f in obj["fields"]:
+        if f["name"] in drop:
+            continue
+        field = {"name": f["name"], "label": f["label"], "type": f["type"]}
+        if f["type"] == "ENUM":
+            field["enumOptions"] = (options or {}).get(f["name"], model["enums"][f["enum"]])
+        fields.append(field)
+    return fields
+
+
+class ApplyCliTestCase(unittest.TestCase):
+    def setUp(self):
+        self.core = FakeCore()
+        self.addCleanup(self.core.stop)
+
+    def run_cli(self, extra_args, core_url=None, model_path=MODEL_PATH):
+        args = [
+            "--model", model_path,
+            "--core", core_url or self.core.base_url,
+            "--email", "admin@wasichai.local",
+            "--password", "admin",
+        ] + extra_args
+        out = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = apply.main(args)
+        return code, out.getvalue(), err.getvalue()
+
+
+class DryRunTests(ApplyCliTestCase):
+    def test_dry_run_makes_no_requests_and_prints_headers(self):
+        code, out, err = self.run_cli(["--dry-run"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.core.requests, [])
+        self.assertEqual(out.count("# POST /api/objects"), OBJECTS)
+        self.assertEqual(out.count("# POST /api/relationships"), RELATIONSHIPS)
+
+
+class HappyPathTests(ApplyCliTestCase):
+    def test_creates_everything_in_order(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+
+        object_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
+        self.assertEqual(object_posts, OBJECT_ORDER)
+
+        rel_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/relationships" and r[0] == "POST"]
+        self.assertEqual(rel_posts, RELATIONSHIP_ORDER)
+
+        # only tasa_area is required (the cajas tributarias have no area): one PUT, right after its POST
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT"]
+        self.assertEqual(puts, [("/api/metadata/objects/tasa/fields/area", {"required": True})])
+
+        for method, path, auth, body in self.core.requests:
+            if path == "/api/auth/login":
+                self.assertIsNone(auth)
+            else:
+                self.assertEqual(auth, "Bearer t")
+
+        self.assertIn("done: 5 created, 0 updated, 0 skipped", out)
+
+
+class IdempotencyTests(ApplyCliTestCase):
+    def setUp(self):
+        model = load_model()
+        self.core = FakeCore(
+            existing_objects=[o["name"] for o in model["objects"]],
+            existing_relationships=[r["name"] for r in model["relationships"]],
+            existing_fields={o["name"]: core_fields(model, o["name"]) for o in model["objects"]},
+        )
+        self.addCleanup(self.core.stop)
+
+    def test_everything_skips(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        object_posts = [r for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
+        self.assertEqual(object_posts, [])
+        self.assertEqual([r for r in self.core.requests if r[0] == "POST" and "/fields" in r[1]], [])
+        self.assertIn("done: 0 created, 0 updated, 5 skipped", out)
+
+
+def model_with_tipo_caja(directory, options=("VENTANILLA", "TRIBUTARIA")):
+    """A copy of model.json with an ENUM field on caja (the shipped model has no enum): apply.py's option sync
+    is tested through it. Returns the copy's path and the model."""
+    model = load_model()
+    model["enums"]["tipo_caja"] = list(options)
+    caja = next(o for o in model["objects"] if o["name"] == "caja")
+    caja["fields"].append({"name": "tipo_caja", "label": "Tipo de caja", "type": "ENUM", "enum": "tipo_caja"})
+    path = os.path.join(directory, "model.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(model, f, ensure_ascii=False)
+    return path, model
+
+
+def existing_core(model, fields):
+    return FakeCore(
+        existing_objects=[o["name"] for o in model["objects"]],
+        existing_relationships=[r["name"] for r in model["relationships"]],
+        existing_fields=fields,
+    )
+
+
+class SyncTests(ApplyCliTestCase):
+    """tasa as an earlier model left it: its new fields are added, nothing else."""
+
+    NEW_FIELDS = ["vigencia_hasta", "documento_fuente", "clave_vigencia"]
+
+    def setUp(self):
+        model = load_model()
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        fields["tasa"] = core_fields(model, "tasa", drop=self.NEW_FIELDS)
+        self.core = existing_core(model, fields)
+        self.addCleanup(self.core.stop)
+
+    def test_adds_missing_fields_only(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        added = [r[3] for r in self.core.requests if r[0] == "POST" and r[1] == "/api/metadata/objects/tasa/fields"]
+        self.assertEqual([f["name"] for f in added], self.NEW_FIELDS)
+        clave = next(f for f in added if f["name"] == "clave_vigencia")
+        self.assertEqual((clave["type"], clave["required"], clave["unique"]), ("TEXT", True, True))
+        self.assertIn("done: 3 created, 0 updated, 4 skipped", out)
+
+
+class EnumOptionsTests(ApplyCliTestCase):
+    """The ENUM options of a field are synced: the ones Core lacks are added, the ones model.json dropped go unless a
+    record uses one (apply.py's, tested through a model that has an enum)."""
+
+    OLD = ["VENTANILLA", "TRIBUTARIA", "OBSOLETA", "EN_USO"]
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path, model = model_with_tipo_caja(directory.name, ["VENTANILLA", "TRIBUTARIA", "MIXTA"])
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        fields["caja"] = core_fields(model, "caja", options={"tipo_caja": self.OLD})
+        self.core = existing_core(model, fields)
+        self.addCleanup(self.core.stop)
+
+    def option_puts(self):
+        return [(r[1], r[3]["enumOptions"]) for r in self.core.requests if r[0] == "PUT" and "enumOptions" in (r[3] or {})]
+
+    def test_adds_the_new_option_and_drops_the_unused_ones(self):
+        self.core.add_record("caja", {"tipo_caja": "EN_USO"})
+        code, out, err = self.run_cli([], model_path=self.path)
+        self.assertEqual(code, 0, msg=err)
+        # a caja already has EN_USO: it stays storable, after model.json's options
+        self.assertEqual(self.option_puts(), [(
+            "/api/metadata/objects/caja/fields/tipo_caja", ["VENTANILLA", "TRIBUTARIA", "MIXTA", "EN_USO"])])
+        self.assertIn("keep   option caja.tipo_caja EN_USO: 1 record uses it", out)
+        self.assertIn("done: 0 created, 1 updated, 4 skipped", out)
+
+    def test_an_unused_option_goes(self):
+        code, out, err = self.run_cli([], model_path=self.path)
+        self.assertEqual(code, 0, msg=err)
+        self.assertEqual(self.option_puts(), [("/api/metadata/objects/caja/fields/tipo_caja", ["VENTANILLA", "TRIBUTARIA", "MIXTA"])])
+        self.assertIn("-OBSOLETA, EN_USO", out)
+
+    def count_answers(self, status, payload):
+        """The records GET, the count asked before dropping an option, answers this."""
+        records = self.core._records
+        self.core._records = lambda method, *args: (status, payload) if method == "GET" else records(method, *args)
+
+    def assert_drops_nothing(self):
+        code, out, err = self.run_cli([], model_path=self.path)
+        self.assertEqual(code, 1)
+        self.assertIn("error GET /api/objects/caja/records", err)
+        self.assertEqual(self.option_puts(), [])
+
+    def test_a_count_core_refuses_drops_nothing(self):
+        self.count_answers(500, {"message": "boom"})
+        self.assert_drops_nothing()
+
+    def test_a_404_is_not_a_zero(self):
+        self.count_answers(404, {"detail": "not found"})
+        self.assert_drops_nothing()
+
+    def test_an_answer_without_its_count_is_not_a_zero(self):
+        self.count_answers(200, {"content": []})
+        self.assert_drops_nothing()
+
+
+class RelaxRequiredTests(ApplyCliTestCase):
+    """A field model.json no longer requires is made optional; nothing is made required."""
+
+    def setUp(self):
+        model = load_model()
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        for f in fields["tasa"]:
+            # Core as an earlier model left it: vigencia_hasta required. codigo is required in both
+            f["required"] = f["name"] in ("vigencia_hasta", "codigo")
+        self.core = existing_core(model, fields)
+        self.addCleanup(self.core.stop)
+
+    def test_relaxes_required_only(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and "/api/metadata/objects/tasa/fields/" in r[1]
+                and r[1] != "/api/metadata/objects/tasa/fields/area"]
+        self.assertEqual(puts, [("/api/metadata/objects/tasa/fields/vigencia_hasta", {"required": False})])
+        self.assertIn("update field tasa.vigencia_hasta (optional)", out)
+        self.assertIn("done: 0 created, 1 updated, 4 skipped", out)
+
+
+class RelabelTests(ApplyCliTestCase):
+    """A field model.json labels differently gets model.json's label: caja.nombre as "Rótulo"."""
+
+    def setUp(self):
+        model = load_model()
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        next(f for f in fields["caja"] if f["name"] == "nombre")["label"] = "Rótulo"
+        self.core = existing_core(model, fields)
+        self.addCleanup(self.core.stop)
+
+    def test_relabels_only_what_differs(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and "label" in (r[3] or {})]
+        self.assertEqual(puts, [("/api/metadata/objects/caja/fields/nombre", {"label": "Nombre"})])
+        self.assertIn("update field caja.nombre (label)", out)
+        self.assertIn("done: 0 created, 1 updated, 4 skipped", out)
+
+
+class FailureStopsTests(ApplyCliTestCase):
+    def setUp(self):
+        self.core = FakeCore(fail_on_post_object="caja")
+        self.addCleanup(self.core.stop)
+
+    def test_500_on_second_object_aborts(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 1)
+        self.assertIn("boom", err)
+        object_posts = [r for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
+        self.assertEqual(len(object_posts), 2)
+        self.assertEqual([r for r in self.core.requests if r[1] == "/api/relationships"], [])
+
+
+class RequiredPutFailureTests(ApplyCliTestCase):
+    """The required PUT tolerates nothing, not even 409."""
+
+    def setUp(self):
+        self.core = FakeCore(fail_put=True, fail_put_status=409)
+        self.addCleanup(self.core.stop)
+
+    def test_409_on_required_put_aborts(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 1)
+        self.assertIn("/api/metadata/objects/tasa/fields/area", err)
+        rel_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/relationships" and r[0] == "POST"]
+        self.assertEqual(rel_posts, ["caja_area", "tasa_area"])
+
+
+class ConnectionFailureTests(unittest.TestCase):
+    def test_closed_port_is_fatal_with_no_traceback(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+
+        out = io.StringIO()
+        err = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = apply.main(["--model", MODEL_PATH, "--core", f"http://127.0.0.1:{port}"])
+        self.assertEqual(code, 1)
+        self.assertIn("connection failed", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+
+class LoginMissingTokenTests(ApplyCliTestCase):
+    def setUp(self):
+        self.core = FakeCore(login_response={})
+        self.addCleanup(self.core.stop)
+
+    def test_login_without_token_is_fatal(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 1)
+        self.assertIn("error POST /api/auth/login -> no token in response", err)
+        self.assertEqual(len(self.core.requests), 1)
+
+
+class DropTests(ApplyCliTestCase):
+    def test_drop_deletes_relationships_then_objects_in_reverse(self):
+        code, out, err = self.run_cli(["--drop"])
+        self.assertEqual(code, 0, msg=err)
+        deletes = [r[1] for r in self.core.requests if r[0] == "DELETE"]
+        self.assertEqual(deletes, [f"/api/relationships/{n}" for n in reversed(RELATIONSHIP_ORDER)]
+                         + [f"/api/objects/{n}" for n in reversed(OBJECT_ORDER)])
+        self.assertIn("done: 5 deleted, 0 skipped", out)
+
+    def test_drop_dry_run_makes_no_requests(self):
+        code, out, err = self.run_cli(["--drop", "--dry-run"])
+        self.assertEqual(code, 0, msg=err)
+        self.assertEqual(self.core.requests, [])
+        self.assertEqual(out.count("# DELETE "), OBJECTS + RELATIONSHIPS)
+
+
+class ValidateOnlyTests(ApplyCliTestCase):
+    def test_validate_only_makes_no_requests(self):
+        code, out, err = self.run_cli(["--validate-only"])
+        self.assertEqual(code, 0, msg=err)
+        self.assertEqual(self.core.requests, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
