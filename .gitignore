@@ -25,3 +25,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# node tooling (commitlint, husky, prettier)
+node_modules/

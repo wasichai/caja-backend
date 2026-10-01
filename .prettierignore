@@ -1,0 +1,13 @@
+# prettier owns yaml and json here. kotlin is ktlint's (./gradlew build), python and markdown keep their hand formatting
+*.md
+*.kt
+*.kts
+*.py
+docs/
+gradle/
+build/
+.gradle/
+.kotlin/
+.idea/
+node_modules/
+yarn.lock
