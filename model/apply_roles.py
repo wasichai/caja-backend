@@ -11,7 +11,8 @@ roles.json se valida antes de llamar a core: los nombres que core acepta, las ac
 model.json tiene. ADMIN no se declara: core lo deja pasar todo.
 
 Correr: python3 apply_roles.py [--dry-run] [--core URL] [--email E] [--password P]
-Salida: 0 si va bien, 1 si core rechaza algo o no responde, 2 si roles.json no es válido.
+Salida: 0 si va bien, 1 si core rechaza algo o no responde, 2 si roles.json no es válido, o si roles.json o
+model.json faltan o no son JSON.
 """
 import argparse
 import json
@@ -128,12 +129,25 @@ def _parse_args(argv):
     return p.parse_args(argv)
 
 
+def _load(path):
+    """El json de `path`, o None tras decir en stderr por qué no se pudo leer (sin traza)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except OSError as e:
+        print(f"error: {path}: {e.strerror or e}", file=sys.stderr)
+    except ValueError as e:
+        # json.JSONDecodeError y UnicodeDecodeError son ValueError
+        print(f"error: {path}: no es JSON válido: {e}", file=sys.stderr)
+    return None
+
+
 def main(argv=None):
     args = _parse_args(sys.argv[1:] if argv is None else argv)
-    with open(args.roles, encoding="utf-8") as f:
-        roles = json.load(f)
-    with open(args.model, encoding="utf-8") as f:
-        model = json.load(f)
+    roles = _load(args.roles)
+    model = _load(args.model)
+    if roles is None or model is None:
+        return 2
     errors = validate(roles, model)
     if errors:
         for e in errors:

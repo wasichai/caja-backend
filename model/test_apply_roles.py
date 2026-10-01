@@ -163,14 +163,28 @@ class ApplyRolesTests(ApplyRolesTestCase):
 
     def test_un_roles_json_invalido_no_llama_a_core(self):
         roles = load(ROLES_PATH)
-        roles["roles"][0]["permisos"]["recibo"] = ["READ"]
+        roles["roles"][0]["permisos"]["arqueo"] = ["READ"]
         with tempfile.TemporaryDirectory() as carpeta:
             path = os.path.join(carpeta, "roles.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(roles, f)
             code, out, err = self.run_cli(roles_path=path)
         self.assertEqual(code, 2)
-        self.assertIn("recibo", out)
+        self.assertIn("arqueo", out)
+        self.assertEqual(self.core.requests, [])
+
+    def test_un_archivo_que_falta_o_que_no_es_json_sale_con_2_sin_traza(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            roto = os.path.join(carpeta, "roto.json")
+            with open(roto, "w", encoding="utf-8") as f:
+                f.write("{ no es json")
+            falta = os.path.join(carpeta, "no-existe.json")
+            for extra, nombre in (([], falta), ([], roto), (["--model", falta], falta), (["--model", roto], roto)):
+                roles = nombre if not extra else ROLES_PATH
+                code, out, err = self.run_cli(extra, roles_path=roles)
+                self.assertEqual(code, 2, (extra, nombre, out, err))
+                self.assertIn(nombre, err)
+                self.assertNotIn("Traceback", err)
         self.assertEqual(self.core.requests, [])
 
 
