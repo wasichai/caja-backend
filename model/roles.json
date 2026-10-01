@@ -11,23 +11,31 @@
     {
       "name": "CAJERO",
       "label": "Cajero",
-      "description": "Atiende una ventanilla: lee las cajas, sus áreas, las tasas y las órdenes pendientes.",
+      "description": "Atiende una ventanilla: lee las cajas, sus áreas, las tasas y las órdenes, y cobra. Cobrar abre su turno, emite el recibo con sus líneas, encola el evento del pago y marca las órdenes PAGADA. Nunca edita ni borra un recibo, una línea ni un evento.",
       "permisos": {
         "area": ["READ"],
         "caja": ["READ"],
         "tasa": ["READ"],
-        "orden_de_cobro": ["READ"]
+        "orden_de_cobro": ["READ", "UPDATE"],
+        "turno": ["READ", "CREATE"],
+        "recibo": ["READ", "CREATE"],
+        "linea_recibo": ["READ", "CREATE"],
+        "pago_evento": ["READ", "CREATE"]
       }
     },
     {
       "name": "SUPERVISOR_CAJA",
       "label": "Supervisor de caja",
-      "description": "Supervisa las ventanillas. Hoy puede lo mismo que el cajero; lo que lo distingue llega con la cobranza.",
+      "description": "Supervisa las ventanillas. Hoy puede lo mismo que el cajero; lo que lo distingue llega con la anulación y el cierre.",
       "permisos": {
         "area": ["READ"],
         "caja": ["READ"],
         "tasa": ["READ"],
-        "orden_de_cobro": ["READ"]
+        "orden_de_cobro": ["READ", "UPDATE"],
+        "turno": ["READ", "CREATE"],
+        "recibo": ["READ", "CREATE"],
+        "linea_recibo": ["READ", "CREATE"],
+        "pago_evento": ["READ", "CREATE"]
       }
     },
     {
@@ -38,7 +46,11 @@
         "area": ["READ"],
         "caja": ["READ"],
         "tasa": ["READ"],
-        "orden_de_cobro": ["READ"]
+        "turno": ["READ"],
+        "recibo": ["READ"],
+        "orden_de_cobro": ["READ"],
+        "linea_recibo": ["READ"],
+        "pago_evento": ["READ"]
       }
     }
   ]

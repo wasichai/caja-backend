@@ -43,9 +43,22 @@ class RolesJsonTests(unittest.TestCase):
     def test_el_sistema_de_origen_lee_y_da_de_alta_ordenes_y_nada_mas(self):
         self.assertEqual(permisos(self.roles["SISTEMA_ORIGEN"]), {("orden_de_cobro", "READ"), ("orden_de_cobro", "CREATE")})
 
-    def test_el_cajero_lee_areas_cajas_tasas_y_ordenes(self):
-        self.assertEqual(permisos(self.roles["CAJERO"]),
-                         {("area", "READ"), ("caja", "READ"), ("tasa", "READ"), ("orden_de_cobro", "READ")})
+    def test_el_cajero_lee_y_cobra(self):
+        # cobra: abre su turno, emite el recibo con sus líneas, encola el evento y marca la orden PAGADA
+        self.assertEqual(permisos(self.roles["CAJERO"]), {
+            ("area", "READ"), ("caja", "READ"), ("tasa", "READ"),
+            ("orden_de_cobro", "READ"), ("orden_de_cobro", "UPDATE"),
+            ("turno", "READ"), ("turno", "CREATE"),
+            ("recibo", "READ"), ("recibo", "CREATE"),
+            ("linea_recibo", "READ"), ("linea_recibo", "CREATE"),
+            ("pago_evento", "READ"), ("pago_evento", "CREATE")})
+
+    def test_nadie_edita_ni_borra_un_recibo_su_linea_o_su_evento(self):
+        # el recibo es un papel con número correlativo que el contribuyente se lleva: no se corrige (V29 de caja)
+        for rol in self.roles.values():
+            for objeto in ("recibo", "linea_recibo", "pago_evento"):
+                for accion in ("UPDATE", "DELETE"):
+                    self.assertNotIn((objeto, accion), permisos(rol), rol["name"])
 
     def test_el_supervisor_de_caja_puede_lo_mismo_que_el_cajero(self):
         self.assertEqual(permisos(self.roles["SUPERVISOR_CAJA"]), permisos(self.roles["CAJERO"]))
@@ -66,8 +79,8 @@ class ValidationTests(unittest.TestCase):
         return apply_roles.validate(roles, self.model)
 
     def test_un_objeto_que_el_modelo_no_tiene_se_rechaza(self):
-        errors = self.mutate(lambda r: r["roles"][0]["permisos"].update({"recibo": ["READ"]}))
-        self.assertTrue(any("recibo" in e for e in errors), errors)
+        errors = self.mutate(lambda r: r["roles"][0]["permisos"].update({"arqueo": ["READ"]}))
+        self.assertTrue(any("arqueo" in e for e in errors), errors)
 
     def test_una_accion_que_core_no_conoce_se_rechaza(self):
         errors = self.mutate(lambda r: r["roles"][0]["permisos"].update({"caja": ["MANAGE_METADATA"]}))
@@ -86,6 +99,7 @@ class ApplyRolesTestCase(unittest.TestCase):
     def setUp(self):
         self.core = FakeCore()
         self.addCleanup(self.core.stop)
+        self.roles_json = {r["name"]: r for r in load(ROLES_PATH)["roles"]}
 
     def run_cli(self, extra=(), roles_path=ROLES_PATH):
         args = ["--roles", roles_path, "--core", self.core.base_url, "--email", "admin@wasichai.local",
@@ -139,9 +153,8 @@ class ApplyRolesTests(ApplyRolesTestCase):
         self.assertEqual(code, 0, err)
         self.assertNotIn(("POST", "/api/roles"), [(m, p) for m, p, b in self.writes() if b.get("name") == "CAJERO"])
         cajero = [b for m, p, b in self.writes() if p == "/api/roles/CAJERO/permissions"]
-        self.assertEqual(cajero, [{"permissions": [
-            {"objectName": "area", "action": "READ"}, {"objectName": "caja", "action": "READ"},
-            {"objectName": "tasa", "action": "READ"}, {"objectName": "orden_de_cobro", "action": "READ"}]}])
+        self.assertEqual(cajero, [apply_roles.permissions_payload(self.roles_json["CAJERO"])])
+        self.assertNotIn({"objectName": "caja", "action": "UPDATE"}, cajero[0]["permissions"])
         self.assertIn("update role CAJERO (permissions)", out)
         self.assertIn("done: 3 created, 1 updated, 0 skipped", out)
 

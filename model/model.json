@@ -4,6 +4,27 @@
       "PENDIENTE",
       "PAGADA",
       "ANULADA"
+    ],
+    "forma_pago": [
+      "EFECTIVO",
+      "CHEQUE",
+      "DEPOSITO",
+      "TARJETA",
+      "TRANSFERENCIA"
+    ],
+    "tipo_pago": [
+      "NORMAL",
+      "TASA"
+    ],
+    "tipo_evento_pago": [
+      "PAGO_REGISTRADO",
+      "PAGO_ANULADO"
+    ],
+    "estado_evento": [
+      "PENDIENTE",
+      "ENTREGADO",
+      "MUERTO",
+      "EXPLICADO"
     ]
   },
   "objects": [
@@ -136,6 +157,155 @@
       ]
     },
     {
+      "name": "turno",
+      "label": "Turno",
+      "pluralLabel": "Turnos",
+      "description": "La apertura de una caja por un cajero en un día (cierre_caja de caja, con el nombre que tiene mientras está viva). No tiene endpoint propio: el primer cobro del día lo abre, de forma implícita e idempotente, y el resto del turno cobra contra él. Lo cierra el arqueo.",
+      "fields": [
+        {
+          "name": "cajero",
+          "label": "Cajero",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien atiende: el correo de la sesión que cobró, nunca uno que mande el cliente."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día de trabajo, en Lima."
+        },
+        {
+          "name": "abierto_en",
+          "label": "Abierto en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante en que se abrió, según el reloj de la caja. Un turno sin su hora sería un turno inventado."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se abrió (regla 10): la del cobro que lo abrió."
+        },
+        {
+          "name": "clave_turno",
+          "label": "Clave del turno",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<caja id>|<cajero>|<fecha en ISO>. Un cajero tiene un solo turno al día por caja: reemplaza cierre_uq, la unicidad compuesta que wasichai no tiene."
+        }
+      ]
+    },
+    {
+      "name": "recibo",
+      "label": "Recibo",
+      "pluralLabel": "Recibos",
+      "description": "El papel que se entrega en ventanilla. No se edita ni se borra: ningún rol tiene UPDATE ni DELETE sobre él (V29 de caja). Su anulación llega como un registro que se agrega.",
+      "fields": [
+        {
+          "name": "serie",
+          "label": "Serie",
+          "type": "TEXT",
+          "required": true,
+          "description": "La serie de la caja que lo emitió."
+        },
+        {
+          "name": "numero",
+          "label": "Número",
+          "type": "INTEGER",
+          "required": true,
+          "description": "El correlativo dentro de la serie, desde 1 y sin huecos: max(numero) + 1 de la serie, bajo el candado de la serie."
+        },
+        {
+          "name": "numero_impreso",
+          "label": "Número impreso",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "Como lo dice el papel: <serie>-<número en 7 dígitos>, por ejemplo 001-0000123. Su unicidad es la red de la numeración."
+        },
+        {
+          "name": "cajero",
+          "label": "Cajero",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien cobró: el correo de la sesión."
+        },
+        {
+          "name": "pagador_documento",
+          "label": "Documento del pagador",
+          "type": "TEXT",
+          "description": "Copiado de la primera orden, congelado: un duplicado sale igual al original."
+        },
+        {
+          "name": "pagador_nombre",
+          "label": "Nombre del pagador",
+          "type": "TEXT",
+          "description": "Lo que se imprime, copiado de la primera orden."
+        },
+        {
+          "name": "pagador_externo_id",
+          "label": "Id externo del pagador",
+          "type": "INTEGER",
+          "description": "El que le da el sistema de origen; viaja en el evento del pago."
+        },
+        {
+          "name": "emitido_en",
+          "label": "Emitido en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante de emisión, según el reloj de la caja."
+        },
+        {
+          "name": "forma_pago",
+          "label": "Forma de pago",
+          "type": "ENUM",
+          "enum": "forma_pago",
+          "required": true
+        },
+        {
+          "name": "tipo_pago",
+          "label": "Tipo de pago",
+          "type": "ENUM",
+          "enum": "tipo_pago",
+          "required": true,
+          "description": "NORMAL si cobra órdenes (y produce un evento de pago), TASA si cobra tasas del TUPA (no produce ninguno)."
+        },
+        {
+          "name": "total",
+          "label": "Total",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La suma exacta de sus líneas, sin redondear: nunca una cifra aparte."
+        },
+        {
+          "name": "actualizado_a",
+          "label": "Actualizado a",
+          "type": "DATE",
+          "required": true,
+          "description": "A qué fecha están sus importes (regla 9): la fecha de pago."
+        },
+        {
+          "name": "clave_idempotencia",
+          "label": "Clave de idempotencia",
+          "type": "TEXT",
+          "unique": true,
+          "description": "La cabecera Idempotency-Key del cobro, si vino: el reenvío devuelve este recibo en vez de emitir otro."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se cobró, escrito por quien cobró (regla 10)."
+        }
+      ]
+    },
+    {
       "name": "orden_de_cobro",
       "label": "Orden de cobro",
       "pluralLabel": "Órdenes de cobro",
@@ -221,7 +391,7 @@
           "type": "ENUM",
           "enum": "estado_orden",
           "required": true,
-          "description": "PENDIENTE al nacer. No hay VENCIDA: que sea exigible se deriva de fecha_exigibilidad."
+          "description": "PENDIENTE al nacer. PAGADA la deja la cobranza, y nombra su recibo (orden_recibo_ck de caja). No hay VENCIDA: que sea exigible se deriva de fecha_exigibilidad."
         },
         {
           "name": "observacion",
@@ -229,6 +399,126 @@
           "type": "LONG_TEXT",
           "required": true,
           "description": "Por qué se dio de alta (regla 10): de 5 a 500 caracteres."
+        }
+      ]
+    },
+    {
+      "name": "linea_recibo",
+      "label": "Línea de recibo",
+      "pluralLabel": "Líneas de recibo",
+      "description": "Lo que cobró un recibo, una línea por orden (o por tasa), congelada. Sale solo de la orden: no lleva tributo, ejercicio, periodo, predio ni vehículo, ni un desglose en insoluto, reajuste, interés y gastos (ADR-0045 de caja no se porta).",
+      "fields": [
+        {
+          "name": "sistema_origen",
+          "label": "Sistema de origen",
+          "type": "TEXT",
+          "description": "El de la orden cobrada."
+        },
+        {
+          "name": "concepto",
+          "label": "Concepto",
+          "type": "TEXT",
+          "required": true,
+          "description": "Lo que se imprime: el concepto de la orden."
+        },
+        {
+          "name": "detalle",
+          "label": "Detalle",
+          "type": "TEXT"
+        },
+        {
+          "name": "referencia_externa",
+          "label": "Referencia externa",
+          "type": "TEXT",
+          "description": "La de la orden: con ella el sistema de origen reconoce lo que se pagó."
+        },
+        {
+          "name": "cantidad",
+          "label": "Cantidad",
+          "type": "INTEGER",
+          "description": "Solo en una línea de tasa: cuántas veces se cobró."
+        },
+        {
+          "name": "precio_unitario",
+          "label": "Precio unitario",
+          "type": "DECIMAL",
+          "description": "Solo en una línea de tasa: la tarifa vigente que se aplicó."
+        },
+        {
+          "name": "monto",
+          "label": "Monto",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que cobra la línea: el importe de la orden, a la fecha del recibo."
+        }
+      ]
+    },
+    {
+      "name": "pago_evento",
+      "label": "Evento de pago",
+      "pluralLabel": "Eventos de pago",
+      "description": "El buzón de salida: el aviso al sistema de origen de que se cobró (o se anuló) un recibo. Se escribe en la misma transacción que el recibo: si la fila está, el recibo está. Lo entrega un proceso aparte.",
+      "fields": [
+        {
+          "name": "evento_id",
+          "label": "Id del evento",
+          "type": "UUID",
+          "required": true,
+          "unique": true,
+          "description": "El pagoId. Lo genera la caja al cobrar, no quien entrega: un reintento de entrega manda el mismo y el receptor deduplica."
+        },
+        {
+          "name": "tipo",
+          "label": "Tipo",
+          "type": "ENUM",
+          "enum": "tipo_evento_pago",
+          "required": true
+        },
+        {
+          "name": "sistema_destino",
+          "label": "Sistema de destino",
+          "type": "TEXT",
+          "required": true,
+          "description": "El sistema de origen de las órdenes del recibo."
+        },
+        {
+          "name": "cuerpo",
+          "label": "Cuerpo",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "El evento entero en JSON, congelado al cobrar: no se recompone al entregar."
+        },
+        {
+          "name": "estado",
+          "label": "Estado",
+          "type": "ENUM",
+          "enum": "estado_evento",
+          "required": true,
+          "description": "PENDIENTE al nacer."
+        },
+        {
+          "name": "intentos",
+          "label": "Intentos",
+          "type": "INTEGER",
+          "required": true,
+          "description": "Cuántas veces se intentó entregar, desde 0."
+        },
+        {
+          "name": "ultimo_error",
+          "label": "Último error",
+          "type": "TEXT"
+        },
+        {
+          "name": "entregado_en",
+          "label": "Entregado en",
+          "type": "DATETIME",
+          "description": "Solo si está ENTREGADO."
+        },
+        {
+          "name": "explicacion",
+          "label": "Explicación",
+          "type": "LONG_TEXT",
+          "description": "Solo si está EXPLICADO: quien se hizo cargo dice por qué."
         }
       ]
     }
@@ -250,6 +540,87 @@
       "source": "tasa",
       "target": "area",
       "fieldName": "area",
+      "required": true
+    },
+    {
+      "name": "turno_caja",
+      "label": "Caja",
+      "inverseLabel": "Turnos",
+      "source": "turno",
+      "target": "caja",
+      "fieldName": "caja",
+      "required": true
+    },
+    {
+      "name": "recibo_caja",
+      "label": "Caja",
+      "inverseLabel": "Recibos",
+      "source": "recibo",
+      "target": "caja",
+      "fieldName": "caja",
+      "required": true
+    },
+    {
+      "name": "recibo_turno",
+      "label": "Turno",
+      "inverseLabel": "Recibos",
+      "source": "recibo",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "orden_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Órdenes cobradas",
+      "source": "orden_de_cobro",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": false
+    },
+    {
+      "name": "linea_recibo_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Líneas",
+      "source": "linea_recibo",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "linea_recibo_orden",
+      "label": "Orden de cobro",
+      "inverseLabel": "Líneas de recibo",
+      "source": "linea_recibo",
+      "target": "orden_de_cobro",
+      "fieldName": "orden",
+      "required": false
+    },
+    {
+      "name": "linea_recibo_tasa",
+      "label": "Tasa",
+      "inverseLabel": "Líneas de recibo",
+      "source": "linea_recibo",
+      "target": "tasa",
+      "fieldName": "tasa",
+      "required": false
+    },
+    {
+      "name": "pago_evento_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Eventos de pago",
+      "source": "pago_evento",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "pago_evento_turno",
+      "label": "Turno",
+      "inverseLabel": "Eventos de pago",
+      "source": "pago_evento",
+      "target": "turno",
+      "fieldName": "turno",
       "required": true
     }
   ]

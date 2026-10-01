@@ -25,9 +25,12 @@ class ShippedModelTests(unittest.TestCase):
         self.assertEqual(validate(self.model), [])
 
     def test_objects_in_topological_order(self):
+        # a relationship's target comes before its source: recibo before orden_de_cobro, which names it
         names = [o["name"] for o in self.model["objects"]]
-        self.assertEqual(names, ["area", "caja", "tasa", "orden_de_cobro"])
-        self.assertEqual([r["name"] for r in self.model["relationships"]], ["caja_area", "tasa_area"])
+        self.assertEqual(names, ["area", "caja", "tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento"])
+        self.assertEqual([r["name"] for r in self.model["relationships"]], [
+            "caja_area", "tasa_area", "turno_caja", "recibo_caja", "recibo_turno", "orden_recibo", "linea_recibo_recibo",
+            "linea_recibo_orden", "linea_recibo_tasa", "pago_evento_recibo", "pago_evento_turno"])
 
     def fields(self, name):
         obj = next(o for o in self.model["objects"] if o["name"] == name)
@@ -78,6 +81,70 @@ class ShippedModelTests(unittest.TestCase):
         self.assertEqual({n for n, f in fields.items() if not f.get("required")},
                          {"detalle", "pagador_documento", "pagador_nombre", "pagador_externo_id"})
         self.assertEqual(fields["estado"]["enum"], "estado_orden")
+
+    def relationships(self):
+        return {(r["source"], r["fieldName"]): (r["target"], r["required"]) for r in self.model["relationships"]}
+
+    def test_turno_is_one_per_caja_cajero_and_fecha(self):
+        # clave_turno (<caja id>|<cajero>|<fecha>) stands for cierre_uq: no composite unique
+        fields = self.fields("turno")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "cajero": "TEXT", "fecha": "DATE", "abierto_en": "DATETIME", "observacion": "LONG_TEXT", "clave_turno": "TEXT"})
+        self.assertTrue(all(f["required"] for f in fields.values()))
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_turno"])
+        self.assertEqual(self.relationships()[("turno", "caja")], ("caja", True))
+
+    def test_recibo_has_its_number_its_pagador_and_its_total_with_its_date(self):
+        fields = self.fields("recibo")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "serie": "TEXT", "numero": "INTEGER", "numero_impreso": "TEXT", "cajero": "TEXT",
+            "pagador_documento": "TEXT", "pagador_nombre": "TEXT", "pagador_externo_id": "INTEGER",
+            "emitido_en": "DATETIME", "forma_pago": "ENUM", "tipo_pago": "ENUM", "total": "DECIMAL",
+            "actualizado_a": "DATE", "clave_idempotencia": "TEXT", "observacion": "LONG_TEXT"})
+        self.assertEqual({n for n, f in fields.items() if not f.get("required")},
+                         {"pagador_documento", "pagador_nombre", "pagador_externo_id", "clave_idempotencia"})
+        self.assertEqual({n for n, f in fields.items() if f.get("unique")}, {"numero_impreso", "clave_idempotencia"})
+        self.assertEqual((fields["forma_pago"]["enum"], fields["tipo_pago"]["enum"]), ("forma_pago", "tipo_pago"))
+        rels = self.relationships()
+        self.assertEqual((rels[("recibo", "caja")], rels[("recibo", "turno")]), (("caja", True), ("turno", True)))
+
+    def test_an_orden_de_cobro_names_its_recibo_once_paid(self):
+        self.assertEqual(self.relationships()[("orden_de_cobro", "recibo")], ("recibo", False))
+
+    def test_linea_recibo_comes_from_the_orden_alone(self):
+        # ADR-0045 is not ported: no tributo, ejercicio, periodo, predio or vehiculo, no insoluto/reajuste/interes/gasto
+        fields = self.fields("linea_recibo")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "sistema_origen": "TEXT", "concepto": "TEXT", "detalle": "TEXT", "referencia_externa": "TEXT",
+            "cantidad": "INTEGER", "precio_unitario": "DECIMAL", "monto": "DECIMAL"})
+        self.assertEqual({n for n, f in fields.items() if f.get("required")}, {"concepto", "monto"})
+        rels = self.relationships()
+        self.assertEqual((rels[("linea_recibo", "recibo")], rels[("linea_recibo", "orden")], rels[("linea_recibo", "tasa")]),
+                         (("recibo", True), ("orden_de_cobro", False), ("tasa", False)))
+
+    def test_pago_evento_is_the_outbox_row(self):
+        fields = self.fields("pago_evento")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "evento_id": "UUID", "tipo": "ENUM", "sistema_destino": "TEXT", "cuerpo": "LONG_TEXT", "estado": "ENUM",
+            "intentos": "INTEGER", "ultimo_error": "TEXT", "entregado_en": "DATETIME", "explicacion": "LONG_TEXT"})
+        self.assertEqual({n for n, f in fields.items() if not f.get("required")}, {"ultimo_error", "entregado_en", "explicacion"})
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["evento_id"])
+        self.assertEqual((fields["tipo"]["enum"], fields["estado"]["enum"]), ("tipo_evento_pago", "estado_evento"))
+        rels = self.relationships()
+        self.assertEqual((rels[("pago_evento", "recibo")], rels[("pago_evento", "turno")]), (("recibo", True), ("turno", True)))
+
+    def test_the_cobranza_enums(self):
+        enums = self.model["enums"]
+        self.assertEqual(enums["forma_pago"], ["EFECTIVO", "CHEQUE", "DEPOSITO", "TARJETA", "TRANSFERENCIA"])
+        self.assertEqual(enums["tipo_pago"], ["NORMAL", "TASA"])
+        self.assertEqual(enums["tipo_evento_pago"], ["PAGO_REGISTRADO", "PAGO_ANULADO"])
+        self.assertEqual(enums["estado_evento"], ["PENDIENTE", "ENTREGADO", "MUERTO", "EXPLICADO"])
+
+    def test_no_object_of_the_cobranza_knows_a_tributo(self):
+        for obj in ("orden_de_cobro", "recibo", "linea_recibo", "pago_evento"):
+            for name in self.fields(obj):
+                self.assertFalse(name.startswith(("tributo", "ejercicio", "periodo", "predio", "vehiculo", "insoluto",
+                                                  "reajuste", "interes", "gasto")), f"{obj}.{name}")
 
     def test_orden_de_cobro_is_unique_by_clave_origen_only(self):
         # clave_origen (<sistema_origen>|<referencia_externa>) stands for orden_referencia_uq: no composite unique
