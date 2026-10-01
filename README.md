@@ -14,6 +14,7 @@ solo con starters de wasichai. Reescribe el negocio de `caja` con la misma forma
 ## Requisitos
 
 - JDK 25 y Docker (para PostgreSQL y para los tests de integración con Testcontainers).
+- Node 26 y yarn 1, solo para el formato (prettier) y los hooks de commit (husky + commitlint): `yarn install`.
 - Las librerías de wasichai (`wasichai:wasichai-bom:0.2.0` y los starters). Se resuelven desde:
   1. **GitHub Packages** (`https://maven.pkg.github.com/wasichai/wasichai`). Pide un token aunque sea para leer
      (`read:packages` basta). En `~/.gradle/gradle.properties`:
@@ -53,6 +54,7 @@ ese puerto queda en el loopback del servidor: llega por un túnel, `ssh -N -L 54
 ```bash
 ./gradlew build             # ktlint + tests unitarios (hoy no hay: el smoke test es de integración)
 ./gradlew integrationTest   # CajaSmokeTest contra Testcontainers postgres:18 (o WASICHAI_TEST_DB_*)
+yarn format:check           # prettier sobre yaml y json (yarn format lo corrige)
 ```
 
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
@@ -65,6 +67,5 @@ ese puerto queda en el loopback del servidor: llega por un túnel, `ssh -N -L 54
 
 ## Siguientes pasos (fuera de este alcance)
 
-- **CI y herramientas:** workflows, prettier, commitlint, husky, dependabot y `SECURITY.md`.
 - **Modelo:** los objetos, campos y relaciones de caja y su carga por REST (`model/`).
 - **Negocio:** la API de caja bajo `/api/caja/**`, el cobro y su comprobante en PDF.
