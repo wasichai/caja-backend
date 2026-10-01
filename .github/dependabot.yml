@@ -8,6 +8,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+      include: scope
     groups:
       actions:
         patterns: ['*']
