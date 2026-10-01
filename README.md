@@ -5,8 +5,10 @@ solo con starters de wasichai. Reescribe el negocio de `caja` con la misma forma
 `srtm-backend`. Hoy tiene el modelo de configuración de caja (áreas, cajas y tasas) con sus scripts de carga, la
 **orden de cobro** (lo único que esta caja sabe cobrar) con su alta idempotente, la lista de la ventanilla, el catálogo
 de cajas, los roles y **la cobranza**: cobrar órdenes emite el recibo en una sola transacción (el turno, el número, el
-recibo, las órdenes PAGADA y el evento del pago en el buzón), con el original en PDF. Las tasas, la anulación, el cierre
-y el publicador del buzón llegan en los PR siguientes.
+recibo, las órdenes PAGADA y el evento del pago en el buzón), con el original en PDF. Tiene también **la caja de
+tasas** (derechos del TUPA cobrados con el precio de la tarifa vigente, nunca el de la petición), la lista de las tasas
+vigentes y la **vista previa del total** de los dos cobros. La anulación, el cierre y el publicador del buzón llegan en
+los PR siguientes.
 
 | | |
 |---|---|
@@ -227,19 +229,19 @@ sobre sus líneas ni sobre su evento (V29 de `caja`). Relaciones `recibo_caja` y
 
 ### `linea_recibo`
 
-Lo que cobró un recibo, una línea por orden, congelada. **Sale solo de la orden**: no lleva tributo, ejercicio,
+Lo que cobró un recibo, una línea por orden (o por concepto del TUPA), congelada. **Sale solo de la orden**: no lleva tributo, ejercicio,
 periodo, predio ni vehículo, ni el desglose en insoluto, reajuste, interés y gastos (ADR-0045 de `caja` no se porta).
 Relaciones `linea_recibo_recibo` (campo `recibo`, obligatoria), `linea_recibo_orden` (campo `orden`) y
-`linea_recibo_tasa` (campo `tasa`, para las tasas del PR siguiente).
+`linea_recibo_tasa` (campo `tasa`, en una línea de tasa).
 
 | Campo                | Tipo    | Qué guarda                                                   | Columna de `caja`                |
 | -------------------- | ------- | ------------------------------------------------------------ | -------------------------------- |
 | `sistema_origen`     | TEXT    | El de la orden.                                              | `recibo_detalle.tributo` (desde P5D) |
-| `concepto`           | TEXT    | El concepto de la orden. Obligatorio.                        | `recibo_detalle.concepto`        |
+| `concepto`           | TEXT    | El concepto de la orden, o la descripción de la tasa. Obligatorio. | `recibo_detalle.concepto`  |
 | `detalle`            | TEXT    | El detalle de la orden.                                      | `recibo_detalle.detalle`         |
 | `referencia_externa` | TEXT    | La referencia de la orden.                                   | `recibo_detalle.referencia_externa` |
-| `cantidad`, `precio_unitario` | INTEGER, DECIMAL | Solo en una línea de tasa.                  | `recibo_detalle.cantidad`, `precio_unitario` |
-| `monto`              | DECIMAL | El importe de la orden. Obligatorio.                         | la suma del desglose             |
+| `cantidad`, `precio_unitario` | INTEGER, DECIMAL | Solo en una línea de tasa: cuántas veces y la tarifa vigente. | `recibo_detalle.cantidad`, `precio_unitario` |
+| `monto`              | DECIMAL | El importe de la orden, o `precio_unitario × cantidad` en una tasa. Obligatorio. | la suma del desglose |
 
 ### `pago_evento`
 
@@ -268,6 +270,10 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
 | `POST /api/caja/cobros`            | Cobra órdenes y emite el recibo (ver «La cobranza»): **201** con el recibo, **200** si es el reenvío de una `Idempotency-Key` ya usada. | CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (403 antes de empezar, diciendo cuál falta); al escribir, core exige además CREATE sobre `turno`, `linea_recibo` y `pago_evento` |
+| `POST /api/caja/cobros/vista-previa` | Lo que costaría cobrar unas órdenes hoy, **sin escribir nada** (ver «La vista previa del total»): **200**. | READ sobre `orden_de_cobro` |
+| `POST /api/caja/cobros/tasas`      | Cobra conceptos del TUPA y emite el recibo (ver «La caja de tasas»): **201**, o **200** en el reenvío de una `Idempotency-Key`. | CREATE sobre `recibo` (403 antes de empezar); al escribir, core exige además READ sobre `tasa` y CREATE sobre `turno` y `linea_recibo` |
+| `POST /api/caja/cobros/tasas/vista-previa` | Lo que costaría cobrar unos conceptos hoy, sin escribir nada: **200**. | READ sobre `tasa` |
+| `GET /api/caja/tasas`              | Las tasas vigentes a `?vigentes_a=AAAA-MM-DD` (por defecto hoy en Lima), por código: la lista que ofrece la ventanilla. | READ sobre `tasa` y sobre `area` |
 | `GET /api/caja/recibos/{numero_impreso}/pdf` | **El original** del recibo, en `application/pdf`. Solo para el cajero que lo emitió, el mismo día y con su turno abierto; si no, 409 (el duplicado llega con la consulta de recibos). | READ sobre `recibo`, `caja` y `linea_recibo` |
 
 - **Claves snake_case**, las de los campos del modelo, en el cuerpo y en la respuesta.
@@ -303,6 +309,28 @@ El cobro recibe `caja` (el código), `forma_pago`, `ordenes` (los `orden_id`), `
 `estado_del_pago` es `EN_TRANSITO` mientras el evento está `PENDIENTE` (cobrado, sin imputar todavía en el origen).
 `emitido` es `false` en el reenvío de una `Idempotency-Key`: el mismo recibo y el mismo `pago_id`, sin cobrar otra vez.
 
+El cobro de tasas recibe `caja`, `forma_pago`, `conceptos` (`[{"codigo": "T-001", "cantidad": 3}]`, la cantidad es 1 si
+no viene), `observacion` y, opcionales, `cajero`, `fecha_de_cobro` (hoy en Lima, como `fecha_de_pago`),
+`pagador_documento`, `pagador_nombre` y `pagador_externo_id` (el pagador puede ser anónimo). **No lleva precio ni
+importe**: un `importe` o un `precio` en el cuerpo o en un concepto es un 400 que lo nombra (`importe`,
+`conceptos[0].precio`). Contesta lo mismo que el cobro de órdenes, con `tipo_pago` `TASA`, `pago_id` `null` y
+`estado_del_pago` `SIN_EVENTO`; cada línea lleva además `codigo`, `cantidad` y `precio_unitario` (con su fecha):
+
+```json
+{"codigo": "T-001", "concepto": "CONSTANCIA DE NO ADEUDO", "cantidad": 3,
+ "precio_unitario": {"importe": "12.30", "actualizado_a": "2026-10-02"},
+ "monto": {"importe": "36.90", "actualizado_a": "2026-10-02"},
+ "orden_id": null, "sistema_origen": null, "detalle": null, "referencia_externa": null}
+```
+
+`GET /api/caja/tasas` devuelve una lista de `{"codigo", "descripcion", "area" (el código del área),
+"partida_presupuestal", "precio": {"importe", "actualizado_a"}}`; `actualizado_a` es la fecha consultada. Una fecha que
+no es AAAA-MM-DD es 400 en `vigentes_a`.
+
+Las dos vistas previas reciben lo mismo que su cobro (`{"ordenes": [...], "fecha_de_pago"?}` y `{"conceptos": [...],
+"fecha_de_cobro"?}`) y contestan `{"lineas": [...], "total": {"importe", "actualizado_a"} o null si no hay líneas,
+"cobrable": true|false, "motivos": ["..."]}`, con las líneas como las del recibo.
+
 ## Reglas
 
 - **La frontera.** Caja no sabe qué es un tributo: una orden no tiene `tributo`, `ejercicio` ni `periodo`. Si los
@@ -320,7 +348,7 @@ El cobro recibe `caja` (el código), `forma_pago`, `ordenes` (los `orden_id`), `
 
 ### La cobranza
 
-`POST /api/caja/cobros` (`caja.cobro.CobroService`, de `CobrarOrdenes` de `caja`) hace todo en **una sola transacción**
+`POST /api/caja/cobros` (`caja.cobro.CobroService` sobre `caja.cobro.Ventanilla`, de `CobrarOrdenes` de `caja`) hace todo en **una sola transacción**
 de la base: el turno, el número de la serie, el recibo con sus líneas, las órdenes `PAGADA` con su recibo y el evento
 `PAGO_REGISTRADO` en el buzón se confirman juntos o no queda nada. **Si la fila del buzón está, el recibo está.**
 
@@ -353,18 +381,59 @@ que dice cuál falta). Luego, en este orden:
 8. **El evento.** El `pago_evento` `PAGO_REGISTRADO`, `PENDIENTE`, con 0 intentos, `sistema_destino` el de las órdenes y
    el cuerpo de `rentas.json` congelado.
 
-**Los candados** (`caja.comun.Candados`) son consultivos de transacción, `pg_advisory_xact_lock(hashtext(:clave))`,
-como `DocumentRepository` de wasichai: wasichai no bloquea filas ni tiene unicidad compuesta. Se sueltan en el commit o
-el rollback, nunca antes, y `Candados.bloquear` **falla fuera de una transacción** (en autocommit no protegería nada).
-Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie**, para que dos cobros no se esperen
-en cruz; cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
-`numero_impreso`, `clave_idempotencia` y `evento_id` son la red: si uno salta, la transacción entera se revierte y el
-cobro contesta 409, sin reintentar dentro (postgres no deja leer nada en una transacción abortada). `hashtext` da 32
-bits: dos claves pueden caer en el mismo candado, lo que solo ordena de más.
+**Los candados** (`caja.comun.Candados`) son consultivos de transacción, en la forma de dos enteros
+`pg_advisory_xact_lock(<clase>, hashtext(<clave>))`, con **una clase fija por tipo de candado** (`caja.comun.Candado`:
+`TURNO_CLAVE`, `TURNO`, `ORDEN` y `SERIE`). wasichai no bloquea filas ni tiene unicidad compuesta. Se sueltan en el
+commit o el rollback, nunca antes, y `Candados.bloquear` **falla fuera de una transacción** (en autocommit no protegería
+nada). Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie**, para que dos cobros no se
+esperen en cruz; cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
+`numero_impreso`, `clave_idempotencia` y `evento_id` son la red: si uno salta (`DuplicateKeyException`), la transacción
+entera se revierte y el cobro contesta 409 («vuelva a intentarlo»), sin reintentar dentro (postgres no deja leer nada en
+una transacción abortada); cualquier otra violación de integridad se propaga como lo que es (500). `hashtext` da 32
+bits: dos claves **de la misma clase** pueden caer en el mismo candado, lo que solo ordena de más dentro de esa clase.
+Con la forma de un entero, un choque entre una clave de turno y una de serie las habría vuelto el mismo candado, y dos
+cobros podrían haberlo tomado en órdenes distintos y esperarse en cruz (40P01): por eso cada clase tiene su espacio.
 
 `max(numero)` se lee como el usuario que llama: un rol con «solo sus registros» (`own_records_only`) no vería los
 recibos ajenos y su cobro chocaría con el `unique` de `numero_impreso` (409, sin datos). Los roles de `roles.json` no lo
 tienen.
+
+### La caja de tasas
+
+`POST /api/caja/cobros/tasas` (`caja.cobro.TasasService`, de `CobrarTasa` de `caja`) cobra derechos y tasas del TUPA.
+**El precio sale de la tasa vigente a la fecha del cobro, nunca de la petición ni de una constante (regla 5).** Que
+viniera de la petición sería dejar que el cliente ponga la tarifa; que estuviera compilada sería una tarifa que solo se
+cambia desplegando, y esas son las que se acaban cobrando mal. **La tarifa es un dato**: la tabla `tasa`, con su
+`documento_fuente` y su vigencia, que carga `import_tasas.py` desde la normativa; `src/main` no tiene ninguna cifra.
+
+- **La tarifa vigente** (`tarifaVigente`) es la de `vigencia_desde ≤ fecha` y `vigencia_hasta` vacía o `≥ fecha`, ambos
+  extremos incluidos. Si dos vigencias del mismo código se solaparan por error, rige la de `vigencia_desde` más reciente.
+  Una vigencia que termina antes de empezar es un dato mal cargado: **409**.
+- **El monto de la línea** es `precio × cantidad`, en `BigDecimal` y sin redondear (`montoDeLinea`, la regla de
+  `recibo_detalle_tasa_ck` de `caja`): `12.30 × 3 = 36.90`. La cantidad es al menos 1, y 1 si no viene.
+- **Sin tarifa vigente** a la fecha, el concepto es **404** con su código; con la tarifa **en cero**, **409** («tarifa en
+  cero»: es un dato mal cargado, y un recibo por cero no documenta un cobro). Sin conceptos, **400**.
+- **El mismo mecanismo que la cobranza.** `caja.cobro.Ventanilla` es el acto común de los dos cobros, extraído de la
+  cobranza: la caja, el turno, el candado del turno, la idempotencia, el número de la serie, el recibo y sus líneas, en
+  la misma transacción y en el mismo orden. Las tasas no toman candados propios (las tarifas son configuración): entre
+  el candado del turno y el de la serie leen las vigencias de cada código. **La numeración y el turno se comparten**
+  con el cobro de órdenes de la misma caja: una orden y una tasa seguidas dan `…-0000001` y `…-0000002`.
+- **El recibo** lleva `tipo_pago` `TASA`, el pagador de la petición (puede ser anónimo) y `actualizado_a`, la fecha a la
+  que la tarifa estaba vigente; una `linea_recibo` por concepto con `tasa`, `concepto` (la descripción de la tasa),
+  `cantidad`, `precio_unitario` y `monto`.
+- **No hay evento**: una tasa no vino de una orden, no hay sistema de origen al que avisarle
+  (`TipoDePago.produceEvento()` es falso para `TASA`). La respuesta dice `estado_del_pago: SIN_EVENTO`.
+- **La `Idempotency-Key`** es la de un cobro de tasas de ese cajero en esa caja: la de un cobro de órdenes es **409**.
+
+### La vista previa del total
+
+La garantía de la UI es que **ningún total sale del cliente**, y el cajero necesita saber cuánto cobrar antes de emitir.
+`POST /api/caja/cobros/vista-previa` y `POST /api/caja/cobros/tasas/vista-previa` aplican **las mismas funciones** que
+su cobro (`impedimentosDelCobro`, `lineaDeOrden`, `cotizar`, `lineaDeTasa`, `totalDe`), sin candados ni escritura. Lo que
+impediría el cobro (una orden que no existe, ya pagada o no exigible, dos sistemas; una tasa sin tarifa vigente o en
+cero) **no es un error**: va en `motivos` y `cobrable` es `false`. Una petición mal hecha (sin órdenes, un campo
+desconocido, una fecha que no es hoy) sí es 400. `VistaPreviaApiTest` compara el total de la vista previa con el del
+recibo emitido después, para las mismas órdenes y para las mismas tasas.
 
 ### El evento `PAGO_REGISTRADO`
 
@@ -422,13 +491,21 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 - **Unitarias**: `ReglasTest` y `ObservacionTest` fijan las reglas del alta; `FronteraDeLaOrdenTest` lee
   `model/model.json` y falla si la orden de cobro gana `tributo`, `ejercicio` o `periodo`. `CobranzaTest` fija las de
   la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, las claves del cuerpo de
-  `PAGO_REGISTRADO` y lo que llega en la petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF.
+  `PAGO_REGISTRADO` y lo que llega en la petición); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
+  la tarifa vigente, `12.30 × 3 = 36.90` y `0.10 × 7 = 0.70`, la vigencia al revés, la cantidad y el precio en la
+  petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
   `CAJERO`) y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
   caso feliz, el doble cobro, la idempotencia, los 400, 403, 404 y 409, **diez cobros simultáneos de la misma orden**
   (un recibo y nueve 409) y **veinte simultáneos en la misma caja** (del 1 al 20, sin huecos ni repetidos), los
-  permisos y el PDF. `CobroEnUnaTransaccionApiTest` es la prueba de la transacción, y `CandadosTest` la del candado.
+  permisos y el PDF, y **dos cobros simultáneos con la misma `Idempotency-Key`** (un solo recibo).
+  `CobroEnUnaTransaccionApiTest` es la prueba de la transacción, y `CandadosTest` la del candado (y de que la misma
+  clave en dos clases son dos candados). `TasasApiTest` cubre la caja de tasas (el precio de la tabla con dos
+  vigencias, el 400 de un precio en el cuerpo, 404 sin tarifa vigente, 409 con tarifa en cero, la idempotencia, el
+  pagador anónimo, los 400, la numeración compartida con el cobro de órdenes, ningún `pago_evento`, el 403 de
+  `TESORERIA`) y la lista de tasas vigentes; `VistaPreviaApiTest`, las dos vistas previas, sus motivos y sus permisos,
+  y que su total es el del recibo emitido después.
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
   Comprueba que la salud responde `UP`, que los módulos instalados (views, forms, pages) responden y los que se dejan
   fuera (workflow, documents, gis, automatización) dan 404, que una ruta bajo `/api/caja/**` sin token da 401 y que la
@@ -439,5 +516,5 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 
 ## Siguientes pasos (fuera de este alcance)
 
-- **Negocio:** las tasas por la API de caja; la consulta, el duplicado y la anulación del recibo; el cierre del turno;
+- **Negocio:** la consulta, el duplicado y la anulación del recibo (también el de tasas); el cierre del turno;
   el publicador del buzón.

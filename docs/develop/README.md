@@ -130,7 +130,7 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 ```
 
 **Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest`, `CajasApiTest`, `CobroApiTest`,
-`CobroEnUnaTransaccionApiTest` y `CandadosTest`, con `@Tag("integration")`
+`CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TasasApiTest` y `VistaPreviaApiTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -142,7 +142,8 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio),
   `rejected(método, ruta, cuerpo, campo)` (un 400 cuyo primer error es ese campo), `orden(...)` (un alta válida con una
   referencia nueva), `registro(objeto, atributos)` (un registro por la API de core), `cuenta("CAJERO")` (un usuario con
-  su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única) y `registros(objeto, filtros)`
+  su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única), `nuevaTasa(codigo, importe, desde, hasta)` (una vigencia de
+  una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único) y `registros(objeto, filtros)`
   (lo guardado, leído como admin). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
 - **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, y la del fallo a mitad
   (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el `RecordChangeListener` de prueba), son el corazón de la
