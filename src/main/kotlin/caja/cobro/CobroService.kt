@@ -1,6 +1,7 @@
 package caja.cobro
 
 import caja.comun.CAJA
+import caja.comun.Candado
 import caja.comun.Candados
 import caja.comun.Importe
 import caja.comun.LIMA
@@ -12,7 +13,7 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
-import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.ConflictException
@@ -35,9 +36,9 @@ import java.util.UUID
 //
 // wasichai no bloquea filas ni tiene unicidad compuesta: cada decisión se toma bajo un candado consultivo de la
 // transacción (Candados), con lo leído DESPUÉS de tomarlo. el orden de los candados es siempre el mismo, para que dos
-// cobros no se esperen en cruz: turno:<clave_turno> → turno:<id del turno> → orden:<id> de cada orden, ordenadas por
-// id → serie:<serie de la caja>. los unique de clave_turno, numero_impreso, clave_idempotencia y evento_id son la red:
-// si uno salta, la transacción entera se revierte y el cobro contesta 409, sin datos a medias y sin reintentar dentro
+// cobros no se esperen en cruz: TURNO_CLAVE <clave_turno> → TURNO <id del turno> → ORDEN <id> de cada orden, ordenadas
+// por id → SERIE <serie de la caja>, cada clase en su espacio (Candado). los unique de clave_turno, numero_impreso, clave_idempotencia y evento_id son la red:
+// si uno salta (DuplicateKeyException), la transacción entera se revierte y el cobro contesta 409, sin datos a medias y sin reintentar dentro
 // (postgres no deja leer nada en una transacción abortada).
 //
 // todo pasa por RecordService como el usuario que llama: sus permisos son los de core
@@ -61,8 +62,9 @@ class CobroService(
         val pedido = pedido(body, idempotencia, hoy)
         return try {
             transaccion.en { emitir(pedido, cajero, hoy) }
-        } catch (choque: DataIntegrityViolationException) {
-            // DuplicateKeyException incluida: la red de un unique saltó. la transacción ya se revirtió entera
+        } catch (choque: DuplicateKeyException) {
+            // la red de un unique saltó: otro cobro se confirmó a la vez. la transacción ya se revirtió entera. cualquier
+            // otra violación de integridad no es un choque concurrente y sigue su camino como lo que es
             throw ConflictException("El cobro chocó con otro que se confirmó a la vez y no se emitió nada: vuelva a intentarlo")
                 .apply { initCause(choque) }
         }
@@ -79,7 +81,7 @@ class CobroService(
 
         // 1. el turno: el primer cobro del día lo abre, una vez. bajo su candado se busca y, si no está, se crea
         val claveTurno = "$cajaId|$cajero|$hoy"
-        candados.bloquear("turno:$claveTurno")
+        candados.bloquear(Candado.TURNO_CLAVE, claveTurno)
         val turno =
             registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveTurno))
                 ?: registros.create(
@@ -98,7 +100,7 @@ class CobroService(
 
         // 2. el candado del turno: el mismo que toman la anulación y el cierre, para que un cobro no se cuele en un
         // cierre en curso
-        candados.bloquear("turno:$turnoId")
+        candados.bloquear(Candado.TURNO, turnoId)
 
         // 3. el reenvío del mismo intento: bajo el candado del turno, dos reenvíos de la misma clave se ordenan
         pedido.clave?.let { clave ->
@@ -108,7 +110,7 @@ class CobroService(
         // 4. las órdenes, cada una bajo su candado, en orden de id. se leen después de tomarlos: la decisión es sobre
         // lo que hay ahora, nunca sobre una lectura previa
         val porId = pedido.ordenes.map(UUID::toString)
-        porId.sorted().forEach { candados.bloquear("orden:$it") }
+        porId.sorted().forEach { candados.bloquear(Candado.ORDEN, it) }
         val leidas = registros.byIds(ORDEN_DE_COBRO, OrdenDeCobro::class.java, porId)
         val ordenes = porId.map { leidas[it] ?: throw NotFoundException("No hay ninguna orden de cobro $it") }
         val sistema = sistemaUnico(ordenes)
@@ -117,7 +119,7 @@ class CobroService(
         // 5. el número: el siguiente de la serie, bajo su candado. no deja huecos: si algo falla después, el recibo no
         // se confirma y el número vuelve a estar libre
         val serie = caja.serie!!.trim().uppercase(Locale.ROOT)
-        candados.bloquear("serie:$serie")
+        candados.bloquear(Candado.SERIE, serie)
         val ultimo = registros.primero(RECIBO, Recibo::class.java, mapOf("serie" to serie), sort = "numero", descending = true)
         val numero = (ultimo?.numero ?: 0) + 1
 

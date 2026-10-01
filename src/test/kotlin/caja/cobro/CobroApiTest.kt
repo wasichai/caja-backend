@@ -207,6 +207,27 @@ class CobroApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `dos cobros simultaneos con la misma Idempotency-Key en la misma caja emiten un solo recibo`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val ordenId = post(ORDENES, orden())["orden_id"].asString()
+        val clave = mapOf("Idempotency-Key" to UUID.randomUUID().toString())
+
+        val respuestas = simultaneas((1..2).map { { exchange("POST", COBROS, cobro(caja, ordenId), cajero.token, clave) } })
+
+        // uno emite; el otro recibe ese mismo recibo (200) o un 409, nunca un segundo recibo
+        val estados = respuestas.map { it.first }
+        assertEquals(1, estados.count { it == HttpStatus.CREATED }, respuestas.toString())
+        assertTrue(estados.all { it in setOf(HttpStatus.CREATED, HttpStatus.OK, HttpStatus.CONFLICT) }, respuestas.toString())
+        val emitido = tree(respuestas.first { it.first == HttpStatus.CREATED }.second)
+        respuestas.filter { it.first == HttpStatus.OK }.forEach {
+            assertEquals(emitido["recibo"]["numero_impreso"].asString(), tree(it.second)["recibo"]["numero_impreso"].asString())
+        }
+        assertEquals(1, registros("recibo", "caja" to caja.id).size)
+        assertEquals(1, registros("linea_recibo", "orden" to ordenId).size)
+    }
+
+    @Test
     fun `un CAJERO cobra, TESORERIA y SISTEMA_ORIGEN reciben 403`() {
         val caja = nuevaCaja()
         val ordenId = post(ORDENES, orden())["orden_id"].asString()
