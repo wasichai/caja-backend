@@ -98,7 +98,8 @@ ejemplo de `caja`, porque es configuración de una municipalidad y no una cifra 
 `codigo,descripcion,codigoArea,partidaPresupuestal,importe,vigenciaDesde,vigenciaHasta,documentoFuente`.
 
 - El área tiene que existir por código (se crea con `import_cajas.py`); si no, la fila se rechaza.
-- `importe` es un decimal de hasta 2 decimales y mayor o igual que 0, leído con `Decimal` (nunca `float`).
+- `importe` es un decimal de hasta 2 decimales y mayor o igual que 0, escrito con `0-9`, leído con `Decimal` (nunca
+  `float`). Uno demasiado grande para `Decimal` rechaza su fila, no la corrida.
 - `vigenciaHasta` va vacía o es mayor o igual que `vigenciaDesde`; `documentoFuente` es obligatorio.
 - Calcula `clave_vigencia` (`<codigo>|<vigenciaDesde>`) y rechaza la fila si core ya la tiene.
 - **No hay archivo de tarifas en este repositorio**: las cifras del TUPA salen de la normativa verificada a doble firma

@@ -127,6 +127,20 @@ class RechazoPorFilaTests(ImportTasasTestCase):
                 # entre comillas, para que la coma del importe no corte la celda
                 self.assert_rechaza(fila(importe=f'"{malo}"'), f"el importe '{malo}' no es un decimal de hasta 2 decimales")
 
+    def test_un_importe_enorme_rechaza_esa_fila_y_no_la_corrida(self):
+        enorme = "9" * 40
+        code, out, err = self.run_main(self.csv(fila(importe=enorme), fila(codigo="T-02")))
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"rechazada línea 2: el importe '{enorme}' es demasiado grande", out)
+        self.assertEqual([t["codigo"] for t in self.tasas()], ["T-02"])
+
+    def test_un_importe_con_digitos_que_no_son_ascii_se_rechaza(self):
+        # \d acepta dígitos de cualquier alfabeto; un importe se escribe con 0-9
+        self.assert_rechaza(fila(importe="١٢"), "el importe '١٢' no es un decimal de hasta 2 decimales")
+
+    def test_una_fecha_con_digitos_que_no_son_ascii_se_rechaza(self):
+        self.assert_rechaza(fila(vigenciaDesde="٢٠٢٦-01-01"), "la vigencia desde '٢٠٢٦-01-01' no es una fecha AAAA-MM-DD")
+
     def test_una_vigencia_hasta_anterior_a_la_desde_se_rechaza(self):
         self.assert_rechaza(fila(vigenciaDesde="2026-06-01", vigenciaHasta="2026-05-31"),
                             "la vigencia hasta 2026-05-31 es anterior a la vigencia desde 2026-06-01")

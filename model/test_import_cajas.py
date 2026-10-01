@@ -213,6 +213,14 @@ class CoreTests(ImportCajasTestCase):
         self.assertIn("serie", err)
         self.assertEqual(self.core.requests, [])
 
+    def test_un_archivo_que_no_existe_sale_1_sin_traza_y_sin_llamar_a_core(self):
+        code, out, err = self.run_main(os.path.join(self.carpeta, "no-existe.csv"))
+        self.assertEqual(code, 1)
+        self.assertIn("error:", err)
+        self.assertIn("no-existe.csv", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(self.core.requests, [])
+
     def test_no_usa_float(self):
         with open(os.path.join(HERE, "import_cajas.py"), encoding="utf-8") as f:
             self.assertNotIn("float(", f.read())

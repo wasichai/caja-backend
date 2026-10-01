@@ -22,7 +22,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from core_client import Client, CoreError
 from importador import argumentos, imprimir_rechazadas, leer_filas
@@ -31,8 +31,9 @@ TASA = "tasa"
 AREA = "area"
 COLUMNAS = ("codigo", "descripcion", "codigoArea", "partidaPresupuestal", "importe", "vigenciaDesde", "vigenciaHasta",
             "documentoFuente")
-IMPORTE = re.compile(r"\d+(\.\d{1,2})?")
-FECHA = re.compile(r"\d{4}-\d{2}-\d{2}")
+# [0-9] y no \d: \d acepta los dígitos de cualquier alfabeto
+IMPORTE = re.compile(r"[0-9]+(\.[0-9]{1,2})?")
+FECHA = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 CENTAVO = Decimal("0.01")
 # celda obligatoria -> cómo la nombra el motivo del rechazo
 OBLIGATORIAS = (("codigo", "el código"), ("descripcion", "la descripción"), ("codigoArea", "el código del área"),
@@ -67,7 +68,11 @@ def parsear(valores, columnas):
             return None, None, f"falta {nombre}"
     if not IMPORTE.fullmatch(valores["importe"]):
         return None, None, f"el importe '{valores['importe']}' no es un decimal de hasta 2 decimales y mayor o igual que 0"
-    importe = Decimal(valores["importe"]).quantize(CENTAVO)
+    try:
+        importe = Decimal(valores["importe"]).quantize(CENTAVO)
+    except InvalidOperation:
+        # más dígitos de los que caben en el contexto de Decimal: es de esa fila, no de la corrida
+        return None, None, f"el importe '{valores['importe']}' es demasiado grande"
     desde, motivo = _fecha(valores["vigenciaDesde"], "la vigencia desde")
     if motivo:
         return None, None, motivo

@@ -110,7 +110,7 @@ def main(argv=None):
     args = argumentos("Carga las cajas y sus áreas en wasichai Core.", ARCHIVO, sys.argv[1:] if argv is None else argv)
     try:
         filas = leer_filas(args.archivo, COLUMNAS)
-    except ValueError as e:
+    except (OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(f"filas: {len(filas)}")
