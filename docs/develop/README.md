@@ -45,7 +45,7 @@ set -a; source develop/.env; set +a
 | `CAJA_PG_PORT` | `5434` | puerto que publica `compose.yml` en `127.0.0.1` |
 | `WASICHAI_JWT_SECRET` | valor de desarrollo | firma de los tokens. Mínimo 32 bytes; en cualquier entorno real, uno propio |
 | `WASICHAI_SEED_DEV` | `true` | crea el usuario `admin@wasichai.local` / `admin`. Apagarlo fuera de desarrollo |
-| `WASICHAI_CORE` | `http://localhost:8091` | URL que usarán los scripts de carga del modelo (llegan en un PR posterior) |
+| `WASICHAI_CORE` | `http://localhost:8091` | URL que usarán los scripts de carga del modelo (model/apply.py y los importadores) |
 | `WASICHAI_EMAIL` / `WASICHAI_PASSWORD` | el admin de desarrollo | login de esos scripts |
 | `WASICHAI_TEST_DB_*` | comentadas | solo para tests de integración contra una base externa (ver 6) |
 
@@ -85,8 +85,33 @@ curl http://localhost:8091/actuator/health       # {"status":"UP",...}
 
 ## 5. Modelo y datos
 
-Todavía no existe: este PR trae solo el esqueleto. Los objetos, campos y relaciones de caja y su carga llegan en los
-PR siguientes. Hasta entonces la base queda con el esquema de wasichai y el usuario de desarrollo.
+El modelo (`area`, `caja` y `tasa`, con las relaciones `caja_area` y `tasa_area`) está en `model/model.json`, y tres
+scripts de Python (solo librería estándar, 3.11 o más) lo cargan en un core que ya esté corriendo. El detalle de cada
+campo está en la sección «Modelo» del [README principal](../../README.md#modelo).
+
+```bash
+set -a; source develop/.env; set +a     # WASICHAI_CORE (http://localhost:8091), WASICHAI_EMAIL, WASICHAI_PASSWORD
+./gradlew bootRun                       # en otra terminal: el core tiene que estar arriba
+
+cd model
+python3 apply.py --validate-only        # el modelo cumple las reglas de core (no necesita core)
+python3 apply.py                        # crea 3 objetos y 2 relaciones; la segunda vez no crea nada
+python3 import_cajas.py --dry-run       # 5 cajas y 3 áreas del ejemplo, sin escribir
+python3 import_cajas.py                 # data/ejemplos/cajas.csv
+python3 import_tasas.py --archivo tasas.csv --dry-run
+python3 -m unittest -v                  # las pruebas, con un core falso (FakeCore): no necesitan base ni servidor
+```
+
+- **Orden.** `apply.py` antes que los importadores, y `import_cajas.py` antes que `import_tasas.py`: las tasas exigen que
+  su área exista.
+- **El rechazo es por fila.** Una fila mala se informa con su línea y su motivo y no impide las siguientes. Los dos
+  importadores comprueban lo que core ya tiene antes de escribir, porque core contesta 500, sin detalle, a una violación
+  de unicidad. Salen con 1 si core rechaza algo o no responde.
+- **Las tarifas no están en el repositorio.** Las cifras del TUPA salen de la normativa verificada; `import_tasas.py`
+  recibe el CSV por `--archivo`.
+- `python3 apply.py --drop` borra los objetos del modelo y sus datos, en orden inverso (`--dry-run` lo muestra antes).
+- Un core sin Docker: `./gradlew bootRun` contra cualquier PostgreSQL 18 (`WASICHAI_DB_*`, ver 2), por ejemplo un clúster
+  desechable de `initdb` en otro puerto con una base `caja`.
 
 ## 6. Tests
 
