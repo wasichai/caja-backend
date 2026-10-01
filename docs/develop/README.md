@@ -85,8 +85,8 @@ curl http://localhost:8091/actuator/health       # {"status":"UP",...}
 
 ## 5. Modelo y datos
 
-El modelo (`area`, `caja` y `tasa`, con las relaciones `caja_area` y `tasa_area`) está en `model/model.json`, y tres
-scripts de Python (solo librería estándar, 3.11 o más) lo cargan en un core que ya esté corriendo. El detalle de cada
+El modelo (`area`, `caja`, `tasa` y `orden_de_cobro`, con las relaciones `caja_area` y `tasa_area`) está en
+`model/model.json`, los roles de caja en `model/roles.json`, y cuatro scripts de Python (solo librería estándar, 3.11 o más) lo cargan en un core que ya esté corriendo. El detalle de cada
 campo está en la sección «Modelo» del [README principal](../../README.md#modelo).
 
 ```bash
@@ -95,13 +95,17 @@ set -a; source develop/.env; set +a     # WASICHAI_CORE (http://localhost:8091),
 
 cd model
 python3 apply.py --validate-only        # el modelo cumple las reglas de core (no necesita core)
-python3 apply.py                        # crea 3 objetos y 2 relaciones; la segunda vez no crea nada
+python3 apply.py                        # crea 4 objetos y 2 relaciones; la segunda vez no crea nada
+python3 apply_roles.py                  # crea o sincroniza SISTEMA_ORIGEN, CAJERO, SUPERVISOR_CAJA y TESORERIA
 python3 import_cajas.py --dry-run       # 5 cajas y 3 áreas del ejemplo, sin escribir
 python3 import_cajas.py                 # data/ejemplos/cajas.csv
 python3 import_tasas.py --archivo tasas.csv --dry-run
 python3 -m unittest -v                  # las pruebas, con un core falso (FakeCore): no necesitan base ni servidor
 ```
 
+- **Roles.** `apply_roles.py` deja cada rol con los permisos de `roles.json`, ni uno más: lo que se agregue a mano en
+  el admin se pierde en la siguiente corrida. Va después de `apply.py`, porque nombra sus objetos. `--dry-run` imprime
+  lo que mandaría sin llamar a core.
 - **Orden.** `apply.py` antes que los importadores, y `import_cajas.py` antes que `import_tasas.py`: las tasas exigen que
   su área exista.
 - **El rechazo es por fila.** Una fila mala se informa con su línea y su motivo y no impide las siguientes. Los dos
@@ -120,24 +124,28 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 ./gradlew ktlintFormat                       # formatea el Kotlin según .editorconfig
 ./gradlew compileTestKotlin                  # compila también los tests de integración, sin correrlos
 ./gradlew integrationTest                    # tests de integración: Testcontainers, necesita un Docker local
-./gradlew integrationTest --tests 'caja.CajaSmokeTest'   # una sola clase
+./gradlew integrationTest --tests 'caja.cobro.OrdenesApiTest'   # una sola clase
 ```
 
-**Qué son los tests de integración.** Hoy es `CajaSmokeTest`, con `@Tag("integration")` (lo hereda de
-`WasichaiIntegrationTest`): `build` lo excluye e `integrationTest` lo corre. Levanta la app entera (`CajaApplication`,
-en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad `wasichai.test.db.image` de
-`build.gradle.kts`) y la llama por HTTP.
+**Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest` y `CajasApiTest`, con `@Tag("integration")`
+(lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
+(`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
+`wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
 
 - **La base se comparte** entre todas las clases de una corrida: cada test crea sus propios objetos con nombres únicos
   y no supone que la base está vacía.
-- **Una clase nueva** hereda de `WasichaiIntegrationTest`.
+- **Una clase nueva de la API** hereda de `CajaApiTest`: antes de cada test aplica `model/model.json` y
+  `model/roles.json` (como `apply.py` y `apply_roles.py`) y deja el token del admin en `token`. Da `funcionario("CAJERO")`
+  (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio),
+  `rejected(método, ruta, cuerpo, campo)` (un 400 cuyo primer error es ese campo), `orden(...)` (un alta válida con una
+  referencia nueva) y `registro(objeto, atributos)` (un registro por la API de core).
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta
 `DOCKER_HOST`, pero lo busca en `localhost:<puerto publicado>`. Con un Docker remoto (otro servidor, o su socket
 reenviado por SSH, como `unix:///tmp/docker.sock`), el contenedor y sus puertos quedan en ese servidor: ni Ryuk ni
 PostgreSQL responden en `localhost` y la suite falla al arrancar, aunque `docker info` funcione. Entonces:
 
-1. Lo habitual: compilarlos (`./gradlew compileTestKotlin`) y dejar que los corra el CI cuando exista.
+1. Lo habitual: compilarlos (`./gradlew compileTestKotlin`) y dejar que los corra el CI.
 2. O usar una base externa ya levantada en ese servidor y tunelizada. Descomenta `WASICHAI_TEST_DB_*` en
    `develop/.env`. Su nombre **debe terminar en `_test`**, porque la suite la limpia entera al empezar. Luego:
 
@@ -148,6 +156,18 @@ PostgreSQL responden en `localhost` y la suite falla al arrancar, aunque `docker
 
    `--rerun` evita que la caché de Gradle devuelva un resultado verde viejo. Detalles en
    `wasichai/docs/development/getting-started.md#integration-tests`.
+3. O un clúster desechable de PostgreSQL 18 en la máquina (Homebrew `postgresql@18`), nunca el de Homebrew:
+
+   ```bash
+   PG=/opt/homebrew/opt/postgresql@18/bin
+   D=$(mktemp -d)/pg      # ruta corta: el socket de unix no admite más de 103 bytes
+   $PG/initdb -D "$D" -U postgres --auth=trust >/dev/null
+   $PG/pg_ctl -D "$D" -o "-p 5455 -k $D" -l "$D/log" start
+   $PG/createdb -h localhost -p 5455 -U postgres caja_test
+   WASICHAI_TEST_DB_HOST=localhost WASICHAI_TEST_DB_PORT=5455 WASICHAI_TEST_DB_NAME=caja_test \
+   WASICHAI_TEST_DB_USERNAME=postgres WASICHAI_TEST_DB_PASSWORD=postgres ./gradlew integrationTest --rerun
+   $PG/pg_ctl -D "$D" stop
+   ```
 
 ## 7. Con el front (`../caja-ui`)
 
