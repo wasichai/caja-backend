@@ -1,0 +1,45 @@
+{
+  "roles": [
+    {
+      "name": "SISTEMA_ORIGEN",
+      "label": "Sistema de origen",
+      "description": "El usuario técnico de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor.",
+      "permisos": {
+        "orden_de_cobro": ["READ", "CREATE"]
+      }
+    },
+    {
+      "name": "CAJERO",
+      "label": "Cajero",
+      "description": "Atiende una ventanilla: lee las cajas, sus áreas, las tasas y las órdenes pendientes.",
+      "permisos": {
+        "area": ["READ"],
+        "caja": ["READ"],
+        "tasa": ["READ"],
+        "orden_de_cobro": ["READ"]
+      }
+    },
+    {
+      "name": "SUPERVISOR_CAJA",
+      "label": "Supervisor de caja",
+      "description": "Supervisa las ventanillas. Hoy puede lo mismo que el cajero; lo que lo distingue llega con la cobranza.",
+      "permisos": {
+        "area": ["READ"],
+        "caja": ["READ"],
+        "tasa": ["READ"],
+        "orden_de_cobro": ["READ"]
+      }
+    },
+    {
+      "name": "TESORERIA",
+      "label": "Tesorería",
+      "description": "Consulta: lee cada objeto del modelo y no escribe ninguno.",
+      "permisos": {
+        "area": ["READ"],
+        "caja": ["READ"],
+        "tasa": ["READ"],
+        "orden_de_cobro": ["READ"]
+      }
+    }
+  ]
+}

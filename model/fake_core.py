@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 RECORDS = re.compile(r"^/api/objects/([a-z0-9_]+)/records$")
 RECORD = re.compile(r"^/api/objects/([a-z0-9_]+)/records/([0-9a-f-]+)$")
 FIELDS = re.compile(r"^/api/metadata/objects/([a-z0-9_]+)/fields$")
+ROLE = re.compile(r"^/api/roles/([A-Z0-9_]+)$")
+ROLE_PERMISSIONS = re.compile(r"^/api/roles/([A-Z0-9_]+)/permissions$")
 
 
 class FakeCoreHandler(BaseHTTPRequestHandler):
@@ -53,7 +55,7 @@ class FakeCore:
 
     def __init__(self, existing_objects=(), existing_relationships=(), fail_on_post_object=None,
                  fail_put=False, fail_put_status=500, login_response=None, fail_on_record=None, existing_fields=None,
-                 fail_on_update=None, fail_on_delete=None):
+                 fail_on_update=None, fail_on_delete=None, fail_on_role=None):
         self.existing_objects = set(existing_objects)
         self.existing_fields = existing_fields or {}  # object name -> list of {"name", "enumOptions"?}
         self.existing_relationships = set(existing_relationships)
@@ -64,7 +66,9 @@ class FakeCore:
         self.fail_on_record = fail_on_record  # object name -> its record POSTs answer 400
         self.fail_on_update = fail_on_update  # object name -> its record PUTs answer 400
         self.fail_on_delete = fail_on_delete  # object name -> its record DELETEs answer 409
+        self.fail_on_role = fail_on_role  # role name -> its POST /api/roles answers 500
         self.records = {}  # object name -> list of {"id", "attributes"}
+        self.roles = {}  # role name -> {"name", "label", "permissions": [{"objectName", "action", "allowed"}]}
         self.requests = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeCoreHandler)
         self.server.requests = self.requests
@@ -129,8 +133,32 @@ class FakeCore:
         self.records[name] = [r for r in records if r["id"] != record_id]
         return 204, None
 
+    def _roles(self, method, path, body):
+        """Core's role routes, addressed by name: list, create, relabel and replace the permissions."""
+        if path == "/api/roles" and method == "GET":
+            return 200, list(self.roles.values())
+        if path == "/api/roles" and method == "POST":
+            name = body["name"]
+            if name == self.fail_on_role:
+                return 500, {"message": "boom-role"}
+            if name in self.roles:
+                return 409, {"detail": f"Role '{name}' already exists"}
+            self.roles[name] = {"name": name, "label": body["label"], "permissions": []}
+            return 201, self.roles[name]
+        match = ROLE_PERMISSIONS.match(path) or ROLE.match(path)
+        role = self.roles.get(match.group(1)) if match and method == "PUT" else None
+        if role is None:
+            return 404, {"detail": "not found"}
+        if ROLE_PERMISSIONS.match(path):
+            role["permissions"] = [{**p, "allowed": p.get("allowed", True)} for p in body["permissions"]]
+        else:
+            role["label"] = body.get("label", role["label"])
+        return 200, role
+
     def _script(self, method, full_path, body):
         path, _, query = full_path.partition("?")
+        if path == "/api/roles" or path.startswith("/api/roles/"):
+            return self._roles(method, path, body)
         if path == "/api/auth/login" and method == "POST":
             if self.login_response is not None:
                 return 200, self.login_response
