@@ -61,6 +61,10 @@ tasks.register<Test>("integrationTest") {
     testLogging {
         events("standard_error")
     }
+    // CajaApiTest aplica el modelo y los roles en cada prueba: un cambio en ellos vuelve a correr la suite, nunca un verde
+    // de caché
+    inputs.file("model/model.json")
+    inputs.file("model/roles.json")
     shouldRunAfter(tasks.named("test"))
 }
 
