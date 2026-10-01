@@ -69,6 +69,16 @@ class ReglasTest {
     }
 
     @Test
+    fun `un importe de mas de 13 digitos enteros se rechaza`() {
+        // numeric(15,2) de caja: 13 enteros y 2 decimales
+        assertEquals(BigDecimal("9999999999999.99"), importe("9999999999999.99"))
+        assertEquals(BigDecimal("0000000000001"), importe("0000000000001"))
+        listOf("10000000000000", "10000000000000.00", "99999999999999.9").forEach {
+            assertEquals("importe", rechazado { importe(it) }, it)
+        }
+    }
+
+    @Test
     fun `lo que no es un importe escrito en decimal se rechaza`() {
         listOf(null, "", "abc", "1,50", "1e2", "NaN", "Infinity", "1.", ".5", "+5", "١٢").forEach {
             assertEquals("importe", rechazado { importe(it) }, it.toString())
@@ -88,19 +98,22 @@ class ReglasTest {
     @Test
     fun `el pagador puede ser anonimo`() {
         assertEquals(Pagador(null, null, null), pagador(" ", null, null))
+        assertEquals(Pagador(null, null, null), pagador(null, null, " "))
     }
 
     @Test
     fun `el documento va en mayusculas y el nombre recortado`() {
-        assertEquals(Pagador("AB123", "FLORES OTINIANO JUNIOR", 42), pagador(" ab123 ", " FLORES OTINIANO JUNIOR ", 42))
+        assertEquals(Pagador("AB123", "FLORES OTINIANO JUNIOR", 42), pagador(" ab123 ", " FLORES OTINIANO JUNIOR ", " 42 "))
     }
 
     @Test
     fun `un pagador que no cabe o un id que no es un id se rechaza`() {
         assertEquals("pagador_documento", rechazado { pagador("x".repeat(21), null, null) })
         assertEquals("pagador_nombre", rechazado { pagador(null, "x".repeat(151), null) })
-        assertEquals("pagador_externo_id", rechazado { pagador(null, null, 0) })
-        assertEquals("pagador_externo_id", rechazado { pagador(null, null, -3) })
+        // llega en cadena (o un número json que jackson pasa a cadena): las reglas lo leen y rechazan sobre su campo
+        listOf("0", "-3", "1.5", "abc", "1e3", "١٢", "99999999999999999999").forEach {
+            assertEquals("pagador_externo_id", rechazado { pagador(null, null, it) }, it)
+        }
     }
 
     // estado: el filtro de la ventanilla

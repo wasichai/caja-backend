@@ -17,6 +17,9 @@ const val LARGO_DETALLE = 200
 const val LARGO_DOCUMENTO = 20
 const val LARGO_NOMBRE = 150
 
+// numeric(15,2) de caja: 13 dígitos enteros y 2 decimales
+const val ENTEROS_DEL_IMPORTE = 13
+
 const val PENDIENTE = "PENDIENTE"
 const val PAGADA = "PAGADA"
 const val ANULADA = "ANULADA"
@@ -26,6 +29,7 @@ private val SISTEMA = Regex("[a-z0-9_-]+")
 
 // decimal llano: sin signo, sin exponente, sin punto suelto. [0-9] y no \d, que acepta dígitos de otros alfabetos
 private val DECIMAL = Regex("[0-9]+(\\.[0-9]+)?")
+private val ENTERO = Regex("[0-9]+")
 
 // texto, no un enumerado: un sistema nuevo no es un despliegue de la caja. solo se comprueba la forma, porque es la
 // mitad de la clave de idempotencia y dos formas de teclearlo serían dos sistemas
@@ -56,7 +60,8 @@ fun concepto(valor: String?): String = texto(valor, "concepto", LARGO_CONCEPTO)
 fun detalle(valor: String?): String? = opcional(valor, "detalle", LARGO_DETALLE)
 
 // regla 1: BigDecimal desde la cadena, nunca un número de coma flotante. mayor que 0 (una deuda en cero no se manda a
-// la caja) y con 2 decimales a lo sumo. se guarda como vino: la caja no decide escala ni redondeo
+// la caja), con 2 decimales y 13 enteros a lo sumo (numeric(15,2) de caja). se guarda como vino: la caja no decide
+// escala ni redondeo
 fun importe(valor: String?): BigDecimal {
     val texto = obligatorio(valor, "importe")
     if (!DECIMAL.matches(texto)) {
@@ -65,6 +70,9 @@ fun importe(valor: String?): BigDecimal {
     val importe = BigDecimal(texto)
     if (importe.signum() <= 0) throw ValidationException("Importe inválido", "importe", "debe ser mayor que 0")
     if (importe.scale() > 2) throw ValidationException("Importe inválido", "importe", "a lo sumo 2 decimales")
+    if (importe.precision() - importe.scale() > ENTEROS_DEL_IMPORTE) {
+        throw ValidationException("Importe inválido", "importe", "a lo sumo $ENTEROS_DEL_IMPORTE dígitos enteros")
+    }
     return importe
 }
 
@@ -88,19 +96,26 @@ data class Pagador(
     val idExterno: Long?
 )
 
+// el id externo llega en cadena (un número json, jackson lo pasa a cadena): se lee aquí, y lo que no es un entero
+// mayor que 0 se rechaza sobre su campo. vacío es «no lo tiene», no «es el cero»
 fun pagador(
     documento: String?,
     nombre: String?,
-    idExterno: Long?
-): Pagador {
-    if (idExterno != null && idExterno <= 0) {
-        throw ValidationException("Pagador inválido", "pagador_externo_id", "un identificador mayor que 0, o ninguno")
-    }
-    return Pagador(
+    idExterno: String?
+): Pagador =
+    Pagador(
         opcional(documento, "pagador_documento", LARGO_DOCUMENTO)?.uppercase(Locale.ROOT),
         opcional(nombre, "pagador_nombre", LARGO_NOMBRE),
-        idExterno
+        idExterno(idExterno)
     )
+
+private fun idExterno(valor: String?): Long? {
+    val texto = valor?.trim()?.ifEmpty { null } ?: return null
+    val id = texto.takeIf(ENTERO::matches)?.toLongOrNull()
+    if (id == null || id <= 0) {
+        throw ValidationException("Pagador inválido", "pagador_externo_id", "un identificador entero mayor que 0, o ninguno")
+    }
+    return id
 }
 
 // el filtro de la ventanilla: sin estado, las pendientes

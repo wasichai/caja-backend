@@ -81,6 +81,19 @@ class OrdenesApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `un importe de mas de 13 digitos enteros da 400 en importe`() {
+        rejected("POST", ORDENES, orden("importe" to "10000000000000.00"), "importe")
+        assertEquals("9999999999999.99", post(ORDENES, orden("importe" to "9999999999999.99"))["importe"]["importe"].asString())
+    }
+
+    @Test
+    fun `un pagador_externo_id que no es un entero mayor que 0 da 400 en su campo`() {
+        listOf("abc", 0, -3, 1.5, "1e3", true).forEach { rejected("POST", ORDENES, orden("pagador_externo_id" to it), "pagador_externo_id") }
+        // en cadena o en número, el entero vale
+        assertEquals(77L, post(ORDENES, orden("pagador_externo_id" to "77"))["pagador_externo_id"].asLong())
+    }
+
+    @Test
     fun `un sistema de origen invalido da 400 en sistema_origen`() {
         listOf("ren tas", "rentás", "", "x".repeat(21)).forEach { rejected("POST", ORDENES, orden("sistema_origen" to it), "sistema_origen") }
     }

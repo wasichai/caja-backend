@@ -12,9 +12,9 @@ import java.time.LocalDate
 // las formas de la api de caja. las claves json son snake_case, las de los campos del modelo: un 400 de core o de las
 // reglas (field = nombre del campo) cae sobre la misma clave que mandó el cliente
 
-// lo que manda el sistema de origen. todo en cadena salvo el id externo: el importe y las fechas se leen en las reglas,
-// que rechazan sobre su campo. no lleva tributo, ejercicio ni periodo (la frontera): cualquier clave que no esté aquí
-// se anota y el alta la rechaza con un 400 que la nombra
+// lo que manda el sistema de origen. todo en cadena: el importe, las fechas y el id externo se leen en las reglas, que
+// rechazan sobre su campo. no lleva tributo, ejercicio ni periodo (la frontera): cualquier clave que no esté aquí se
+// anota y el alta la rechaza con un 400 que la nombra
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class NuevaOrden(
     val sistemaOrigen: String? = null,
@@ -26,7 +26,7 @@ class NuevaOrden(
     val actualizadoA: String? = null,
     val pagadorDocumento: String? = null,
     val pagadorNombre: String? = null,
-    val pagadorExternoId: Long? = null,
+    val pagadorExternoId: String? = null,
     val observacion: String? = null
 ) {
     @JsonIgnore
