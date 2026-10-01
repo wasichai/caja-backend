@@ -43,14 +43,15 @@ set -a; source develop/.env; set +a
 | `WASICHAI_DB_HOST` / `_PORT` / `_NAME` | `localhost` / `5434` / `caja` | a qué PostgreSQL se conecta el servidor |
 | `WASICHAI_DB_USERNAME` / `_PASSWORD` | `caja` / `caja` | credenciales de esa base |
 | `CAJA_PG_PORT` | `5434` | puerto que publica `compose.yml` en `127.0.0.1` |
+| `CAJA_MUNICIPALIDAD_NOMBRE` | `MUNICIPALIDAD DISTRITAL DE EJEMPLO` | el nombre que encabeza el recibo. **Obligatoria**: sin ella el servidor no arranca |
 | `WASICHAI_JWT_SECRET` | valor de desarrollo | firma de los tokens. Mínimo 32 bytes; en cualquier entorno real, uno propio |
 | `WASICHAI_SEED_DEV` | `true` | crea el usuario `admin@wasichai.local` / `admin`. Apagarlo fuera de desarrollo |
 | `WASICHAI_CORE` | `http://localhost:8091` | URL que usarán los scripts de carga del modelo (model/apply.py y los importadores) |
 | `WASICHAI_EMAIL` / `WASICHAI_PASSWORD` | el admin de desarrollo | login de esos scripts |
 | `WASICHAI_TEST_DB_*` | comentadas | solo para tests de integración contra una base externa (ver 6) |
 
-Todas tienen el mismo valor por defecto en `src/main/resources/application.yml`, así que con la base de `compose.yml`
-el servidor arranca aunque no cargues nada. `develop/.env` sirve para cambiarlas sin tocar el yaml.
+Todas menos `CAJA_MUNICIPALIDAD_NOMBRE` tienen el mismo valor por defecto en `src/main/resources/application.yml`, así
+que con la base de `compose.yml` el servidor arranca cargando solo esa. `develop/.env` sirve para cambiarlas sin tocar el yaml.
 
 ## 3. Base de datos
 
@@ -85,7 +86,8 @@ curl http://localhost:8091/actuator/health       # {"status":"UP",...}
 
 ## 5. Modelo y datos
 
-El modelo (`area`, `caja`, `tasa` y `orden_de_cobro`, con las relaciones `caja_area` y `tasa_area`) está en
+El modelo (`area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo` y `pago_evento`, con sus once
+relaciones) está en
 `model/model.json`, los roles de caja en `model/roles.json`, y cuatro scripts de Python (solo librería estándar, 3.11 o más) lo cargan en un core que ya esté corriendo. El detalle de cada
 campo está en la sección «Modelo» del [README principal](../../README.md#modelo).
 
@@ -95,7 +97,7 @@ set -a; source develop/.env; set +a     # WASICHAI_CORE (http://localhost:8091),
 
 cd model
 python3 apply.py --validate-only        # el modelo cumple las reglas de core (no necesita core)
-python3 apply.py                        # crea 4 objetos y 2 relaciones; la segunda vez no crea nada
+python3 apply.py                        # crea 8 objetos y 11 relaciones; la segunda vez no crea nada
 python3 apply_roles.py                  # crea o sincroniza SISTEMA_ORIGEN, CAJERO, SUPERVISOR_CAJA y TESORERIA
 python3 import_cajas.py --dry-run       # 5 cajas y 3 áreas del ejemplo, sin escribir
 python3 import_cajas.py                 # data/ejemplos/cajas.csv
@@ -127,7 +129,8 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 ./gradlew integrationTest --tests 'caja.cobro.OrdenesApiTest'   # una sola clase
 ```
 
-**Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest` y `CajasApiTest`, con `@Tag("integration")`
+**Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest`, `CajasApiTest`, `CobroApiTest`,
+`CobroEnUnaTransaccionApiTest` y `CandadosTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -138,7 +141,12 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   `model/roles.json` (como `apply.py` y `apply_roles.py`) y deja el token del admin en `token`. Da `funcionario("CAJERO")`
   (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio),
   `rejected(método, ruta, cuerpo, campo)` (un 400 cuyo primer error es ese campo), `orden(...)` (un alta válida con una
-  referencia nueva) y `registro(objeto, atributos)` (un registro por la API de core).
+  referencia nueva), `registro(objeto, atributos)` (un registro por la API de core), `cuenta("CAJERO")` (un usuario con
+  su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única) y `registros(objeto, filtros)`
+  (lo guardado, leído como admin). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
+- **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, y la del fallo a mitad
+  (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el `RecordChangeListener` de prueba), son el corazón de la
+  cobranza: no se dan por buenas sin correrlas contra un PostgreSQL de verdad.
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta
 `DOCKER_HOST`, pero lo busca en `localhost:<puerto publicado>`. Con un Docker remoto (otro servidor, o su socket
