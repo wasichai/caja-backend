@@ -1,0 +1,106 @@
+<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org" lang="es">
+    <head>
+        <meta charset="UTF-8" />
+        <title th:text="|Recibo ${r.numeroImpreso}|">Recibo</title>
+        <style th:utext="${css}"></style>
+    </head>
+    <body>
+        <div class="pie">
+            <span th:text="|Original · recibo ${r.numeroImpreso} · emitido el ${r.emitido} (hora de Lima)|">Original</span>
+        </div>
+
+        <table class="cabecera">
+            <tr>
+                <td>
+                    <div class="municipalidad" th:text="${r.municipalidad}">MUNICIPALIDAD</div>
+                    <div class="documento">RECIBO DE CAJA · ORIGINAL</div>
+                </td>
+                <td class="numero">
+                    <span class="etiqueta">N.° de recibo</span>
+                    <span class="valor" th:text="${r.numeroImpreso}">001-0000001</span>
+                </td>
+            </tr>
+        </table>
+
+        <div class="bloque">
+            <div class="titulo">Emisión</div>
+            <table class="datos">
+                <tr>
+                    <td style="width: 28%">
+                        <span class="etiqueta">Fecha y hora (Lima)</span>
+                        <span class="valor" th:text="${r.emitido}">02/10/2026 10:00:00</span>
+                    </td>
+                    <td style="width: 36%">
+                        <span class="etiqueta">Caja</span>
+                        <span class="valor" th:text="${r.caja}">C-01 — Ventanilla</span>
+                    </td>
+                    <td style="width: 36%">
+                        <span class="etiqueta">Cajero</span>
+                        <span class="valor" th:text="${r.cajero}">cajero</span>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="bloque">
+            <div class="titulo">Pagador</div>
+            <table class="datos">
+                <tr>
+                    <td style="width: 70%">
+                        <span class="etiqueta">Nombre</span>
+                        <span class="valor" th:text="${r.pagador}">pagador</span>
+                    </td>
+                    <td style="width: 30%">
+                        <span class="etiqueta">Documento</span>
+                        <span class="valor" th:text="${r.documento} ?: '—'">—</span>
+                    </td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="bloque">
+            <div class="titulo">Lo que se cobró</div>
+            <table class="tabla">
+                <thead>
+                    <tr>
+                        <th style="width: 50%">Concepto</th>
+                        <th style="width: 30%">Referencia</th>
+                        <th style="width: 20%">Importe</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="l : ${r.lineas}">
+                        <td>
+                            <div th:text="${l.concepto}">concepto</div>
+                            <div class="detalle" th:if="${l.detalle != null}" th:text="${l.detalle}">detalle</div>
+                        </td>
+                        <td th:text="${l.referencia} ?: '—'">referencia</td>
+                        <td class="num" th:text="${l.monto}">S/ 0.00</td>
+                    </tr>
+                    <tr class="total">
+                        <td colspan="2">Total</td>
+                        <td class="num" th:text="${r.total}">S/ 0.00</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="nota" th:text="|Importes actualizados al ${r.actualizadoA}|">Importes actualizados al</div>
+        </div>
+
+        <div class="bloque">
+            <div class="titulo">Pago</div>
+            <table class="datos">
+                <tr>
+                    <td style="width: 28%">
+                        <span class="etiqueta">Forma de pago</span>
+                        <span class="valor" th:text="${r.formaPago}">EFECTIVO</span>
+                    </td>
+                    <td style="width: 72%">
+                        <span class="etiqueta">Observación</span>
+                        <span th:text="${r.observacion}">observación</span>
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </body>
+</html>

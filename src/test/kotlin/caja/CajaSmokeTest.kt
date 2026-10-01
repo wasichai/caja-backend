@@ -2,12 +2,14 @@ package caja
 
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpHeaders
+import org.springframework.test.context.TestPropertySource
 import wasichai.test.WasichaiIntegrationTest
 import java.util.UUID
 
 // la app misma (CajaApplication) sobre PostgreSQL plano: los módulos que instala responden, los que deja fuera no, lo
 // que es de caja exige token y la forma del modelo que usará caja (enum, texto único, decimal y relación obligatoria)
 // funciona de punta a punta
+@TestPropertySource(properties = ["caja.municipalidad.nombre=${CajaApiTest.MUNICIPALIDAD}"])
 class CajaSmokeTest : WasichaiIntegrationTest() {
     @Test
     fun `health is up`() {

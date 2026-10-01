@@ -1,0 +1,14 @@
+# las librerías fuera del bom de wasichai (las mismas versiones que srtm-backend). los starters de wasichai los
+# versiona wasichai-bom en build.gradle.kts
+[versions]
+# el fork mantenido de openhtmltopdf, sobre pdfbox 3
+openhtmltopdf = "1.1.87"
+pdfbox = "3.0.8"
+thymeleaf = "3.1.5.RELEASE"
+
+[libraries]
+openhtmltopdf-pdfbox = { module = "io.github.openhtmltopdf:openhtmltopdf-pdfbox", version.ref = "openhtmltopdf" }
+# su log por slf4j (el de spring) y no por java.util.logging a stderr
+openhtmltopdf-slf4j = { module = "io.github.openhtmltopdf:openhtmltopdf-slf4j", version.ref = "openhtmltopdf" }
+pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
+thymeleaf = { module = "org.thymeleaf:thymeleaf", version.ref = "thymeleaf" }

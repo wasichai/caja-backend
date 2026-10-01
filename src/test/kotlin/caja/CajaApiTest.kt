@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
+import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.reactive.server.WebTestClient
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
@@ -15,6 +16,7 @@ import java.util.UUID
 // real (model/model.json, aplicado como lo hace model/apply.py) y los roles de model/roles.json (como
 // model/apply_roles.py), el token del admin sembrado y las llamadas que hacen las pruebas. la base la comparten todas
 // las clases de la corrida: cada registro lleva claves únicas
+@TestPropertySource(properties = ["caja.municipalidad.nombre=${CajaApiTest.MUNICIPALIDAD}"])
 abstract class CajaApiTest : WasichaiIntegrationTest() {
     // el del admin sembrado; una llamada toma otro donde la prueba lo necesita
     protected lateinit var token: String
@@ -306,10 +308,12 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
 
     private fun JsonNode.names(): Set<String> = iterator().asSequence().map { it["name"].asString() }.toSet()
 
-    private companion object {
-        val JSON: JsonMapper = JsonMapper.builder().build()
+    companion object {
+        const val MUNICIPALIDAD = "MUNICIPALIDAD DISTRITAL DE PRUEBA"
+
+        private val JSON: JsonMapper = JsonMapper.builder().build()
 
         // core pide al menos 8 caracteres
-        const val CLAVE = "clave-del-funcionario"
+        private const val CLAVE = "clave-del-funcionario"
     }
 }

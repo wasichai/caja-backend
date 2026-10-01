@@ -2,11 +2,14 @@ package caja.cobro
 
 import caja.CajaApiTest
 import caja.comun.LIMA
+import caja.emision.texto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
 import java.time.LocalDate
 import java.util.UUID
 import java.util.concurrent.CyclicBarrier
@@ -14,7 +17,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 // POST /api/caja/cobros: el turno, el número, el recibo, las órdenes PAGADA y el evento en el buzón, en una sola
-// transacción
+// transacción. y el original del recibo en pdf
 class CobroApiTest : CajaApiTest() {
     private val hoy: LocalDate get() = LocalDate.now(LIMA)
 
@@ -215,6 +218,37 @@ class CobroApiTest : CajaApiTest() {
         assertEquals("PENDIENTE", estadoDe(ordenId))
         post(COBROS, cobro(caja, ordenId), funcionario("CAJERO"))
         assertEquals("PAGADA", estadoDe(ordenId))
+    }
+
+    @Test
+    fun `el original en pdf lo obtiene el cajero que cobro, otro cajero recibe 409`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val ordenId = post(ORDENES, orden("pagador_nombre" to "PEÑA ÑAUPARI, JOSÉ"))["orden_id"].asString()
+        val numero = post(COBROS, cobro(caja, ordenId), cajero.token)["recibo"]["numero_impreso"].asString()
+
+        val pdf =
+            client
+                .get()
+                .uri("/api/caja/recibos/$numero/pdf")
+                .header(HttpHeaders.AUTHORIZATION, cajero.token)
+                .exchange()
+                .expectStatus()
+                .isOk
+                .expectHeader()
+                .contentType(MediaType.APPLICATION_PDF)
+                .expectBody(ByteArray::class.java)
+                .returnResult()
+                .responseBody!!
+        val texto = texto(pdf)
+        listOf(MUNICIPALIDAD, numero, caja.codigo, cajero.email, "PEÑA ÑAUPARI, JOSÉ", "S/ 150.50", "Importes actualizados al").forEach {
+            assertTrue(it in texto, "falta «$it» en:\n$texto")
+        }
+
+        val otro = funcionario("CAJERO")
+        val problema = tree(send("GET", "/api/caja/recibos/$numero/pdf", null, HttpStatus.CONFLICT, otro))
+        assertTrue(problema["detail"].asString().contains("duplicado"), problema.toString())
+        send("GET", "/api/caja/recibos/X-0000001/pdf", null, HttpStatus.NOT_FOUND, cajero.token)
     }
 
     // el cuerpo de un cobro en efectivo de esas órdenes en esa caja

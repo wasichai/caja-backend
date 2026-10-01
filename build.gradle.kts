@@ -19,6 +19,12 @@ dependencies {
     implementation("wasichai:wasichai-spring-boot-starter-forms")
     implementation("wasichai:wasichai-spring-boot-starter-pages")
 
+    // caja.emision: el html de thymeleaf (standalone, sin mvc: la app es webflux) a pdf con openhtmltopdf
+    implementation(libs.thymeleaf)
+    implementation(libs.openhtmltopdf.pdfbox)
+    implementation(libs.openhtmltopdf.slf4j)
+    implementation(libs.pdfbox)
+
     // WasichaiIntegrationTest; brings spring-boot-starter-test, webflux-test and testcontainers
     testImplementation("wasichai:wasichai-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
