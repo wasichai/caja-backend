@@ -14,7 +14,8 @@ import java.util.UUID
 
 // el RecordService de wasichai con los dtos de caja encima (portado de srtm-backend). RecordService comprueba los
 // permisos de objeto y de campo del usuario que llama y valida cada escritura, así que aquí no se repite. no abre
-// transacción: cada escritura se confirma sola, y un unique que salta llega como DuplicateKeyException. un dto lleva
+// transacción: cada escritura se confirma sola, y un unique que salta llega como DuplicateKeyException. dentro de
+// Transaccion.en se une a la transacción en curso y se confirma con ella (la cobranza). un dto lleva
 // todos sus campos, y core rechaza la escritura entera que nombra un campo que el usuario no puede escribir: las
 // escrituras mandan solo los escribibles
 @Component
@@ -52,6 +53,20 @@ class Registros(
         } while (page < result.totalPages)
         return rows.map { read(type, it) }
     }
+
+    // el primero que cumple los filtros en ese orden, o null
+    suspend fun <T : Any> primero(
+        objectName: String,
+        type: Class<T>,
+        filters: Map<String, String>,
+        sort: String? = null,
+        descending: Boolean = false
+    ): T? =
+        records
+            .list(objectName, RecordQuery(page = PageRequest.of(0, 1), sort = sort, descending = descending, filters = filters))
+            .content
+            .firstOrNull()
+            ?.let { read(type, it) }
 
     suspend fun <T : Any> get(
         objectName: String,

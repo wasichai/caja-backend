@@ -145,9 +145,10 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         path: String,
         body: Any?,
         status: HttpStatus,
-        token: String = this.token
+        token: String = this.token,
+        cabeceras: Map<String, String> = emptyMap()
     ): String {
-        val (actual, response) = exchange(method, path, body, token)
+        val (actual, response) = exchange(method, path, body, token, cabeceras)
         assertEquals(status, actual, "$method $path: $response")
         return response
     }
@@ -157,7 +158,8 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         method: String,
         path: String,
         body: Any?,
-        token: String = this.token
+        token: String = this.token,
+        cabeceras: Map<String, String> = emptyMap()
     ): Pair<HttpStatus, String> {
         val spec =
             when (method) {
@@ -169,6 +171,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         val result =
             spec
                 .header(HttpHeaders.AUTHORIZATION, token)
+                .headers { h -> cabeceras.forEach(h::set) }
                 .exchange()
                 .expectBody(String::class.java)
                 .returnResult()
@@ -200,9 +203,10 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         path: String,
         body: Map<String, Any?>?,
         field: String,
-        token: String = this.token
+        token: String = this.token,
+        cabeceras: Map<String, String> = emptyMap()
     ): JsonNode {
-        val problem = tree(send(method, path, body, HttpStatus.BAD_REQUEST, token))
+        val problem = tree(send(method, path, body, HttpStatus.BAD_REQUEST, token, cabeceras))
         assertEquals(field, problem["errors"][0]["field"].asString(), problem.toString())
         return problem
     }
@@ -210,21 +214,30 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     protected fun tree(body: String): JsonNode = json.readValue(body, JsonNode::class.java)
 
     // un usuario (no ADMIN) con uno de los roles de roles.json
-    protected fun funcionario(rol: String): String = usuario(rol)
+    protected fun funcionario(rol: String): String = usuario(rol).token
+
+    // un usuario con uno de los roles de roles.json, con su correo: el cajero de la sesión es su correo
+    protected fun cuenta(rol: String): Cuenta = usuario(rol)
 
     // un usuario (no ADMIN) con un rol propio: lo que puede hacer
     protected fun funcionario(permisos: List<Map<String, Any?>>): String {
         val rol = uniqueName("ROL").uppercase()
         send("POST", "/api/roles", mapOf("name" to rol, "label" to rol), HttpStatus.CREATED)
         send("PUT", "/api/roles/$rol/permissions", mapOf("permissions" to permisos), HttpStatus.OK)
-        return usuario(rol)
+        return usuario(rol).token
     }
 
-    private fun usuario(rol: String): String {
+    private fun usuario(rol: String): Cuenta {
         val email = "${uniqueName(rol.lowercase())}@caja.test"
         send("POST", "/api/users", mapOf("email" to email, "displayName" to rol, "password" to CLAVE, "roles" to listOf(rol)), HttpStatus.CREATED)
-        return bearer(email, CLAVE)
+        return Cuenta(bearer(email, CLAVE), email)
     }
+
+    // el Bearer de un usuario y su correo
+    protected data class Cuenta(
+        val token: String,
+        val email: String
+    )
 
     // objectName null: todos los objetos de la organización
     protected fun permiso(
@@ -248,6 +261,32 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         objeto: String,
         atributos: Map<String, Any?>
     ): String = post("/api/objects/$objeto/records", mapOf("attributes" to atributos))["id"].asString()
+
+    // una caja activa nueva, sin área. la serie, cinco caracteres hexadecimales si no se pide otra: única en la base
+    // compartida
+    protected fun nuevaCaja(
+        serie: String = uniqueName("").uppercase().take(5),
+        activa: Boolean = true
+    ): CajaDePrueba {
+        val codigo = "C-${unico()}"
+        val id = registro("caja", mapOf("codigo" to codigo, "nombre" to "VENTANILLA $codigo", "serie" to serie, "activa" to activa))
+        return CajaDePrueba(id, codigo, serie)
+    }
+
+    protected data class CajaDePrueba(
+        val id: String,
+        val codigo: String,
+        val serie: String
+    )
+
+    // los registros de un objeto que cumplen los filtros, leídos como admin por la api de core
+    protected fun registros(
+        objeto: String,
+        vararg filtros: Pair<String, String>
+    ): List<JsonNode> {
+        val query = (filtros.toList() + ("size" to "200")).joinToString("&") { (k, v) -> "$k=$v" }
+        return tree(send("GET", "/api/objects/$objeto/records?$query", null, HttpStatus.OK))["content"].toList()
+    }
 
     // el cuerpo de una orden de cobro válida de rentas, con una referencia nueva
     protected fun orden(vararg cambios: Pair<String, Any?>): Map<String, Any?> =

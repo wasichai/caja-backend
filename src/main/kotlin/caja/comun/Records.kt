@@ -9,6 +9,10 @@ const val AREA = "area"
 const val CAJA = "caja"
 const val TASA = "tasa"
 const val ORDEN_DE_COBRO = "orden_de_cobro"
+const val TURNO = "turno"
+const val RECIBO = "recibo"
+const val LINEA_RECIBO = "linea_recibo"
+const val PAGO_EVENTO = "pago_evento"
 
 // los atributos de un registro <-> un dto de caja. las claves json de los dtos son los nombres de los campos, así que
 // jackson hace el mapeo: core devuelve DATE como cadena iso (LocalDate aquí), DECIMAL como BigDecimal, INTEGER como
