@@ -41,14 +41,14 @@ tasks.named<Test>("test") {
     useJUnitPlatform {
         excludeTags("integration")
     }
-    // el smoke test es de integración: an empty unit run is expected
-    failOnNoDiscoveredTests.set(false)
+    // FronteraDeLaOrdenTest lee model/model.json: un cambio en el modelo vuelve a correr las pruebas
+    inputs.file("model/model.json")
 }
 
 // WASICHAI_TEST_DB_* (if set) point the suite at an external db instead of testcontainers
 tasks.register<Test>("integrationTest") {
     group = "verification"
-    description = "caja-backend: caja de cobranzas sobre wasichai (core, views, forms, pages)"
+    description = "pruebas de integración contra PostgreSQL 18"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform {
