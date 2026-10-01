@@ -1,5 +1,11 @@
 {
-  "enums": {},
+  "enums": {
+    "estado_orden": [
+      "PENDIENTE",
+      "PAGADA",
+      "ANULADA"
+    ]
+  },
   "objects": [
     {
       "name": "area",
@@ -126,6 +132,103 @@
           "required": true,
           "unique": true,
           "description": "<codigo>|<vigencia_desde en ISO>. Reemplaza la unicidad compuesta (codigo, vigencia_desde), que wasichai no tiene."
+        }
+      ]
+    },
+    {
+      "name": "orden_de_cobro",
+      "label": "Orden de cobro",
+      "pluralLabel": "Órdenes de cobro",
+      "description": "Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo y a qué fecha está esa cifra. No es deuda tributaria: no tiene tributo, ejercicio ni periodo, y si los ganara la caja dejaría de servir para cobrar un puesto de mercado. La da de alta el sistema de origen por POST /api/caja/ordenes-de-cobro.",
+      "fields": [
+        {
+          "name": "sistema_origen",
+          "label": "Sistema de origen",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quién la mandó: en minúsculas, [a-z0-9_-], de 1 a 20 caracteres. Es texto y no un enumerado: añadir un sistema no es un despliegue de la caja."
+        },
+        {
+          "name": "referencia_externa",
+          "label": "Referencia externa",
+          "type": "TEXT",
+          "required": true,
+          "description": "Cómo la reconoce quien la mandó, hasta 120 caracteres. Opaca: no se analiza, no se compara por partes y no se ordena."
+        },
+        {
+          "name": "clave_origen",
+          "label": "Clave de origen",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<sistema_origen>|<referencia_externa>. El alta es idempotente por aquí: reemplaza orden_referencia_uq, la unicidad compuesta que wasichai no tiene."
+        },
+        {
+          "name": "concepto",
+          "label": "Concepto",
+          "type": "TEXT",
+          "required": true,
+          "description": "Lo que se imprime en la línea del recibo, hasta 120 caracteres."
+        },
+        {
+          "name": "detalle",
+          "label": "Detalle",
+          "type": "TEXT",
+          "description": "Lo que el origen quiera añadir, hasta 200 caracteres."
+        },
+        {
+          "name": "importe",
+          "label": "Importe",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Cuánto, en soles, a la fecha de actualizado_a: mayor que 0 y con 2 decimales a lo sumo. La caja no lo recalcula."
+        },
+        {
+          "name": "fecha_exigibilidad",
+          "label": "Fecha de exigibilidad",
+          "type": "DATE",
+          "required": true,
+          "description": "Desde cuándo se puede cobrar."
+        },
+        {
+          "name": "actualizado_a",
+          "label": "Actualizado a",
+          "type": "DATE",
+          "required": true,
+          "description": "A qué fecha está el importe (regla 9): toda cifra lleva su fecha."
+        },
+        {
+          "name": "pagador_documento",
+          "label": "Documento del pagador",
+          "type": "TEXT",
+          "description": "Con lo que se busca en ventanilla, en mayúsculas, hasta 20 caracteres. Opcional: la caja no lo cruza contra ningún padrón."
+        },
+        {
+          "name": "pagador_nombre",
+          "label": "Nombre del pagador",
+          "type": "TEXT",
+          "description": "Lo que se imprime en el recibo, hasta 150 caracteres."
+        },
+        {
+          "name": "pagador_externo_id",
+          "label": "Id externo del pagador",
+          "type": "INTEGER",
+          "description": "El identificador que le da el sistema de origen (en rentas, el contribuyente), mayor que 0. Viaja de vuelta en el evento del pago."
+        },
+        {
+          "name": "estado",
+          "label": "Estado",
+          "type": "ENUM",
+          "enum": "estado_orden",
+          "required": true,
+          "description": "PENDIENTE al nacer. No hay VENCIDA: que sea exigible se deriva de fecha_exigibilidad."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se dio de alta (regla 10): de 5 a 500 caracteres."
         }
       ]
     }

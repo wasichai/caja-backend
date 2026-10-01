@@ -15,9 +15,9 @@ from fake_core import FakeCore
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.json")
 
-OBJECTS = 3
+OBJECTS = 4
 RELATIONSHIPS = 2
-OBJECT_ORDER = ["area", "caja", "tasa"]
+OBJECT_ORDER = ["area", "caja", "tasa", "orden_de_cobro"]
 RELATIONSHIP_ORDER = ["caja_area", "tasa_area"]
 
 
@@ -89,7 +89,7 @@ class HappyPathTests(ApplyCliTestCase):
             else:
                 self.assertEqual(auth, "Bearer t")
 
-        self.assertIn("done: 5 created, 0 updated, 0 skipped", out)
+        self.assertIn("done: 6 created, 0 updated, 0 skipped", out)
 
 
 class IdempotencyTests(ApplyCliTestCase):
@@ -108,11 +108,11 @@ class IdempotencyTests(ApplyCliTestCase):
         object_posts = [r for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
         self.assertEqual(object_posts, [])
         self.assertEqual([r for r in self.core.requests if r[0] == "POST" and "/fields" in r[1]], [])
-        self.assertIn("done: 0 created, 0 updated, 5 skipped", out)
+        self.assertIn("done: 0 created, 0 updated, 6 skipped", out)
 
 
 def model_with_tipo_caja(directory, options=("VENTANILLA", "TRIBUTARIA")):
-    """A copy of model.json with an ENUM field on caja (the shipped model has no enum): apply.py's option sync
+    """A copy of model.json with an ENUM field on caja (estado_orden is the shipped one, on orden_de_cobro): apply.py's option sync
     is tested through it. Returns the copy's path and the model."""
     model = load_model()
     model["enums"]["tipo_caja"] = list(options)
@@ -151,7 +151,7 @@ class SyncTests(ApplyCliTestCase):
         self.assertEqual([f["name"] for f in added], self.NEW_FIELDS)
         clave = next(f for f in added if f["name"] == "clave_vigencia")
         self.assertEqual((clave["type"], clave["required"], clave["unique"]), ("TEXT", True, True))
-        self.assertIn("done: 3 created, 0 updated, 4 skipped", out)
+        self.assertIn("done: 3 created, 0 updated, 5 skipped", out)
 
 
 class EnumOptionsTests(ApplyCliTestCase):
@@ -180,7 +180,7 @@ class EnumOptionsTests(ApplyCliTestCase):
         self.assertEqual(self.option_puts(), [(
             "/api/metadata/objects/caja/fields/tipo_caja", ["VENTANILLA", "TRIBUTARIA", "MIXTA", "EN_USO"])])
         self.assertIn("keep   option caja.tipo_caja EN_USO: 1 record uses it", out)
-        self.assertIn("done: 0 created, 1 updated, 4 skipped", out)
+        self.assertIn("done: 0 created, 1 updated, 5 skipped", out)
 
     def test_an_unused_option_goes(self):
         code, out, err = self.run_cli([], model_path=self.path)
@@ -231,7 +231,7 @@ class RelaxRequiredTests(ApplyCliTestCase):
                 and r[1] != "/api/metadata/objects/tasa/fields/area"]
         self.assertEqual(puts, [("/api/metadata/objects/tasa/fields/vigencia_hasta", {"required": False})])
         self.assertIn("update field tasa.vigencia_hasta (optional)", out)
-        self.assertIn("done: 0 created, 1 updated, 4 skipped", out)
+        self.assertIn("done: 0 created, 1 updated, 5 skipped", out)
 
 
 class RelabelTests(ApplyCliTestCase):
@@ -250,7 +250,7 @@ class RelabelTests(ApplyCliTestCase):
         puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and "label" in (r[3] or {})]
         self.assertEqual(puts, [("/api/metadata/objects/caja/fields/nombre", {"label": "Nombre"})])
         self.assertIn("update field caja.nombre (label)", out)
-        self.assertIn("done: 0 created, 1 updated, 4 skipped", out)
+        self.assertIn("done: 0 created, 1 updated, 5 skipped", out)
 
 
 class FailureStopsTests(ApplyCliTestCase):
@@ -317,7 +317,7 @@ class DropTests(ApplyCliTestCase):
         deletes = [r[1] for r in self.core.requests if r[0] == "DELETE"]
         self.assertEqual(deletes, [f"/api/relationships/{n}" for n in reversed(RELATIONSHIP_ORDER)]
                          + [f"/api/objects/{n}" for n in reversed(OBJECT_ORDER)])
-        self.assertIn("done: 5 deleted, 0 skipped", out)
+        self.assertIn("done: 6 deleted, 0 skipped", out)
 
     def test_drop_dry_run_makes_no_requests(self):
         code, out, err = self.run_cli(["--drop", "--dry-run"])

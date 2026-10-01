@@ -26,7 +26,7 @@ class ShippedModelTests(unittest.TestCase):
 
     def test_objects_in_topological_order(self):
         names = [o["name"] for o in self.model["objects"]]
-        self.assertEqual(names, ["area", "caja", "tasa"])
+        self.assertEqual(names, ["area", "caja", "tasa", "orden_de_cobro"])
         self.assertEqual([r["name"] for r in self.model["relationships"]], ["caja_area", "tasa_area"])
 
     def fields(self, name):
@@ -68,6 +68,30 @@ class ShippedModelTests(unittest.TestCase):
                          ("tasa", "area", "area"))
         self.assertTrue(rels["tasa_area"]["required"])
 
+    def test_orden_de_cobro_has_what_it_takes_to_charge_it(self):
+        fields = self.fields("orden_de_cobro")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "sistema_origen": "TEXT", "referencia_externa": "TEXT", "clave_origen": "TEXT", "concepto": "TEXT",
+            "detalle": "TEXT", "importe": "DECIMAL", "fecha_exigibilidad": "DATE", "actualizado_a": "DATE",
+            "pagador_documento": "TEXT", "pagador_nombre": "TEXT", "pagador_externo_id": "INTEGER", "estado": "ENUM",
+            "observacion": "LONG_TEXT"})
+        self.assertEqual({n for n, f in fields.items() if not f.get("required")},
+                         {"detalle", "pagador_documento", "pagador_nombre", "pagador_externo_id"})
+        self.assertEqual(fields["estado"]["enum"], "estado_orden")
+
+    def test_orden_de_cobro_is_unique_by_clave_origen_only(self):
+        # clave_origen (<sistema_origen>|<referencia_externa>) stands for orden_referencia_uq: no composite unique
+        fields = self.fields("orden_de_cobro")
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_origen"])
+
+    def test_orden_de_cobro_knows_no_tributo(self):
+        # caja's frontier: the day an orden gains a tributo, an ejercicio or a periodo, it no longer charges a market stall
+        for name in self.fields("orden_de_cobro"):
+            self.assertFalse(name.startswith(("tributo", "ejercicio", "periodo")), name)
+
+    def test_estado_orden_has_the_three_states(self):
+        self.assertEqual(self.model["enums"]["estado_orden"], ["PENDIENTE", "PAGADA", "ANULADA"])
+
     def test_every_enum_option_passes_core_regex(self):
         for name, options in self.model["enums"].items():
             for opt in options:
@@ -90,6 +114,12 @@ class PayloadTests(unittest.TestCase):
         serie = next(f for f in payload["fields"] if f["name"] == "serie")
         self.assertEqual((serie["type"], serie["required"], serie["unique"]), ("TEXT", True, True))
         self.assertNotIn("enum", serie)
+
+    def test_enum_payload_carries_its_options(self):
+        obj = next(o for o in self.model["objects"] if o["name"] == "orden_de_cobro")
+        estado = next(f for f in object_payload(self.model, obj)["fields"] if f["name"] == "estado")
+        self.assertEqual((estado["type"], estado["required"], estado["enumOptions"]),
+                         ("ENUM", True, ["PENDIENTE", "PAGADA", "ANULADA"]))
 
     def test_relationship_payload_is_many_to_one(self):
         rel = next(r for r in self.model["relationships"] if r["name"] == "caja_area")
