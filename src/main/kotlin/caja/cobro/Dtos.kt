@@ -352,7 +352,13 @@ data class PagoEvento(
     val turno: String? = null,
     val cuerpo: String? = null,
     val estado: String? = null,
-    val intentos: Long? = null
+    val intentos: Long? = null,
+    val ultimoError: String? = null,
+    val entregadoEn: Instant? = null,
+    val explicacion: String? = null,
+    // la hora en que se encoló, que es la del cobro: lo que lleva ese dinero en tránsito (no es un campo del modelo: es el
+    // created_at de core, y una escritura no lo manda)
+    val createdAt: Instant? = null
 )
 
 // lo que contesta el cobro: el recibo, el pagoId con el que el sistema de origen deduplicará, en qué está su entrega

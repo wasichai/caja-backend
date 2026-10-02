@@ -29,7 +29,8 @@ import java.util.concurrent.atomic.AtomicReference
 // POST /api/caja/turnos/cierre y /reversion (CierreDeCajaJdbcTest y CerrarYArquearTest de caja): el día completo cuadra
 // céntimo a céntimo, con el turno cerrado no se cobra ni se anula, reversar reabre, un pago sin entregar impide cerrar,
 // un cierre no se modifica y se reversa una vez, dos cierres a la vez dan uno y NADA SE CUELA EN UN CIERRE EN CURSO. el
-// publicador del buzón llega en el PR 8: aquí los pagos se marcan ENTREGADO como admin, como lo hará él
+// buzón está apagado en este contexto: aquí los pagos se marcan ENTREGADO como admin, como lo haría el publicador
+// (BuzonApiTest lo prueba con el de verdad, y el pago MUERTO que se explica)
 class CierreApiTest : CajaApiTest() {
     // retiene el cierre en curso justo después de escribir su cierre_turno, con el candado del turno tomado y sin
     // confirmar: lo que llegue a ese turno mientras tanto tiene que esperar. solo lo arma la prueba del cierre en curso
@@ -457,7 +458,7 @@ class CierreApiTest : CajaApiTest() {
         cajero: Cuenta
     ): String = registros("turno", "caja" to caja.id).single { it["attributes"]["cajero"].asString() == cajero.email }["id"].asString()
 
-    // lo que hará el publicador del buzón (PR 8): cada pago PENDIENTE del turno, ENTREGADO. cuántos
+    // lo que haría el publicador del buzón: cada pago PENDIENTE del turno, ENTREGADO. cuántos
     private fun entregarLosPagos(turnoId: String): Int {
         val pendientes = registros("pago_evento", "turno" to turnoId, "estado" to "PENDIENTE")
         pendientes.forEach {

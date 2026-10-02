@@ -8,7 +8,8 @@ import java.io.File
 // el recibo no se corrige (V29 de caja y TABLAS_INMUTABLES de su escáner de fuentes): src/main no tiene ningún
 // replace, update ni delete sobre el recibo, sus líneas, su anulación, sus reimpresiones ni su evento. anular es
 // agregar una fila, y la prueba lo vigila en el código además de en roles.json (test_apply_roles.py). lo mismo vale
-// para el cierre del turno, sus líneas y su reversión (regla 4, V32 de caja): un cierre se reversa con otra fila
+// para el cierre del turno, sus líneas y su reversión (regla 4, V32 de caja): un cierre se reversa con otra fila. la
+// excepción es una: la explicación de un pago MUERTO, que lo pasa a EXPLICADO
 class InmutabilidadDelReciboTest {
     private val inmutables =
         listOf("RECIBO", "LINEA_RECIBO", "ANULACION_RECIBO", "REIMPRESION_RECIBO", "PAGO_EVENTO", "CIERRE_TURNO", "CIERRE_TURNO_LINEA", "REVERSION_CIERRE")
@@ -36,7 +37,7 @@ class InmutabilidadDelReciboTest {
         )
 
     @Test
-    fun `ningun replace, update ni delete sobre el recibo, sus lineas, su anulacion, sus reimpresiones, su evento ni el cierre`() {
+    fun `ningun replace, update ni delete sobre el recibo, sus lineas, su anulacion, sus reimpresiones, su evento ni el cierre, salvo la explicacion`() {
         val fuentes = File("src/main/kotlin").walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         assertTrue(fuentes.size > 10, "no se encontraron las fuentes: ${fuentes.size}")
 
@@ -45,7 +46,11 @@ class InmutabilidadDelReciboTest {
                 fuente.readLines().mapIndexedNotNull { i, linea -> if (cambio.containsMatchIn(linea)) "${fuente.path}:${i + 1}: ${linea.trim()}" else null }
             }
 
-        assertEquals(emptyList<String>(), hallazgos)
+        // la única edición del buzón: un pago MUERTO pasa a EXPLICADO, por escrito y como el supervisor (roles.json da
+        // UPDATE sobre pago_evento solo a SUPERVISOR_CAJA). el publicador marca la entrega por BuzonStore, sin RecordService
+        val (explicacion, resto) = hallazgos.partition { it.contains("caja/buzon/ExplicarPagoSinEntregar.kt") && it.contains("replace(PAGO_EVENTO,") }
+        assertEquals(emptyList<String>(), resto)
+        assertEquals(1, explicacion.size, "la explicación de un pago sin entregar, y solo ella: $explicacion")
     }
 
     @Test

@@ -370,8 +370,8 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         return tree(send("GET", "/api/objects/$objeto/records?$query", null, HttpStatus.OK))["content"].toList()
     }
 
-    // cambia campos de un registro como admin por la api de core, sin pasar por caja: lo que hará el publicador del buzón
-    // (PR 8) al entregar un pago, o el admin al dar de baja una caja. core reemplaza todo: se manda lo guardado con los
+    // cambia campos de un registro como admin por la api de core, sin pasar por caja: lo que haría el publicador del
+    // buzón al entregar un pago (con el buzón apagado), o el admin al dar de baja una caja. core reemplaza todo: se manda lo guardado con los
     // cambios encima
     protected fun cambiarComoAdmin(
         objeto: String,

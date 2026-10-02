@@ -27,6 +27,8 @@ dependencies {
 
     // WasichaiIntegrationTest; brings spring-boot-starter-test, webflux-test and testcontainers
     testImplementation("wasichai:wasichai-test")
+    // caja.buzon: el sistema de origen falso, un servidor http de verdad dentro de la prueba
+    testImplementation(libs.mockwebserver)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

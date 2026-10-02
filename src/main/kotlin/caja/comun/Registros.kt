@@ -166,7 +166,7 @@ class Registros(
     private fun <T : Any> read(
         type: Class<T>,
         response: RecordResponse
-    ): T = Records.read(type, response.id, response.attributes)
+    ): T = Records.read(type, response.id, response.attributes + creadoEn(response))
 
     private suspend fun escribibles(
         objectName: String,
@@ -174,6 +174,11 @@ class Registros(
     ) = soloEscribibles(metadata.definitionOf(objectName), attributes)
 
     companion object {
+        // el instante en que core creó el registro, como created_at: un dto que lo quiere (el pago_evento, cuya hora es la
+        // del tránsito) lo declara; los demás lo ignoran. un campo del modelo con ese nombre ganaría
+        private fun creadoEn(response: RecordResponse): Map<String, Any?> =
+            if ("created_at" in response.attributes) emptyMap() else mapOf("created_at" to response.createdAt?.toString())
+
         // los atributos que el usuario puede escribir, según el objeto como él lo ve (MetadataService.definitionOf):
         // un campo que sus roles bloquean llega bloqueado (editable = false, como uno que el admin hizo de solo
         // lectura), uno que no puede leer no llega (core nunca deja escribir lo que no se puede leer). una clave que
