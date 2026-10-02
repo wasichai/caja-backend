@@ -381,7 +381,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `POST /api/caja/turnos/reversion`  | Reversa el cierre vigente y reabre el turno (ver «La reversión»): **201**. | CREATE sobre `reversion_cierre` (403 antes de empezar): `SUPERVISOR_CAJA` |
 | `GET /api/caja/pagos/sin-entregar` | Los pagos `MUERTO`, del más antiguo al más reciente (ver «Los pagos sin entregar»): **200** con una lista. | READ sobre `pago_evento` y `recibo` (403 antes de empezar) |
 | `POST /api/caja/pagos/{pago_id}/explicacion` | Pasa un pago `MUERTO` a `EXPLICADO` con su `explicacion` y su `observacion`: **200** con el pago; **409** si no está `MUERTO`. | UPDATE sobre `pago_evento` (403 antes de empezar): `SUPERVISOR_CAJA` |
-| `GET /api/caja/recaudacion/avance` | Lo recaudado por origen en `?desde=&hasta=` (días del turno; por defecto, del 1 de enero a hoy), con `?origen=`, `?caja=` y `?cajero=`; con caja y cajero, además el arqueo en vivo de su turno de hoy (ver «La recaudación»): **200**; **404** sin ese turno; **400** con un rango al revés o una fecha mal escrita. | READ sobre `recibo` y `linea_recibo` (403 antes de empezar); al leer, core exige además `turno` y `anulacion_recibo` (y `caja`, `cierre_turno` y `reversion_cierre` con caja y cajero) |
+| `GET /api/caja/recaudacion/avance` | Lo recaudado por origen en `?desde=&hasta=` (días del turno; por defecto, del 1 de enero a hoy), con `?origen=`, `?caja=` y `?cajero=`; con caja y cajero, además el arqueo en vivo de su turno de hoy (ver «La recaudación»): **200**; **404** sin ese turno; **400** con un rango al revés, una fecha mal escrita, una `caja` que no existe o un `cajero` que nunca abrió turno (en su campo, nunca un avance en cero). | READ sobre `recibo` y `linea_recibo` (403 antes de empezar); al leer, core exige además `turno` y `anulacion_recibo` (y `caja`, `cierre_turno` y `reversion_cierre` con caja y cajero) |
 | `GET /api/caja/recaudacion/por-area` | Lo recaudado por área, partida y concepto en `?desde=&hasta=`, con `?area=` (el código o «COD — nombre»), y `neto_sin_partida`: **200**; **400** como el avance. | READ sobre `recibo`, `linea_recibo`, `area` y `tasa` (403 antes de empezar); al leer, además `turno` y `anulacion_recibo` |
 | `GET /api/caja/conciliacion` | La conciliación del día `?fecha=AAAA-MM-DD`, **obligatoria** (sin ella o mal escrita, **400** en `fecha`), contra el sistema de origen (ver «La conciliación del día»): **200**, también con el origen caído. | READ sobre `pago_evento` y `recibo` (403 antes de empezar); al leer, además `turno` |
 
@@ -1049,6 +1049,15 @@ número. Lo mismo la conciliación: cuenta los eventos de los turnos de esa `fec
 - **Solo cuentan las líneas del cobro**: las que llevan el sello de la transacción de su recibo (ver «La segunda
   puerta»). Una `linea_recibo` agregada después por la API genérica no cambia el origen del recibo ni infla la
   distribución. El total del avance es el del recibo, no la suma de sus líneas.
+- **Una caja o un cajero que no existen son 400** en `caja` o en `cajero`, no un avance en cero: una errata se leería
+  como «no cobró nada». Un cajero existe para el avance si abrió algún turno, cualquier día.
+- **Cada fila se lee una sola vez.** Core ordena por una sola columna (por defecto `created_at`) y pagina con
+  `LIMIT`/`OFFSET`. Sobre una columna con empates, postgres no garantiza el mismo orden de una consulta a otra, y los
+  empates son lo normal: las líneas de un recibo comparten su `created_at`. Con cobros simultáneos, una suma sobre esas
+  páginas contaba unas líneas dos veces y otras ninguna (`RecaudacionApiTest` lo reproducía con 920 líneas). Por eso
+  `Registros.all`, y con él `byRelation` y todo lo que lee varias páginas (también `LibroDelTurno`, que alimenta el
+  arqueo y el cierre), **pagina por `id`**, que es único, y aplica el orden pedido después, sobre todo lo leído, con el
+  id como desempate.
 - **El límite**: se agrega en la aplicación, sobre lo que core devuelve página por página (200 registros), no con un
   `GROUP BY` en la base. Un rango de un año con mucho movimiento es lento; un agregado en la base necesitaría una lectura
   física como `BuzonStore` o una agregación en wasichai.
@@ -1065,7 +1074,9 @@ reproducible al día siguiente. Hay una línea por `sistema_destino` con eventos
 - **Lo que sale del origen**: `GET {url}/pagos/conciliacion?fecha=` al destino de `caja.buzon.destinos.<sistema>`, con
   su token y su `timeout` (`ClienteDelSistemaDeOrigen.leer`), **fuera de toda transacción**. Contesta `recibidos`,
   `aplicados`, `rechazados` e `importe_aplicado` (en cadena; se lee también `importeAplicado`, como contesta hoy
-  `rentas`). `diferencia = neto − importe_aplicado`.
+  `rentas`). `diferencia = neto − importe_aplicado`. El importe tiene a lo sumo 2 decimales y se lee con la escala de
+  un importe (`"100"` es `100.00`); con más decimales, con otra `fecha` que la preguntada, o con cualquier valor que no
+  se entienda (una lista, un objeto, un entero que no cabe), la línea dice por qué no se sabe.
 - **Falla en voz alta.** Si el origen no contesta, contesta otro código, contesta algo que no se puede leer o no tiene
   URL configurada, **sus campos y la `diferencia` van en `null`** y `por_que_no_se_sabe` dice por qué («el destino rentas
   no está configurado…», «rentas no contestó: …»). **Nunca ceros**: un cero se leería como «no aplicaron nada», que es
