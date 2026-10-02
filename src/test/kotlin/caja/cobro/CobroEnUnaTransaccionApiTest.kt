@@ -85,7 +85,10 @@ class CobroEnUnaTransaccionApiTest : CajaApiTest() {
                     permiso("recibo", "CREATE"),
                     permiso("linea_recibo", "READ"),
                     permiso("linea_recibo", "CREATE"),
-                    permiso("pago_evento", "READ")
+                    permiso("pago_evento", "READ"),
+                    // el cobro lee la historia del turno: un turno cerrado no cobra
+                    permiso("cierre_turno", "READ"),
+                    permiso("reversion_cierre", "READ")
                 )
             )
         val caja = nuevaCaja()

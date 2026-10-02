@@ -9,6 +9,8 @@ import caja.comun.LIMA
 import caja.comun.LINEA_RECIBO
 import caja.comun.RECIBO
 import caja.comun.Registros
+import caja.turno.EstadoDelTurno
+import caja.turno.LibroDelTurno
 import org.springframework.stereotype.Service
 import wasichai.core.common.ConflictException
 import wasichai.core.common.NotFoundException
@@ -20,11 +22,12 @@ import java.util.UUID
 
 // el original de un recibo: solo lo obtiene el cajero que lo emitió, el mismo día, con su turno abierto, y mientras no
 // esté anulado. cualquier otra copia es un duplicado (POST /api/caja/recibos/{numero}/duplicados), que dice que lo es y
-// dice si se anuló. hoy todo turno del día está abierto: el cierre añadirá aquí esa condición. se lee como el usuario
+// dice si se anuló. con el turno cerrado, su arqueo está firmado y el original ya no se imprime. se lee como el usuario
 // que llama: sin READ sobre recibo, 403 de core
 @Service
 class OriginalDelRecibo(
     private val registros: Registros,
+    private val libro: LibroDelTurno,
     private val currentUser: CurrentUser,
     private val pdf: ReciboPdf,
     private val reloj: Clock
@@ -39,6 +42,11 @@ class OriginalDelRecibo(
         if (recibo.cajero != usuario.email || recibo.emitidoEn!!.atZone(LIMA).toLocalDate() != hoy) {
             throw ConflictException(
                 "El original del recibo $numero solo lo imprime quien lo emitió, el mismo día y con su turno abierto: pida un duplicado"
+            )
+        }
+        if (libro.estado(recibo.turno!!) == EstadoDelTurno.CERRADO) {
+            throw ConflictException(
+                "El original del recibo $numero solo se imprime con su turno abierto, y el turno está cerrado (turno cerrado): pida un duplicado"
             )
         }
         // un original sin la marca de su anulación circularía como un pago que ya no vale

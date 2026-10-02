@@ -9,6 +9,7 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.turno.LibroDelTurno
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Component
 import wasichai.core.common.ConflictException
@@ -30,12 +31,15 @@ import java.util.Locale
 // transacción entera se revierte y el cobro contesta 409, sin datos a medias y sin reintentar dentro (postgres no deja
 // leer nada en una transacción abortada). cualquier otra violación de integridad sigue su camino como lo que es.
 //
+// el turno cerrado no cobra: se mira bajo el candado del turno, el mismo que toma el cierre (caja.turno.CerrarTurno).
+//
 // todo pasa por RecordService como el usuario que llama: sus permisos son los de core
 @Component
 class Ventanilla(
     private val registros: Registros,
     private val candados: Candados,
     private val transaccion: Transaccion,
+    private val libro: LibroDelTurno,
     private val reloj: Clock
 ) {
     // lo que todo cobro trae, ya validado: la caja por su código, quién y cuándo, cómo se paga, por qué, la clave del
@@ -93,7 +97,7 @@ class Ventanilla(
         val cajaId = caja.id!!
 
         // 1. el turno: el primer cobro del día lo abre, una vez. bajo su candado se busca y, si no está, se crea
-        val claveTurno = "$cajaId|${apertura.cajero}|${apertura.hoy}"
+        val claveTurno = claveDelTurno(cajaId, apertura.cajero, apertura.hoy)
         candados.bloquear(Candado.TURNO_CLAVE, claveTurno)
         val turno =
             registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveTurno))
@@ -126,17 +130,21 @@ class Ventanilla(
             }
         }
 
-        // 4. lo propio del cobro: sus candados, sus lecturas y sus rechazos
+        // 4. el turno cerrado no cobra (TurnoCerrado de caja): su arqueo está firmado y este dinero no estaría en él. se
+        // mira bajo su candado, el que toma el cierre: un cobro que esperaba a un cierre en curso lo encuentra cerrado
+        libro.exigirAbierto(turno, "no se cobra en él")
+
+        // 5. lo propio del cobro: sus candados, sus lecturas y sus rechazos
         val contenido = preparar()
 
-        // 5. el número: el siguiente de la serie, bajo su candado. no deja huecos: si algo falla después, el recibo no
+        // 6. el número: el siguiente de la serie, bajo su candado. no deja huecos: si algo falla después, el recibo no
         // se confirma y el número vuelve a estar libre
         val serie = caja.serie!!.trim().uppercase(Locale.ROOT)
         candados.bloquear(Candado.SERIE, serie)
         val ultimo = registros.primero(RECIBO, Recibo::class.java, mapOf("serie" to serie), sort = "numero", descending = true)
         val numero = (ultimo?.numero ?: 0) + 1
 
-        // 6. el recibo y sus líneas. el total es la suma exacta de las líneas; actualizado_a, la fecha del cobro (regla 9,
+        // 7. el recibo y sus líneas. el total es la suma exacta de las líneas; actualizado_a, la fecha del cobro (regla 9,
         // CobrarOrdenes.java:180; en las tasas, la fecha a la que la tarifa estaba vigente)
         val recibo =
             registros.create(
@@ -182,7 +190,7 @@ class Ventanilla(
                 )
             }
 
-        // 7. lo que el cobro agrega, en la misma transacción
+        // 8. lo que el cobro agrega, en la misma transacción
         return despues(Emitido(recibo, lineas, turnoId), contenido.datos)
     }
 

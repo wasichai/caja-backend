@@ -293,7 +293,9 @@ class AnulacionApiTest : CajaApiTest() {
         val rol =
             rolPropio(
                 listOf("area", "caja", "tasa", "orden_de_cobro", "turno", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo")
-                    .flatMap { listOf(permiso(it, "READ"), permiso(it, "CREATE")) } + permiso("orden_de_cobro", "UPDATE")
+                    .flatMap { listOf(permiso(it, "READ"), permiso(it, "CREATE")) } + permiso("orden_de_cobro", "UPDATE") +
+                    // el cobro y la anulación leen la historia del turno: con el turno cerrado no se cobra ni se anula
+                    listOf(permiso("cierre_turno", "READ"), permiso("reversion_cierre", "READ"))
             )
         val ana = cuenta(rol)
         val luis = cuenta(rol)

@@ -46,6 +46,14 @@ fun numeroImpreso(
     return String.format(Locale.ROOT, FORMATO_NUMERO, limpia, numero)
 }
 
+// la clave del turno de un cajero en una caja un día (clave_turno): un cajero tiene un solo turno al día por caja. el
+// cobro lo busca o lo crea con ella, el cierre y la reversión lo buscan
+fun claveDelTurno(
+    cajaId: String,
+    cajero: String,
+    fecha: LocalDate
+): String = "$cajaId|$cajero|$fecha"
+
 // el total es la suma de las líneas, exacta, nunca una cifra aparte: el papel y su desglose no pueden discrepar
 fun totalDe(montos: List<BigDecimal>): BigDecimal {
     require(montos.isNotEmpty()) { "Un recibo sin líneas no documenta nada" }

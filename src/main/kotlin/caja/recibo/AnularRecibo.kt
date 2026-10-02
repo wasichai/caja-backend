@@ -24,6 +24,7 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.turno.LibroDelTurno
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
@@ -39,9 +40,9 @@ import java.util.UUID
 
 // anula un recibo el mismo día del pago (AnularRecibo de caja, RF-083). EL RECIBO NO SE TOCA: anular es agregar una
 // anulacion_recibo, y el número, las líneas y el total siguen donde estaban, porque el pagador tiene ese papel en la
-// mano. todo en UNA transacción, bajo el candado del turno del recibo (el mismo que toma el cobro, y que tomará el
-// cierre) y después los de sus órdenes, por id: el orden de siempre, turno → órdenes. cada decisión se toma con lo
-// leído después de tomar su candado; el unique de recibo_anulado es la red, y si salta no se relee nada dentro.
+// mano. todo en UNA transacción, bajo el candado del turno del recibo (el mismo que toman el cobro y el cierre) y
+// después los de sus órdenes, por id: el orden de siempre, turno → órdenes. cada decisión se toma con lo leído después
+// de tomar su candado; el unique de recibo_anulado es la red, y si salta no se relee nada dentro.
 //
 // las órdenes vuelven a PENDIENTE y sin recibo, no ANULADA: el dinero volvió y la deuda sigue, así que tienen que poder
 // cobrarse otra vez. y si el recibo avisó su pago (NORMAL), sale PAGO_ANULADO en el buzón, en la misma transacción
@@ -50,6 +51,7 @@ class AnularRecibo(
     private val registros: Registros,
     private val candados: Candados,
     private val transaccion: Transaccion,
+    private val libro: LibroDelTurno,
     private val permisos: Permisos,
     private val currentUser: CurrentUser,
     private val reloj: Clock
@@ -91,8 +93,10 @@ class AnularRecibo(
         // 2. solo el mismo día: la fecha del turno contra el que se cobró, no la del reloj de la petición (422)
         val hoy = LocalDate.now(reloj)
         delMismoDia(numero, turno.fecha!!, hoy)
-        // PR 7, el cierre: aquí, bajo el candado del turno y con el turno releído, se rechazará el turno ya cerrado
-        // (TurnoYaCerrado de caja, 409): su arqueo está firmado y anularlo lo dejaría descuadrado
+        // el turno ya cerrado (TurnoYaCerrado de caja, 409), bajo su candado y con su historia leída después: su arqueo
+        // congeló este recibo como cobrado, y anularlo ahora lo desmentiría. una anulación que esperaba a un cierre en
+        // curso lo encuentra cerrado
+        libro.exigirAbierto(turno, "no se anula ninguno de sus recibos: el acta ya congeló el $numero como cobrado")
 
         // 3. anular dos veces no anula dos veces: 409. el unique de recibo_anulado es la red
         registros.primero(ANULACION_RECIBO, AnulacionRecibo::class.java, mapOf("recibo" to reciboId))?.let {

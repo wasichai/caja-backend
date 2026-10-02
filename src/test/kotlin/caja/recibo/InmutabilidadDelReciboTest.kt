@@ -7,10 +7,22 @@ import java.io.File
 
 // el recibo no se corrige (V29 de caja y TABLAS_INMUTABLES de su escáner de fuentes): src/main no tiene ningún
 // replace, update ni delete sobre el recibo, sus líneas, su anulación, sus reimpresiones ni su evento. anular es
-// agregar una fila, y la prueba lo vigila en el código además de en roles.json (test_apply_roles.py)
+// agregar una fila, y la prueba lo vigila en el código además de en roles.json (test_apply_roles.py). lo mismo vale
+// para el cierre del turno, sus líneas y su reversión (regla 4, V32 de caja): un cierre se reversa con otra fila
 class InmutabilidadDelReciboTest {
-    private val inmutables = listOf("RECIBO", "LINEA_RECIBO", "ANULACION_RECIBO", "REIMPRESION_RECIBO", "PAGO_EVENTO")
-    private val nombres = listOf("recibo", "linea_recibo", "anulacion_recibo", "reimpresion_recibo", "pago_evento")
+    private val inmutables =
+        listOf("RECIBO", "LINEA_RECIBO", "ANULACION_RECIBO", "REIMPRESION_RECIBO", "PAGO_EVENTO", "CIERRE_TURNO", "CIERRE_TURNO_LINEA", "REVERSION_CIERRE")
+    private val nombres =
+        listOf(
+            "recibo",
+            "linea_recibo",
+            "anulacion_recibo",
+            "reimpresion_recibo",
+            "pago_evento",
+            "cierre_turno",
+            "cierre_turno_linea",
+            "reversion_cierre"
+        )
 
     // una escritura que cambia o borra (Registros.replace, RecordService.update, delete, Listas.cambiar/borrar) cuyo
     // primer argumento nombra un objeto inmutable, por su constante o por su nombre
@@ -24,7 +36,7 @@ class InmutabilidadDelReciboTest {
         )
 
     @Test
-    fun `ningun replace, update ni delete sobre el recibo, sus lineas, su anulacion, sus reimpresiones ni su evento`() {
+    fun `ningun replace, update ni delete sobre el recibo, sus lineas, su anulacion, sus reimpresiones, su evento ni el cierre`() {
         val fuentes = File("src/main/kotlin").walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         assertTrue(fuentes.size > 10, "no se encontraron las fuentes: ${fuentes.size}")
 
@@ -41,6 +53,9 @@ class InmutabilidadDelReciboTest {
         assertTrue(cambio.containsMatchIn("registros.replace(RECIBO, Recibo::class.java, id, mapOf())"))
         assertTrue(cambio.containsMatchIn("records.update(\"pago_evento\", id, request)"))
         assertTrue(cambio.containsMatchIn("registros.delete(ANULACION_RECIBO, id)"))
+        assertTrue(cambio.containsMatchIn("registros.replace(CIERRE_TURNO, CierreTurno::class.java, id, mapOf())"))
+        assertTrue(cambio.containsMatchIn("records.delete(\"reversion_cierre\", id)"))
+        assertTrue(!cambio.containsMatchIn("registros.create(CIERRE_TURNO_LINEA, CierreTurnoLinea::class.java, atributos)"))
         assertTrue(!cambio.containsMatchIn("registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, id, cambios)"))
         assertTrue(!cambio.containsMatchIn("registros.create(RECIBO, Recibo::class.java, atributos)"))
     }

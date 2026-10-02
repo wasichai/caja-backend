@@ -370,6 +370,19 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         return tree(send("GET", "/api/objects/$objeto/records?$query", null, HttpStatus.OK))["content"].toList()
     }
 
+    // cambia campos de un registro como admin por la api de core, sin pasar por caja: lo que hará el publicador del buzón
+    // (PR 8) al entregar un pago, o el admin al dar de baja una caja. core reemplaza todo: se manda lo guardado con los
+    // cambios encima
+    protected fun cambiarComoAdmin(
+        objeto: String,
+        id: String,
+        vararg cambios: Pair<String, Any?>
+    ) {
+        val guardado = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))["attributes"]
+        val atributos = json.convertValue(guardado, Map::class.java) + cambios
+        send("PUT", "/api/objects/$objeto/records/$id", mapOf("attributes" to atributos), HttpStatus.OK)
+    }
+
     // el cuerpo de una orden de cobro válida de rentas, con una referencia nueva
     protected fun orden(vararg cambios: Pair<String, Any?>): Map<String, Any?> =
         mapOf(
