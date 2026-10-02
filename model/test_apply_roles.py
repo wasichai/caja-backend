@@ -45,7 +45,7 @@ class RolesJsonTests(unittest.TestCase):
 
     def test_el_cajero_lee_y_cobra(self):
         # cobra: abre su turno, emite el recibo con sus líneas, encola el evento y marca la orden PAGADA. ve las
-        # anulaciones y las reimpresiones, y no crea ninguna
+        # anulaciones y las reimpresiones, y no crea ninguna. cierra su turno con su arqueo; ve las reversiones y no reversa
         self.assertEqual(permisos(self.roles["CAJERO"]), {
             ("area", "READ"), ("caja", "READ"), ("tasa", "READ"),
             ("orden_de_cobro", "READ"), ("orden_de_cobro", "UPDATE"),
@@ -53,7 +53,10 @@ class RolesJsonTests(unittest.TestCase):
             ("recibo", "READ"), ("recibo", "CREATE"),
             ("linea_recibo", "READ"), ("linea_recibo", "CREATE"),
             ("pago_evento", "READ"), ("pago_evento", "CREATE"),
-            ("anulacion_recibo", "READ"), ("reimpresion_recibo", "READ")})
+            ("anulacion_recibo", "READ"), ("reimpresion_recibo", "READ"),
+            ("cierre_turno", "READ"), ("cierre_turno", "CREATE"),
+            ("cierre_turno_linea", "READ"), ("cierre_turno_linea", "CREATE"),
+            ("reversion_cierre", "READ")})
 
     def test_nadie_edita_ni_borra_un_recibo_su_linea_su_evento_su_anulacion_ni_su_reimpresion(self):
         # el recibo es un papel con número correlativo que el contribuyente se lleva: no se corrige (V29 de caja). su
@@ -63,10 +66,19 @@ class RolesJsonTests(unittest.TestCase):
                 for accion in ("UPDATE", "DELETE"):
                     self.assertNotIn((objeto, accion), permisos(rol), rol["name"])
 
-    def test_el_supervisor_de_caja_cobra_como_el_cajero_y_ademas_anula_y_reimprime(self):
-        # crear una anulacion_recibo es el privilegio ELIMINACION de caja; crear una reimpresion_recibo, IMPRESION
+    def test_nadie_edita_ni_borra_un_cierre_sus_lineas_ni_su_reversion(self):
+        # regla 4: un cierre no se modifica ni se borra, se reversa con otro (V32 de caja). la reversión tampoco
+        for rol in self.roles.values():
+            for objeto in ("cierre_turno", "cierre_turno_linea", "reversion_cierre"):
+                for accion in ("UPDATE", "DELETE"):
+                    self.assertNotIn((objeto, accion), permisos(rol), rol["name"])
+
+    def test_el_supervisor_de_caja_cobra_como_el_cajero_y_ademas_anula_reimprime_y_reversa(self):
+        # crear una anulacion_recibo es el privilegio ELIMINACION de caja; crear una reimpresion_recibo, IMPRESION; crear
+        # una reversion_cierre, ELIMINACION de cierre_caja
         self.assertEqual(permisos(self.roles["SUPERVISOR_CAJA"]),
-                         permisos(self.roles["CAJERO"]) | {("anulacion_recibo", "CREATE"), ("reimpresion_recibo", "CREATE")})
+                         permisos(self.roles["CAJERO"]) | {("anulacion_recibo", "CREATE"), ("reimpresion_recibo", "CREATE"),
+                                                           ("reversion_cierre", "CREATE")})
 
     def test_tesoreria_lee_cada_objeto_del_modelo(self):
         # un objeto nuevo en model.json sin su READ para tesorería hace fallar esta prueba

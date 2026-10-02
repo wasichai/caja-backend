@@ -28,11 +28,13 @@ class ShippedModelTests(unittest.TestCase):
         # a relationship's target comes before its source: recibo before orden_de_cobro, which names it
         names = [o["name"] for o in self.model["objects"]]
         self.assertEqual(names, ["area", "caja", "tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento",
-                                 "anulacion_recibo", "reimpresion_recibo"])
+                                 "anulacion_recibo", "reimpresion_recibo", "cierre_turno", "cierre_turno_linea",
+                                 "reversion_cierre"])
         self.assertEqual([r["name"] for r in self.model["relationships"]], [
             "caja_area", "tasa_area", "turno_caja", "recibo_caja", "recibo_turno", "orden_recibo", "linea_recibo_recibo",
             "linea_recibo_orden", "linea_recibo_tasa", "pago_evento_recibo", "pago_evento_turno", "anulacion_recibo_recibo",
-            "anulacion_recibo_caja", "anulacion_recibo_turno", "reimpresion_recibo_recibo"])
+            "anulacion_recibo_caja", "anulacion_recibo_turno", "reimpresion_recibo_recibo", "cierre_turno_turno",
+            "cierre_turno_linea_cierre_turno", "reversion_cierre_turno"])
 
     def fields(self, name):
         obj = next(o for o in self.model["objects"] if o["name"] == name)
@@ -156,6 +158,40 @@ class ShippedModelTests(unittest.TestCase):
         self.assertFalse(any(f.get("unique") for f in fields.values()))
         self.assertEqual(self.relationships()[("reimpresion_recibo", "recibo")], ("recibo", True))
 
+    def test_cierre_turno_freezes_the_arqueo_of_its_turno(self):
+        # cierre_turno of caja (V32), without its tipo: the reversion is its own object. clave_secuencia
+        # (<turno>|<secuencia>) is the net under the turno lock: wasichai has no composite unique
+        fields = self.fields("cierre_turno")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "secuencia": "INTEGER", "fecha": "DATE", "registrado_en": "DATETIME", "total_cobrado": "DECIMAL",
+            "total_anulado": "DECIMAL", "neto": "DECIMAL", "total_declarado": "DECIMAL", "diferencia": "DECIMAL",
+            "recibos_emitidos": "INTEGER", "recibos_anulados": "INTEGER", "cobrado_con_evento": "DECIMAL",
+            "cobrado_sin_evento": "DECIMAL", "usuario": "TEXT", "observacion": "LONG_TEXT", "clave_secuencia": "TEXT"})
+        self.assertTrue(all(f["required"] for f in fields.values()))
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_secuencia"])
+        self.assertEqual(self.relationships()[("cierre_turno", "turno")], ("turno", True))
+
+    def test_cierre_turno_linea_is_one_per_forma_de_pago(self):
+        # cierre_turno_detalle of caja: clave (<cierre>|<forma_pago>) stands for its composite primary key
+        fields = self.fields("cierre_turno_linea")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "forma_pago": "ENUM", "cobrado": "DECIMAL", "anulado": "DECIMAL", "neto": "DECIMAL", "declarado": "DECIMAL",
+            "clave": "TEXT"})
+        self.assertTrue(all(f["required"] for f in fields.values()))
+        self.assertEqual(fields["forma_pago"]["enum"], "forma_pago")
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave"])
+        self.assertEqual(self.relationships()[("cierre_turno_linea", "cierre_turno")], ("cierre_turno", True))
+
+    def test_reversion_cierre_is_appended_once_per_cierre(self):
+        # cierre_revertido (the cierre id) stands for cierre_turno_reversion_uq: a cierre is reversed once
+        fields = self.fields("reversion_cierre")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "cierre_revertido": "TEXT", "secuencia": "INTEGER", "motivo": "TEXT", "fecha": "DATE", "registrado_en": "DATETIME",
+            "usuario": "TEXT", "observacion": "LONG_TEXT", "clave_secuencia": "TEXT"})
+        self.assertTrue(all(f["required"] for f in fields.values()))
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["cierre_revertido", "clave_secuencia"])
+        self.assertEqual(self.relationships()[("reversion_cierre", "turno")], ("turno", True))
+
     def test_the_cobranza_enums(self):
         enums = self.model["enums"]
         self.assertEqual(enums["forma_pago"], ["EFECTIVO", "CHEQUE", "DEPOSITO", "TARJETA", "TRANSFERENCIA"])
@@ -164,7 +200,8 @@ class ShippedModelTests(unittest.TestCase):
         self.assertEqual(enums["estado_evento"], ["PENDIENTE", "ENTREGADO", "MUERTO", "EXPLICADO"])
 
     def test_no_object_of_the_cobranza_knows_a_tributo(self):
-        for obj in ("orden_de_cobro", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo", "reimpresion_recibo"):
+        for obj in ("orden_de_cobro", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo", "reimpresion_recibo",
+                    "cierre_turno", "cierre_turno_linea", "reversion_cierre"):
             for name in self.fields(obj):
                 self.assertFalse(name.startswith(("tributo", "ejercicio", "periodo", "predio", "vehiculo", "insoluto",
                                                   "reajuste", "interes", "gasto")), f"{obj}.{name}")

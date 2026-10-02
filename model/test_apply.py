@@ -15,14 +15,15 @@ from fake_core import FakeCore
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.json")
 
-OBJECTS = 10
-RELATIONSHIPS = 15
+OBJECTS = 13
+RELATIONSHIPS = 18
 OBJECT_ORDER = ["area", "caja", "tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento",
-                "anulacion_recibo", "reimpresion_recibo"]
+                "anulacion_recibo", "reimpresion_recibo", "cierre_turno", "cierre_turno_linea", "reversion_cierre"]
 RELATIONSHIP_ORDER = ["caja_area", "tasa_area", "turno_caja", "recibo_caja", "recibo_turno", "orden_recibo",
                       "linea_recibo_recibo", "linea_recibo_orden", "linea_recibo_tasa", "pago_evento_recibo",
                       "pago_evento_turno", "anulacion_recibo_recibo", "anulacion_recibo_caja", "anulacion_recibo_turno",
-                      "reimpresion_recibo_recibo"]
+                      "reimpresion_recibo_recibo", "cierre_turno_turno", "cierre_turno_linea_cierre_turno",
+                      "reversion_cierre_turno"]
 # what apply.py prints: every object and relationship, and all but the one a test touches
 TOTAL = OBJECTS + RELATIONSHIPS
 OTHERS = TOTAL - 1
@@ -93,7 +94,8 @@ class HappyPathTests(ApplyCliTestCase):
             "tasa/fields/area", "turno/fields/caja", "recibo/fields/caja", "recibo/fields/turno",
             "linea_recibo/fields/recibo", "pago_evento/fields/recibo", "pago_evento/fields/turno",
             "anulacion_recibo/fields/recibo", "anulacion_recibo/fields/caja", "anulacion_recibo/fields/turno",
-            "reimpresion_recibo/fields/recibo")])
+            "reimpresion_recibo/fields/recibo", "cierre_turno/fields/turno", "cierre_turno_linea/fields/cierre_turno",
+            "reversion_cierre/fields/turno")])
 
         for method, path, auth, body in self.core.requests:
             if path == "/api/auth/login":

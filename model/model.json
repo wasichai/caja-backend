@@ -620,6 +620,237 @@
           "description": "Por qué se reimprime, escrito por quien lo pide (regla 10)."
         }
       ]
+    },
+    {
+      "name": "cierre_turno",
+      "label": "Cierre de turno",
+      "pluralLabel": "Cierres de turno",
+      "description": "El acta del cierre de un turno con su arqueo congelado (cierre_turno de caja, V32, RF-087). Solo se agrega: un cierre no se modifica ni se borra, se reversa con una reversion_cierre, que reabre el turno. El estado del turno no es una columna: se deriva del último movimiento por secuencia. Crearlo es el privilegio REGISTRO de cierre_caja; nadie lo edita ni lo borra.",
+      "fields": [
+        {
+          "name": "secuencia",
+          "label": "Secuencia",
+          "type": "INTEGER",
+          "required": true,
+          "description": "El lugar del movimiento en la historia del turno, desde 1, común al cierre y a la reversión: los movimientos que había más uno. La serializa el candado del turno."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día del turno que se cierra, en Lima: la fecha a la que se leyó el arqueo."
+        },
+        {
+          "name": "registrado_en",
+          "label": "Registrado en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante en que se firmó, según el reloj de la caja."
+        },
+        {
+          "name": "total_cobrado",
+          "label": "Total cobrado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que cobraron los recibos del turno: la suma de las líneas, congelada."
+        },
+        {
+          "name": "total_anulado",
+          "label": "Total anulado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que las anulaciones de sus recibos sacaron del cajón, congelado."
+        },
+        {
+          "name": "neto",
+          "label": "Neto",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo cobrado menos lo anulado."
+        },
+        {
+          "name": "total_declarado",
+          "label": "Total declarado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que el cajero declaró haber contado en el cajón: la suma de lo declarado por forma de pago."
+        },
+        {
+          "name": "diferencia",
+          "label": "Diferencia",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo declarado menos el neto: negativa si falta dinero en el cajón, positiva si sobra. Un descuadre no impide cerrar: se deja escrito."
+        },
+        {
+          "name": "recibos_emitidos",
+          "label": "Recibos emitidos",
+          "type": "INTEGER",
+          "required": true,
+          "description": "Cuántos recibos emitió el turno."
+        },
+        {
+          "name": "recibos_anulados",
+          "label": "Recibos anulados",
+          "type": "INTEGER",
+          "required": true,
+          "description": "Cuántos de ellos se anularon."
+        },
+        {
+          "name": "cobrado_con_evento",
+          "label": "Cobrado con evento",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La mitad del neto que se cobró contra una orden y produjo un evento para su sistema de origen."
+        },
+        {
+          "name": "cobrado_sin_evento",
+          "label": "Cobrado sin evento",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La mitad del neto que no avisa a nadie: las tasas. Las dos mitades suman el neto."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien cerró: el correo de la sesión, el cajero del turno."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se cierra, escrito por quien cierra (regla 10)."
+        },
+        {
+          "name": "clave_secuencia",
+          "label": "Clave de la secuencia",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<turno>|<secuencia>. La red de que dos cierres a la vez no tomen la misma secuencia (cierre_turno_secuencia_uq de caja, una unicidad compuesta que wasichai no tiene)."
+        }
+      ]
+    },
+    {
+      "name": "cierre_turno_linea",
+      "label": "Línea de cierre de turno",
+      "pluralLabel": "Líneas de cierre de turno",
+      "description": "El arqueo de un cierre, forma de pago por forma de pago (cierre_turno_detalle de caja): lo cobrado, lo anulado, el neto y lo declarado. Se escribe con su cierre y nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "forma_pago",
+          "label": "Forma de pago",
+          "type": "ENUM",
+          "enum": "forma_pago",
+          "required": true
+        },
+        {
+          "name": "cobrado",
+          "label": "Cobrado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que los recibos de esa forma de pago sumaron en el turno."
+        },
+        {
+          "name": "anulado",
+          "label": "Anulado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que las anulaciones devolvieron de esa forma de pago, congelado."
+        },
+        {
+          "name": "neto",
+          "label": "Neto",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo cobrado menos lo anulado."
+        },
+        {
+          "name": "declarado",
+          "label": "Declarado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que el cajero contó en el cajón: el único dato del arqueo que el sistema no puede recomponer. Cero si no lo declaró."
+        },
+        {
+          "name": "clave",
+          "label": "Clave",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<cierre>|<forma_pago>: una línea por forma de pago y cierre (la clave primaria compuesta de cierre_turno_detalle)."
+        }
+      ]
+    },
+    {
+      "name": "reversion_cierre",
+      "label": "Reversión de cierre",
+      "pluralLabel": "Reversiones de cierre",
+      "description": "Deja sin efecto el cierre vigente de un turno y lo reabre (cierre_turno de caja, tipo REVERSION). El cierre reversado no se toca: sigue diciendo lo que decía, con su arqueo. Crearla es el privilegio ELIMINACION de cierre_caja; nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "cierre_revertido",
+          "label": "Cierre revertido",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "El id del cierre_turno que deja sin efecto: su unicidad es la red de que un cierre se reversa una sola vez (cierre_turno_reversion_uq de caja)."
+        },
+        {
+          "name": "secuencia",
+          "label": "Secuencia",
+          "type": "INTEGER",
+          "required": true,
+          "description": "El lugar del movimiento en la historia del turno, común con el cierre: los movimientos que había más uno."
+        },
+        {
+          "name": "motivo",
+          "label": "Motivo",
+          "type": "TEXT",
+          "required": true,
+          "description": "El sustento de reabrir una caja cuyo arqueo ya estaba firmado: hasta 80 caracteres y no en blanco."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día del turno que se reabre, en Lima."
+        },
+        {
+          "name": "registrado_en",
+          "label": "Registrado en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante en que se reversó, según el reloj de la caja."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien reversó: el correo de la sesión."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se registra, escrito por quien reversa (regla 10). Es otra cosa que el motivo."
+        },
+        {
+          "name": "clave_secuencia",
+          "label": "Clave de la secuencia",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<turno>|<secuencia>, como la del cierre: la red de que dos movimientos del mismo objeto no tomen la misma secuencia."
+        }
+      ]
     }
   ],
   "relationships": [
@@ -756,6 +987,33 @@
       "source": "reimpresion_recibo",
       "target": "recibo",
       "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "cierre_turno_turno",
+      "label": "Turno",
+      "inverseLabel": "Cierres",
+      "source": "cierre_turno",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "cierre_turno_linea_cierre_turno",
+      "label": "Cierre de turno",
+      "inverseLabel": "Líneas",
+      "source": "cierre_turno_linea",
+      "target": "cierre_turno",
+      "fieldName": "cierre_turno",
+      "required": true
+    },
+    {
+      "name": "reversion_cierre_turno",
+      "label": "Turno",
+      "inverseLabel": "Reversiones de cierre",
+      "source": "reversion_cierre",
+      "target": "turno",
+      "fieldName": "turno",
       "required": true
     }
   ]
