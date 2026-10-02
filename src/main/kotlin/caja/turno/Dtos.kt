@@ -1,5 +1,6 @@
 package caja.turno
 
+import caja.cobro.FORMAS_DE_PAGO
 import caja.comun.Importe
 import com.fasterxml.jackson.annotation.JsonAnySetter
 import com.fasterxml.jackson.annotation.JsonIgnore
@@ -158,6 +159,40 @@ data class ArqueoRespuesta(
         // el arqueo de un cierre, con lo que el cajero declaró
         fun declarado(arqueo: ArqueoDelTurno): ArqueoRespuesta = de(arqueo, declarado = true)
 
+        // el arqueo de un acta ya firmada, con las cifras que congeló y a su fecha: NO se vuelve a calcular con los
+        // recibos de hoy. la diferencia de cada línea es su declarado menos su neto guardados (el acta no guarda esa
+        // resta por línea, sí la del total), y cuadra es que la diferencia guardada sea cero. las líneas, en el orden
+        // del enumerado, como las dibuja el cierre
+        fun delActa(
+            acta: CierreTurno,
+            lineas: List<CierreTurnoLinea>
+        ): ArqueoRespuesta {
+            val fecha = acta.fecha!!
+
+            fun importe(cifra: BigDecimal) = Importe.de(cifra, fecha)
+            return ArqueoRespuesta(
+                lineas =
+                    lineas.sortedBy { FORMAS_DE_PAGO.indexOf(it.formaPago) }.map {
+                        LineaDeArqueoRespuesta(
+                            it.formaPago!!,
+                            importe(it.cobrado!!),
+                            importe(it.anulado!!),
+                            importe(it.neto!!),
+                            importe(it.declarado!!),
+                            importe(it.declarado.subtract(it.neto))
+                        )
+                    },
+                recibosEmitidos = acta.recibosEmitidos!!.toInt(),
+                recibosAnulados = acta.recibosAnulados!!.toInt(),
+                totalCobrado = importe(acta.totalCobrado!!),
+                totalAnulado = importe(acta.totalAnulado!!),
+                neto = importe(acta.neto!!),
+                totalDeclarado = importe(acta.totalDeclarado!!),
+                diferencia = importe(acta.diferencia!!),
+                cuadra = acta.diferencia.signum() == 0
+            )
+        }
+
         private fun de(
             arqueo: ArqueoDelTurno,
             declarado: Boolean
@@ -203,8 +238,45 @@ data class ArqueoDelTurnoRespuesta(
     val arqueo: ArqueoRespuesta,
     val cobradoConEvento: Importe,
     val cobradoSinEvento: Importe,
-    val loQueImpideCerrar: List<PagoSinEntregar>
+    val loQueImpideCerrar: List<PagoSinEntregar>,
+    // con el turno CERRADO, el acta de su cierre vigente: lo que se contó al cerrar, tal como se firmó, para que la
+    // pantalla lo muestre después de recargar sin recalcular ni restar nada. con el turno abierto, null
+    val cierreVigente: CierreVigente?
 )
+
+// el acta del cierre vigente de un turno, como se guardó: su secuencia, cuándo y quién la firmó, su arqueo declarado
+// (líneas con declarado y diferencia, totales, diferencia y cuadra) y las dos mitades del cuadre, todo a la fecha del
+// turno
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
+data class CierreVigente(
+    val cierreId: String,
+    val secuencia: Long,
+    val fecha: String,
+    val registradoEn: String,
+    val usuario: String,
+    val observacion: String,
+    val arqueo: ArqueoRespuesta,
+    val cobradoConEvento: Importe,
+    val cobradoSinEvento: Importe
+) {
+    companion object {
+        fun de(
+            acta: CierreTurno,
+            lineas: List<CierreTurnoLinea>,
+            registradoEn: String
+        ) = CierreVigente(
+            cierreId = acta.id!!,
+            secuencia = acta.secuencia!!,
+            fecha = acta.fecha!!.toString(),
+            registradoEn = registradoEn,
+            usuario = acta.usuario!!,
+            observacion = acta.observacion!!,
+            arqueo = ArqueoRespuesta.delActa(acta, lineas),
+            cobradoConEvento = Importe.de(acta.cobradoConEvento!!, acta.fecha),
+            cobradoSinEvento = Importe.de(acta.cobradoSinEvento!!, acta.fecha)
+        )
+    }
+}
 
 // el acta del cierre: el turno queda CERRADO, con su arqueo declarado y las dos mitades del cuadre
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)

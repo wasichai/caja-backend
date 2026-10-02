@@ -72,10 +72,24 @@ class ConsultaDelTurno(
             } catch (_: NotFoundException) {
                 throw NotFoundException("No hay ningún turno $id")
             }
-            val estado = libro.estado(id)
+            val historia = libro.historia(id)
+            val estado = EstadoDelTurno.de(historia)
             val recibos = libro.recibos(id)
             val cuadre = Cuadre.de(recibos)
             val pagos = libro.pagosSinEntregar(id)
+            // cerrado, el acta de su cierre vigente tal como se firmó; abierto (o reversado), ninguna
+            val vigente =
+                cierreVigente(historia)?.let { movimiento ->
+                    val (acta, lineas) = libro.acta(movimiento.id)
+                    CierreVigente.de(
+                        acta,
+                        lineas,
+                        acta.registradoEn!!
+                            .atZone(LIMA)
+                            .toOffsetDateTime()
+                            .toString()
+                    )
+                }
             ArqueoDelTurnoRespuesta(
                 turnoId = id,
                 estadoDelTurno = estado,
@@ -83,7 +97,8 @@ class ConsultaDelTurno(
                 arqueo = ArqueoRespuesta.enVivo(ArqueoDelTurno.de(recibos, emptyMap(), hoy)),
                 cobradoConEvento = Importe.de(cuadre.conEvento, hoy),
                 cobradoSinEvento = Importe.de(cuadre.sinEvento, hoy),
-                loQueImpideCerrar = pagos
+                loQueImpideCerrar = pagos,
+                cierreVigente = vigente
             )
         }
     }

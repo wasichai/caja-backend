@@ -5,6 +5,7 @@ import caja.cobro.Recibo
 import caja.cobro.Turno
 import caja.comun.ANULACION_RECIBO
 import caja.comun.CIERRE_TURNO
+import caja.comun.CIERRE_TURNO_LINEA
 import caja.comun.PAGO_EVENTO
 import caja.comun.RECIBO
 import caja.comun.REVERSION_CIERRE
@@ -13,6 +14,7 @@ import caja.recibo.AnulacionRecibo
 import org.springframework.stereotype.Component
 import wasichai.core.common.ConflictException
 import java.math.BigDecimal
+import java.util.UUID
 
 // lo que la base sabe de un turno, leído como el usuario que llama (sus permisos son los de core): su historia de
 // cierres y reversiones, sus recibos con lo que devolvió su anulación y sus pagos sin entregar. no decide nada: las
@@ -41,6 +43,11 @@ class LibroDelTurno(
     }
 
     suspend fun estado(turnoId: String): EstadoDelTurno = EstadoDelTurno.de(historia(turnoId))
+
+    // el acta de un cierre y sus líneas, tal como se guardaron
+    suspend fun acta(cierreId: String): Pair<CierreTurno, List<CierreTurnoLinea>> =
+        registros.get(CIERRE_TURNO, CierreTurno::class.java, UUID.fromString(cierreId)) to
+            registros.byRelation(CIERRE_TURNO_LINEA, CierreTurnoLinea::class.java, "cierre_turno", listOf(cierreId))
 
     // 409 «turno cerrado» si lo está (TurnoCerrado y AnularRecibo.TurnoYaCerrado de caja): su arqueo está firmado, y lo
     // que entrara o saliera ahora no estaría en él. que: lo que no se puede hacer

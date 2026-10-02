@@ -193,6 +193,55 @@ class CierreApiTest : CajaApiTest() {
         assertEquals(actaAntes, registros("cierre_turno", "turno" to turnoId).single { it["id"] == actaAntes["id"] })
     }
 
+    // del cierre vigente en el arqueo: lo que se contó al cerrar, tal como se firmó, también después de recargar
+
+    @Test
+    fun `el arqueo de un turno cerrado trae su cierre vigente tal como se firmo, y abierto o reversado va en null`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("SUPERVISOR_CAJA")
+        val codigo = codigoDeTasa()
+        nuevaTasa(codigo, "12.30", hoy.minusDays(1))
+        cobrarTasa(caja, cajero, codigo, 3, "EFECTIVO")
+        cobrarTasa(caja, cajero, codigo, 1, "TARJETA")
+        val turnoId = turnoDe(caja, cajero)
+        val abierto = arqueoDe(turnoId, cajero)
+        assertTrue(abierto.has("cierre_vigente") && abierto["cierre_vigente"].isNull, abierto.toString())
+
+        // faltan 6.90 en el cajón: el acta lo dice, y el arqueo releído también
+        val cierre = post(CIERRE, cierreDe(caja, "EFECTIVO" to "30.00", "TARJETA" to "12.30"), cajero.token)
+
+        val cerrado = arqueoDe(turnoId, cajero)
+        assertEquals("CERRADO", cerrado["estado_del_turno"].asString())
+        val vigente = cerrado["cierre_vigente"]
+        assertEquals(cierre["cierre_id"].asString(), vigente["cierre_id"].asString())
+        assertEquals(1L, vigente["secuencia"].asLong())
+        assertEquals(hoy.toString(), vigente["fecha"].asString())
+        assertEquals(cierre["registrado_en"].asString(), vigente["registrado_en"].asString())
+        assertEquals(cajero.email, vigente["usuario"].asString())
+        assertEquals(cierre["observacion"].asString(), vigente["observacion"].asString())
+        // el arqueo declarado del acta, idéntico al que contestó el cierre: líneas con declarado y diferencia, totales
+        // y cuadre, todo como Importe a la fecha del turno
+        assertEquals(cierre["arqueo"], vigente["arqueo"])
+        assertEquals(
+            listOf("EFECTIVO 30.00 -6.90", "TARJETA 12.30 0.00"),
+            vigente["arqueo"]["lineas"].toList().map { "${it["forma_pago"].asString()} ${cifra(it["declarado"])} ${cifra(it["diferencia"])}" }
+        )
+        assertEquals("-6.90", cifra(vigente["arqueo"]["diferencia"]))
+        assertEquals(hoy.toString(), vigente["arqueo"]["diferencia"]["actualizado_a"].asString())
+        assertEquals(false, vigente["arqueo"]["cuadra"].asBoolean())
+        assertEquals(cierre["cobrado_con_evento"], vigente["cobrado_con_evento"])
+        assertEquals(cierre["cobrado_sin_evento"], vigente["cobrado_sin_evento"])
+
+        // reversado, el turno está abierto y no hay cierre vigente; el siguiente cierre es el vigente
+        post(REVERSION, reversionDe(caja), cajero.token)
+        assertTrue(arqueoDe(turnoId, cajero)["cierre_vigente"].isNull)
+        val segundo = post(CIERRE, cierreDe(caja, "EFECTIVO" to "36.90", "TARJETA" to "12.30"), cajero.token)
+        val otraVez = arqueoDe(turnoId, cajero)["cierre_vigente"]
+        assertEquals(segundo["cierre_id"].asString(), otraVez["cierre_id"].asString())
+        assertEquals(3L, otraVez["secuencia"].asLong())
+        assertEquals(true, otraVez["arqueo"]["cuadra"].asBoolean())
+    }
+
     // de lo que bloquea
 
     @Test
@@ -466,6 +515,11 @@ class CierreApiTest : CajaApiTest() {
         }
         return pendientes.size
     }
+
+    private fun arqueoDe(
+        turnoId: String,
+        cajero: Cuenta
+    ): JsonNode = tree(send("GET", "/api/caja/turnos/$turnoId/arqueo", null, HttpStatus.OK, cajero.token))
 
     private fun estadoDe(orden: String): String =
         tree(send("GET", "/api/objects/orden_de_cobro/records/$orden", null, HttpStatus.OK))["attributes"]["estado"].asString()
