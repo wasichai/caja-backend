@@ -319,6 +319,24 @@ class CobroApiTest : CajaApiTest() {
         send("GET", "/api/caja/recibos/X-0000001/pdf", null, HttpStatus.NOT_FOUND, cajero.token)
     }
 
+    // el original solo existe mientras no hay reimpresiones (plan, §7): con un duplicado ya entregado, un original sin
+    // marca sería un segundo papel del mismo número que no dice que hay otro. 409, que remite al duplicado
+    @Test
+    fun `con una reimpresion el original ya no se imprime, ni para el cajero que lo emitio`() {
+        val caja = nuevaCaja()
+        // SUPERVISOR_CAJA cobra y además reimprime: es el mismo cajero que lo emitió, el mismo día y con el turno abierto
+        val supervisor = cuenta("SUPERVISOR_CAJA")
+        val ordenId = post(ORDENES, orden())["orden_id"].asString()
+        val numero = post(COBROS, cobro(caja, ordenId), supervisor.token)["recibo"]["numero_impreso"].asString()
+        send("GET", "/api/caja/recibos/$numero/pdf", null, HttpStatus.OK, supervisor.token)
+
+        send("POST", "/api/caja/recibos/$numero/duplicados", mapOf("observacion" to "el pagador perdió el papel"), HttpStatus.CREATED, supervisor.token)
+
+        val problema = tree(send("GET", "/api/caja/recibos/$numero/pdf", null, HttpStatus.CONFLICT, supervisor.token))
+        val detalle = problema["detail"].asString()
+        assertTrue(detalle.contains("duplicado") && detalle.contains("reimpres"), problema.toString())
+    }
+
     // el cuerpo de un cobro en efectivo de esas órdenes en esa caja
     private fun cobro(
         caja: CajaDePrueba,

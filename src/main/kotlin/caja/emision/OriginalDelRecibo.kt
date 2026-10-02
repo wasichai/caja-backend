@@ -8,6 +8,7 @@ import caja.comun.CAJA
 import caja.comun.LIMA
 import caja.comun.LINEA_RECIBO
 import caja.comun.RECIBO
+import caja.comun.REIMPRESION_RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
 import caja.turno.EstadoDelTurno
@@ -21,9 +22,10 @@ import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
 
-// el original de un recibo: solo lo obtiene el cajero que lo emitió, el mismo día, con su turno abierto, y mientras no
-// esté anulado. cualquier otra copia es un duplicado (POST /api/caja/recibos/{numero}/duplicados), que dice que lo es y
-// dice si se anuló. con el turno cerrado, su arqueo está firmado y el original ya no se imprime. se lee como el usuario
+// el original de un recibo: solo lo obtiene el cajero que lo emitió, el mismo día, con su turno abierto, sin
+// reimpresiones y mientras no esté anulado (plan, §7). cualquier otra copia es un duplicado
+// (POST /api/caja/recibos/{numero}/duplicados), que dice que lo es y dice si se anuló. con el turno cerrado, su arqueo
+// está firmado y el original ya no se imprime. se lee como el usuario
 // que llama: sin READ sobre recibo, 403 de core. todo se lee en UNA foto (Transaccion.lectura, como ConsultaDelTurno):
 // la historia del turno son dos consultas, y un cierre y su reversión confirmados entre una y otra la dejarían rota (un
 // 500). el pdf se dibuja fuera, sin la conexión tomada
@@ -58,6 +60,15 @@ class OriginalDelRecibo(
                 // un original sin la marca de su anulación circularía como un pago que ya no vale
                 if (registros.count(ANULACION_RECIBO, mapOf("recibo" to recibo.id!!)) > 0) {
                     throw ConflictException("El recibo $numero está anulado: su original ya no se imprime, pida un duplicado, que lo dice")
+                }
+                // con un duplicado ya entregado, un original sin marca sería otro papel del mismo número que no dice que hay
+                // otro: desde la primera reimpresión, solo duplicados, que se numeran
+                val reimpresiones = registros.count(REIMPRESION_RECIBO, mapOf("recibo" to recibo.id))
+                if (reimpresiones > 0) {
+                    throw ConflictException(
+                        "El recibo $numero ya tiene $reimpresiones reimpresión(es): su original ya no se imprime, pida otro duplicado, " +
+                            "que lleva su número"
+                    )
                 }
                 val caja = registros.get(CAJA, Caja::class.java, UUID.fromString(recibo.caja))
                 Triple(recibo, caja, registros.all(LINEA_RECIBO, LineaRecibo::class.java, filters = mapOf("recibo" to recibo.id)))
