@@ -11,7 +11,10 @@ vigentes y la **vista previa del total** de los dos cobros. Y **el recibo despu�
 (listado y ficha), el duplicado en PDF, registrado y marcado, y la anulación del mismo día, que se agrega sin tocar el
 recibo. Y **el turno**: el turno del día de quien pregunta, su arqueo en vivo por forma de pago, el cierre que lo
 congela y la reversión que lo reabre, con el candado del turno que impide que un cobro o una anulación se cuelen en un
-cierre en curso. El publicador del buzón llega en el PR siguiente.
+cierre en curso. Y **el buzón de salida**: el publicador que entrega cada pago y cada anulación al sistema de origen
+de sus órdenes (configurable y **apagado por defecto**), los pagos que no se pudieron entregar con la alerta a una
+persona con nombre, su explicación por escrito, y dos defensas frente a un evento inventado por la API genérica de
+wasichai.
 
 | | |
 |---|---|
@@ -58,6 +61,9 @@ ese puerto queda en el loopback del servidor: llega por un túnel, `ssh -N -L 54
 | `WASICHAI_JWT_SECRET` | un valor solo para desarrollo | poner uno propio (>= 32 bytes) en cualquier entorno real |
 | `CAJA_PG_PORT` | `5434` | puerto publicado por `compose.yml` |
 | `CAJA_MUNICIPALIDAD_NOMBRE` | ninguno | el nombre que encabeza el recibo. **Obligatorio**: sin él la app no arranca |
+| `CAJA_BUZON_HABILITADO` | `false` | enciende el publicador del buzón (ver «El buzón de salida») |
+| `CAJA_BUZON_DESTINOS_<SISTEMA>_URL` / `_TOKEN` | ninguno | a dónde se entregan los pagos de ese sistema de origen, y su token Bearer opcional |
+| `CAJA_CONCILIACION_RESPONSABLE` / `CAJA_CONCILIACION_CANAL` | ninguno | a quién avisa un pago que muere. **Obligatorios con el buzón habilitado**: sin ellos la app no arranca |
 
 ## Cargar el modelo
 
@@ -285,9 +291,11 @@ contarlas sale el «DUPLICADO N.°» del papel. Crearla es el privilegio `IMPRES
 
 ### `pago_evento`
 
-El buzón de salida: el aviso al sistema de origen de que se cobró un recibo. **Se escribe en la misma transacción que
-el recibo**: si la fila está, el recibo está. Lo entregará un proceso aparte. Relaciones `pago_evento_recibo` y
-`pago_evento_turno` (las dos obligatorias).
+El buzón de salida: el aviso al sistema de origen de que se cobró (o se anuló) un recibo. **Se escribe en la misma
+transacción que el recibo**: si la fila está, el recibo está. Lo entrega el publicador (ver «El buzón de salida»).
+Relaciones `pago_evento_recibo` y `pago_evento_turno` (las dos obligatorias). `estado_evento`: nace `PENDIENTE` (el
+pago en tránsito, con la hora de su `created_at`), y queda `ENTREGADO`, `MUERTO` (no se pudo entregar: dinero cobrado
+sin registrar) o `EXPLICADO` (un `MUERTO` del que alguien se hizo cargo por escrito).
 
 | Campo             | Tipo      | Qué guarda                                                                                       |
 | ----------------- | --------- | ------------------------------------------------------------------------------------------------ |
@@ -297,7 +305,9 @@ el recibo**: si la fila está, el recibo está. Lo entregará un proceso aparte.
 | `cuerpo`          | LONG_TEXT | El evento en JSON, congelado al cobrar. Obligatorio.                                             |
 | `estado`          | ENUM      | `estado_evento`: nace `PENDIENTE`. Obligatorio.                                                  |
 | `intentos`        | INTEGER   | Desde 0. Obligatorio.                                                                            |
-| `ultimo_error`, `entregado_en`, `explicacion` | TEXT, DATETIME, LONG_TEXT | Los escribirá el publicador.                 |
+| `ultimo_error`    | TEXT      | Por qué falló el último intento, recortado a 400 caracteres y sin credenciales. Lo escribe el publicador. |
+| `entregado_en`    | DATETIME  | Solo si está `ENTREGADO`. Lo escribe el publicador.                                              |
+| `explicacion`     | LONG_TEXT | Solo si está `EXPLICADO`: qué pasó y qué se hizo, al menos 5 caracteres.                        |
 
 ### `cierre_turno`
 
@@ -367,6 +377,8 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `GET /api/caja/turnos/{turno_id}/arqueo` | El arqueo en vivo, las dos mitades del cuadre y lo que impide cerrar: **200**; **404** si el turno no existe, **400** si el id no es un uuid. | READ sobre `turno`, `recibo`, `anulacion_recibo`, `pago_evento`, `cierre_turno` y `reversion_cierre` |
 | `POST /api/caja/turnos/cierre`     | Cierra el turno con su arqueo (ver «El cierre»): **201** con el acta. | CREATE sobre `cierre_turno` y `cierre_turno_linea` (403 antes de empezar) |
 | `POST /api/caja/turnos/reversion`  | Reversa el cierre vigente y reabre el turno (ver «La reversión»): **201**. | CREATE sobre `reversion_cierre` (403 antes de empezar): `SUPERVISOR_CAJA` |
+| `GET /api/caja/pagos/sin-entregar` | Los pagos `MUERTO`, del más antiguo al más reciente (ver «Los pagos sin entregar»): **200** con una lista. | READ sobre `pago_evento` y `recibo` (403 antes de empezar) |
+| `POST /api/caja/pagos/{pago_id}/explicacion` | Pasa un pago `MUERTO` a `EXPLICADO` con su `explicacion` y su `observacion`: **200** con el pago; **409** si no está `MUERTO`. | UPDATE sobre `pago_evento` (403 antes de empezar): `SUPERVISOR_CAJA` |
 
 - **Claves snake_case**, las de los campos del modelo, en el cuerpo y en la respuesta.
 - **Errores en problem+json** (RFC 7807). Un 400 lleva `errors[]` con el `field` (la clave snake_case que falló) y su
@@ -760,7 +772,7 @@ que toman el cobro de órdenes, el de tasas y la anulación, y releen todo despu
 tenga, un cobro o una anulación de ese turno **esperan**, y al soltarlo encuentran el turno cerrado: **409 «Turno
 cerrado»**, comprobado bajo el candado (en `Ventanilla` después de la idempotencia, en `AnularRecibo` después del mismo
 día). La caja vecina es otro turno y no espera. El orden de los candados no cambia: **turno-clave → turno → órdenes por
-id → serie → recibo**, y el cierre, que solo toma el del turno, no puede esperar en cruz con nadie. La secuencia es común
+id → serie → recibo → pago** (el del pago lo toma solo la explicación de un pago sin entregar), y el cierre, que solo toma el del turno, no puede esperar en cruz con nadie. La secuencia es común
 al cierre y a la reversión: wasichai no tiene unicidad compuesta entre objetos, así que **la serializa el candado del
 turno**; dos cierres a la vez dan uno, y el segundo encuentra el turno cerrado.
 
@@ -777,6 +789,120 @@ lleva imputación: el origen decide qué extingue.
 **Cambio del contrato:** `ordenes[].ordenId` es ahora el UUID de la orden **en cadena** (en `caja` era un entero, el id
 de su tabla). `rentas` tiene que leerlo como texto.
 
+### El buzón de salida
+
+`caja.buzon.PublicadorDelBuzon` (de `PublicadorDelBuzon`, `EntregarEventos`, `AnotarLaEntrega` y
+`ClienteHttpDelSistemaDeOrigen` de `caja`) entrega cada `pago_evento` `PENDIENTE` (`PAGO_REGISTRADO` y `PAGO_ANULADO`)
+al sistema de origen de sus órdenes. **La ventanilla nunca le pregunta nada a nadie**: con el sistema de origen apagado
+se cobra igual, el pago queda `PENDIENTE` (`estado_del_pago: EN_TRANSITO`, con su hora) y sale cuando el destino vuelve.
+
+#### La configuración
+
+En `application.yml`, comentada, y en `develop/example.env`. **El destino es configurable y está apagado por defecto**:
+con el buzón apagado no arranca ningún bucle, los pagos quedan `PENDIENTE` y el turno que los tiene no cierra.
+
+| Propiedad | Valor por defecto |
+|---|---|
+| `caja.buzon.habilitado` | `${CAJA_BUZON_HABILITADO:false}` |
+| `caja.buzon.intervalo` | `PT10S`: la espera entre el final de una vuelta y la siguiente |
+| `caja.buzon.por-vuelta` | `50`: cuántos eventos `PENDIENTE` lee por organización en cada vuelta |
+| `caja.buzon.intentos` | `8`: con cuántos intentos fallidos un pago que no contesta muere |
+| `caja.buzon.timeout` | `10s`: la espera de la conexión y de la respuesta |
+| `caja.buzon.destinos.<sistema>.url` | sin valor: la raíz del sistema de origen; se llama a `POST {url}/pagos` |
+| `caja.buzon.destinos.<sistema>.token` | opcional: va como `Authorization: Bearer`, nunca en el cuerpo |
+| `caja.conciliacion.responsable` y `.canal` | **obligatorios con el buzón habilitado**: si faltan, el arranque falla nombrándolos |
+
+`<sistema>` es el `sistema_origen` de las órdenes (`rentas`, `mercados`…): un sistema nuevo es una línea de
+configuración, no un despliegue. Por variables: `CAJA_BUZON_DESTINOS_RENTAS_URL` y `CAJA_BUZON_DESTINOS_RENTAS_TOKEN`.
+
+#### Una vuelta
+
+`caja.buzon.BucleDelBuzon` es un `SmartLifecycle` que solo arranca con `habilitado`: espera el intervalo, da una vuelta y
+vuelve a esperar. En cada vuelta:
+
+1. Intenta **`CerrojoBuzon`**, un `pg_try_advisory_lock` **de sesión** sobre una conexión propia (el `CerrojoEmision` de
+   `srtm`). Si otro lo tiene, la vuelta no hace nada: **un solo publicador por base, no uno por réplica**. Una instancia
+   que muere lo suelta con su sesión.
+2. Con el cerrojo, recorre cada organización y lee hasta `por-vuelta` eventos `PENDIENTE`, por orden de creación
+   (`BuzonStore`).
+3. Cada evento se comprueba contra su recibo (la defensa (a), abajo). Si coincide, se entrega **fuera de cualquier
+   transacción**: `POST {url}/pagos` con el `cuerpo` **congelado**, tal cual se escribió al cobrar.
+   `ClienteDelSistemaDeOrigen` comprueba que no hay una transacción abierta antes de llamar, y falla si la hay.
+4. Cada marca va **en su propia transacción y es condicional**: `WHERE estado = 'PENDIENTE' AND intentos = :leidos`.
+   Si dos publicadores llegaran a coincidir, se cuenta un solo intento. Cada marca se audita con `AuditService` y
+   usuario `null` (la escribió el sistema).
+
+| Respuesta | Qué es | Qué queda |
+|---|---|---|
+| 200, 201, 202 o **409** (el receptor ya lo tenía: deduplicó por `pagoId`) | Entregado | `ENTREGADO`, `entregado_en`, `intentos + 1` y `ultimo_error` vacío |
+| 401 o 403 | No contesta, con un diagnóstico de credencial: sin token, token que no vale o caducó, o falta un permiso en el destino | `intentos + 1` y `ultimo_error`; se reintenta |
+| Otro 4xx | Rechazado: el motivo no va a cambiar solo | **`MUERTO` ya**, con `intentos + 1` |
+| 5xx, error de E/S, tiempo agotado o **sin URL configurada** | No contesta | `intentos + 1` y `ultimo_error`; `MUERTO` cuando `intentos + 1 ≥ caja.buzon.intentos` |
+
+`ultimo_error` se recorta a 400 caracteres, con el remedio delante y el corte a la vista (`…`). Lo que contestó el
+destino viaja en él **tachado**: el token configurado y todo lo que parece una credencial (`Authorization`, `Bearer …`,
+`token=`…) se reemplazan por `«…»`, porque un proxy puede devolver el eco de la petición.
+
+Una organización cuyo buzón revienta no tumba a las demás: se registra y la vuelta sigue. Lo ya marcado queda marcado,
+y lo que no se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo
+deduplica.
+
+#### La alerta
+
+Cuando un pago muere, la vuelta escribe **una línea ERROR que empieza con `DINERO COBRADO SIN REGISTRAR`**, que nombra al
+responsable de la conciliación y su canal y lista cada pago (su `pagoId`, tipo, destino, número de recibo, turno,
+intentos y último error). Es dinero que entró por ventanilla y que su sistema de origen no sabe que entró. **Es un
+registro, no un correo**: llega a una persona si la observabilidad del despliegue alerta sobre las líneas ERROR, y
+aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistro` de `caja`).
+
+#### Los pagos sin entregar
+
+- **`GET /api/caja/pagos/sin-entregar`** da los `MUERTO`, con `pago_id`, `tipo`, `destino`, `recibo` (el número
+  impreso), `turno_id`, `estado`, `intentos`, `ultimo_error`, `creado_en`, `entregado_en` y `explicacion`. Exige READ
+  sobre `pago_evento` (y sobre `recibo`, por el número).
+- **`POST /api/caja/pagos/{pago_id}/explicacion`** con `{explicacion, observacion}` (`ExplicarPagoSinEntregar` de
+  `caja`) pasa un `MUERTO` a `EXPLICADO`. **Un turno con un pago `MUERTO` no cierra, y uno `EXPLICADO` sí**: es la única
+  salida de un pago que de verdad no se puede entregar, y cuesta lo que tiene que costar:
+  1. Exige UPDATE sobre `pago_evento`, que solo tiene `SUPERVISOR_CAJA` (403 antes de empezar).
+  2. `explicacion`, de al menos 5 caracteres (400 en `explicacion`), y `observacion`, de 5 a 500 (regla 10). Una clave
+     desconocida es 400.
+  3. En una transacción, toma el candado del evento (`Candado.PAGO`) y lo **relee**: si no está `MUERTO`, **409** (uno
+     `PENDIENTE` se entregaría solo, y explicarlo lo sacaría de la cola).
+  4. Lo escribe por `RecordService`, **como el usuario**: `estado` y `explicacion`, con la auditoría de core. La
+     `observacion` va a otra fila de auditoría del mismo acto: `pago_evento` no tiene ese campo.
+
+#### La segunda puerta: un evento inventado
+
+La API genérica de wasichai (`POST /api/objects/pago_evento/records`) aplica los permisos de objeto de core y nada más:
+un `CAJERO`, que tiene CREATE sobre `pago_evento` para cobrar, puede escribir por ella un evento que nunca ocurrió (el
+hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ninguna lo impide del todo:
+
+- **(a) Coherencia antes de enviar.** El publicador comprueba que el evento coincide con su recibo, leído en la base:
+  el recibo existe; el tipo del cuerpo es el de la fila; un `PAGO_REGISTRADO` es de un recibo `NORMAL`; el `total` del
+  cuerpo es el del recibo; las `ordenes` del cuerpo son las de las líneas del recibo; un `PAGO_ANULADO` tiene su
+  `anulacion_recibo`. Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con
+  su recibo: …», y salta la alerta. **Su límite**: la copia exacta de un evento legítimo con otro `pagoId` cuadra con su
+  recibo y se envía; el receptor la tomaría por otro pago.
+- **(b) El detector.** `caja.comun.GuardiaDeEscrituras`, un `RecordChangeListener`, escribe una línea ERROR
+  (`ESCRITURA FUERA DE CAJA: …`, con el objeto, el id y el usuario) por toda creación, cambio o borrado que se haga
+  **fuera de la API de caja** sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`, `reimpresion_recibo`,
+  `turno`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre` (un cierre forjado cerraría un turno ajeno), y por
+  los cambios de `orden_de_cobro`. Las escrituras de caja llevan la marca `EscrituraDeCaja`, un elemento del contexto de
+  la corrutina que `Registros` pone alrededor de cada `create`, `replace` y `delete`. **Su límite: no puede vetar**,
+  porque wasichai llama a los listeners después de escribir: lo forjado queda escrito, y la línea es lo que permite
+  verlo. Impedirlo es wasichai#15.
+
+#### Los huecos de wasichai que se rodean aquí
+
+- **No hay programación de tareas ni ayuda de candados** (**wasichai#18**). El bucle es propio (un `SmartLifecycle` con
+  `delay`, como `AutomationDrain` de wasichai) y `CerrojoBuzon` es un candado de sesión de postgres.
+- **El trabajo de fondo no tiene principal para `RecordService`** (**wasichai#18**): `CurrentUser` exige un usuario. El
+  publicador lee y marca `pago_evento` (y lee el recibo, sus líneas y su anulación) con `DatabaseClient` sobre la tabla
+  física resuelta en `custom_objects`, como `EmisionMasivaService` de `srtm`, y audita con `AuditService` y usuario
+  `null`. **Todo eso vive en una sola clase, `BuzonStore`**: es el único acceso a tablas físicas de caja (aparte de
+  `Candados` y `CerrojoBuzon`, que solo toman candados). Lo que escribe no pasa por los `RecordChangeListener`.
+- **La API genérica es una segunda puerta** (**wasichai#15**): las dos defensas de arriba.
+
 ## Roles
 
 `model/roles.json` declara los roles de caja y, por rol, las acciones (`READ`, `CREATE`, `UPDATE` o `DELETE`) sobre
@@ -786,12 +912,14 @@ cada objeto del modelo. Los PR siguientes lo amplían con sus objetos.
 | ----------------- | -------------------------------------------------------- |
 | `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes |
 | `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime. READ y CREATE sobre `cierre_turno` y `cierre_turno_linea`: cierra su turno. READ sobre `reversion_cierre`: no reversa |
-| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero), sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno) |
+| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero), sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno), y **UPDATE sobre `pago_evento`** (explica un pago sin entregar) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |
 
 **Nadie tiene UPDATE ni DELETE sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`,
 `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` ni `reversion_cierre`** (`test_apply_roles.py` lo comprueba):
-un recibo no se corrige, su anulación se agrega; un cierre no se corrige, se reversa. Los privilegios de `caja` se
+un recibo no se corrige, su anulación se agrega; un cierre no se corrige, se reversa. **La única excepción es UPDATE
+sobre `pago_evento` para `SUPERVISOR_CAJA`**: explicar un pago `MUERTO` (lo fija `test_apply_roles.py`). El publicador
+marca la entrega sin pasar por los roles (`BuzonStore`). Los privilegios de `caja` se
 vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo`; reimprimir (`IMPRESION`),
 CREATE sobre `reimpresion_recibo`; cerrar (`REGISTRO` de `cierre_caja`), CREATE sobre `cierre_turno`, y reversar
 (`ELIMINACION` de `cierre_caja`), CREATE sobre `reversion_cierre`, así que la UI los lee de `/api/auth/me/permissions`.
@@ -837,7 +965,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `RecibosTest`, las del recibo después de emitido (el resumen estable que cambia con una cifra, los largos de motivo,
   autorizado y memorando, el número del papel, los filtros, el mismo día, el recibo ajeno y el cuerpo de
   `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
-  sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión.
+  sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión, salvo
+  la explicación de un pago sin entregar. `EntregaTest` fija las reglas del publicador: la clasificación de cada
+  respuesta, el recorte de `ultimo_error`, la marca de cada intento y la coherencia del evento con su recibo;
+  `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
   `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado);
   `CierreDeTurnoTest`, la máquina de estados del turno y la situación del cajero; `TurnosTest`, lo que llega en las
   peticiones del turno; `PurezaDelTurnoTest`, que el arqueo y el cierre no dependen de Spring, del reloj ni de la base.
@@ -865,7 +996,17 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   céntimo a céntimo con órdenes, tasas y una anulación; el turno cerrado (no se cobra, no se anula, reversar reabre); el
   pago `PENDIENTE` que impide cerrar; la inmutabilidad; **dos cierres simultáneos dan uno**, y **el cierre en curso**: un
   `RecordChangeListener` de prueba retiene el cierre con el candado tomado, y un cobro de tasa, uno de orden y una
-  anulación esperan y reciben 409, mientras la caja vecina cobra sin esperar.
+  anulación esperan y reciben 409, mientras la caja vecina cobra sin esperar. `CierreEnUnaTransaccionApiTest` revienta
+  el cierre a mitad (al escribir una línea) y no queda nada; `OriginalEnUnaFotoApiTest` cuela un cierre y su reversión
+  entre las dos lecturas de la historia del turno y el original no se rompe. `BuzonApiTest` cubre el buzón contra un
+  sistema de origen falso por HTTP (MockWebServer): el pago `EN_TRANSITO` con su hora, el cuerpo con la referencia y sin
+  imputación, el reintento sin perder el pago, la muerte con su alerta, el 401 que sigue vivo y el 422 que muere, el
+  token que no viaja en el cuerpo ni en `ultimo_error`, **dos publicadores que cuentan un solo intento**, **la llamada
+  fuera de toda transacción** (mirando desde otra conexión mientras el destino contesta), **el evento inventado por la
+  API genérica** (no se envía, muere y salta el detector), la explicación que solo vale con un `MUERTO` y
+  **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
+  comprueba que apagado no arranca; `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y no ve lo que
+  escribe caja.
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
   Comprueba que la salud responde `UP`, que los módulos instalados (views, forms, pages) responden y los que se dejan
   fuera (workflow, documents, gis, automatización) dan 404, que una ruta bajo `/api/caja/**` sin token da 401 y que la
@@ -876,5 +1017,4 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 
 ## Siguientes pasos (fuera de este alcance)
 
-- **Negocio:** el publicador del buzón, los pagos sin entregar y su explicación (el `MUERTO` que impide cerrar lo cubre
-  ese PR); la conciliación.
+- **Negocio:** la conciliación y la recaudación.

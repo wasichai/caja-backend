@@ -44,6 +44,9 @@ set -a; source develop/.env; set +a
 | `WASICHAI_DB_USERNAME` / `_PASSWORD` | `caja` / `caja` | credenciales de esa base |
 | `CAJA_PG_PORT` | `5434` | puerto que publica `compose.yml` en `127.0.0.1` |
 | `CAJA_MUNICIPALIDAD_NOMBRE` | `MUNICIPALIDAD DISTRITAL DE EJEMPLO` | el nombre que encabeza el recibo. **Obligatoria**: sin ella el servidor no arranca |
+| `CAJA_BUZON_HABILITADO` | comentada (`false`) | enciende el publicador del buzón. Apagado, los pagos quedan `PENDIENTE` y el turno que los tiene no cierra |
+| `CAJA_BUZON_DESTINOS_<SISTEMA>_URL` / `_TOKEN` | comentadas | a dónde entrega los pagos de un sistema de origen (`POST {url}/pagos`), y su token Bearer opcional |
+| `CAJA_CONCILIACION_RESPONSABLE` / `_CANAL` | comentadas | a quién avisa un pago que muere. **Obligatorias con el buzón habilitado**: sin ellas no arranca |
 | `WASICHAI_JWT_SECRET` | valor de desarrollo | firma de los tokens. Mínimo 32 bytes; en cualquier entorno real, uno propio |
 | `WASICHAI_SEED_DEV` | `true` | crea el usuario `admin@wasichai.local` / `admin`. Apagarlo fuera de desarrollo |
 | `WASICHAI_CORE` | `http://localhost:8091` | URL que usarán los scripts de carga del modelo (model/apply.py y los importadores) |
@@ -132,7 +135,9 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 
 **Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest`, `CajasApiTest`, `CobroApiTest`,
 `CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TransaccionTest`, `TasasApiTest`, `VistaPreviaApiTest`,
-`ReciboApiTest`, `AnulacionApiTest`, `TurnoApiTest` y `CierreApiTest`, con `@Tag("integration")`
+`ReciboApiTest`, `AnulacionApiTest`, `OriginalEnUnaFotoApiTest`, `TurnoApiTest`, `CierreApiTest`,
+`CierreEnUnaTransaccionApiTest`, `BuzonApiTest`, `BucleDelBuzonApiTest`, `BuzonApagadoApiTest` y
+`GuardiaDeEscriturasApiTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -149,8 +154,8 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único), `reciboEscrito(caja, numero, emitidoEn, documento)` (un recibo
   con su turno escrito como admin, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento) y
   `registros(objeto, filtros)` (lo guardado, leído como admin) y `cambiarComoAdmin(objeto, id, cambios)` (cambia campos
-  por la API de core sin pasar por caja: lo que hará el publicador del buzón al entregar un pago, o el admin al dar de
-  baja una caja). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
+  por la API de core sin pasar por caja: lo que haría el publicador del buzón al entregar un pago, o el admin al dar de
+  baja una caja; lo anota el detector de escrituras, y está bien). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
 - **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, la de diez anulaciones
   simultáneas y la del fallo a mitad (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el
   `RecordChangeListener` de prueba), son el corazón de la cobranza: no se dan por buenas sin correrlas contra un
@@ -161,8 +166,14 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 - **El cierre en curso.** `CierreApiTest` tiene su propio contexto con un `RecordChangeListener` que, armado, retiene el
   cierre justo después de escribir su `cierre_turno`, con el candado del turno tomado y sin confirmar: lo que llegue a
   ese turno tiene que esperar. Lo usan la prueba del cierre en curso y la de dos cierres simultáneos.
-- **Los pagos.** Hasta el publicador del buzón, un turno con cobros de órdenes no cierra (sus `PAGO_REGISTRADO` siguen
-  `PENDIENTE`): las pruebas los marcan `ENTREGADO` como admin.
+- **Los pagos.** El buzón viene apagado, y en el contexto de casi todas las clases sigue así: un turno con cobros de
+  órdenes no cierra (sus `PAGO_REGISTRADO` siguen `PENDIENTE`), y las pruebas los marcan `ENTREGADO` como admin.
+- **El buzón.** `BuzonApiTest` lo enciende con un sistema de origen falso por HTTP (`SistemaDeOrigenFalso`, un
+  `MockWebServer` de okhttp: contesta a cada `pagoId` lo que la prueba le diga y guarda lo que recibió). Su bucle espera
+  una hora y cada prueba da sus vueltas a mano (`publicador.vuelta()`); `BucleDelBuzonApiTest` lo deja correr cada
+  0,2 s. Las dos cierran su contexto con la clase (`@DirtiesContext`), y con él su bucle. **Una vuelta lee todo lo
+  pendiente de la base compartida** (`por-vuelta` alto): los eventos de otras clases, sin destino configurado, solo
+  suman intentos. Las alertas y el detector se leen en la salida con `OutputCaptureExtension`.
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta
 `DOCKER_HOST`, pero lo busca en `localhost:<puerto publicado>`. Con un Docker remoto (otro servidor, o su socket
