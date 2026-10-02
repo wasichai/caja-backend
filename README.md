@@ -7,8 +7,9 @@ solo con starters de wasichai. Reescribe el negocio de `caja` con la misma forma
 de cajas, los roles y **la cobranza**: cobrar órdenes emite el recibo en una sola transacción (el turno, el número, el
 recibo, las órdenes PAGADA y el evento del pago en el buzón), con el original en PDF. Tiene también **la caja de
 tasas** (derechos del TUPA cobrados con el precio de la tarifa vigente, nunca el de la petición), la lista de las tasas
-vigentes y la **vista previa del total** de los dos cobros. La anulación, el cierre y el publicador del buzón llegan en
-los PR siguientes.
+vigentes y la **vista previa del total** de los dos cobros. Y **el recibo después de emitido**: la consulta de recibos
+(listado y ficha), el duplicado en PDF, registrado y marcado, y la anulación del mismo día, que se agrega sin tocar el
+recibo. El cierre y el publicador del buzón llegan en los PR siguientes.
 
 | | |
 |---|---|
@@ -66,8 +67,8 @@ set -a; source develop/.env; set +a      # WASICHAI_CORE, WASICHAI_EMAIL y WASIC
 cd model
 python3 apply.py --validate-only          # revisa el modelo contra las reglas de core, sin tocar nada
 python3 apply.py --dry-run                # imprime lo que enviaría
-python3 apply.py                          # crea 8 objetos y 11 relaciones ("done: 19 created")
-python3 apply.py                          # la segunda vez no crea nada ("done: 0 created, 0 updated, 19 skipped")
+python3 apply.py                          # crea 10 objetos y 15 relaciones ("done: 25 created")
+python3 apply.py                          # la segunda vez no crea nada ("done: 0 created, 0 updated, 25 skipped")
 python3 apply_roles.py                    # crea los 4 roles de caja ("done: 4 created"); ver «Roles»
 ```
 
@@ -115,11 +116,12 @@ ejemplo de `caja`, porque es configuración de una municipalidad y no una cifra 
 
 ## Modelo
 
-Ocho objetos, que se crean en este orden (el destino de una relación va antes que su origen: `recibo` antes que
-`orden_de_cobro`, que lo nombra): `area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo` y
-`pago_evento`, y once relaciones. Vienen de las tablas `area`, `caja` y `tasa` de
-`backend/kamayuk-caja-esquema/.../V1__baseline.sql` de `caja`, de `cierre_caja`, `recibo` y `recibo_detalle` de V3 y
-V29, y de `orden_de_cobro` y `pago_evento` de `V2__ordenes_de_cobro_y_outbox.sql`. wasichai pone el `id`, y la columna
+Diez objetos, que se crean en este orden (el destino de una relación va antes que su origen: `recibo` antes que
+`orden_de_cobro`, que lo nombra): `area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo`,
+`pago_evento`, `anulacion_recibo` y `reimpresion_recibo`, y quince relaciones. Vienen de las tablas `area`, `caja` y
+`tasa` de `backend/kamayuk-caja-esquema/.../V1__baseline.sql` de `caja`, de `cierre_caja`, `recibo` y `recibo_detalle`
+de V3 y V29, de `orden_de_cobro` y `pago_evento` de `V2__ordenes_de_cobro_y_outbox.sql` y de `recibo_movimiento` de
+V30, partida en dos. wasichai pone el `id`, y la columna
 `municipalidad_id` de `caja` es la organización de wasichai, así que ninguna de las dos es un campo.
 
 Los enumerados: `estado_orden` (`PENDIENTE`, `PAGADA`, `ANULADA`), `forma_pago` (`EFECTIVO`, `CHEQUE`, `DEPOSITO`,
@@ -211,7 +213,9 @@ La apertura de una caja por un cajero en un día (`cierre_caja` de `caja`, con e
 ### `recibo`
 
 El papel que se entrega en ventanilla. **No se edita ni se borra**: ningún rol tiene `UPDATE` ni `DELETE` sobre él, ni
-sobre sus líneas ni sobre su evento (V29 de `caja`). Relaciones `recibo_caja` y `recibo_turno` (las dos obligatorias).
+sobre sus líneas, su evento, su anulación ni sus reimpresiones (V29 de `caja`), y `src/main` no tiene ningún `replace`,
+`update` ni `delete` sobre ellos (`InmutabilidadDelReciboTest`). No tiene `estado`: anulado o no se deriva de que
+exista su `anulacion_recibo`. Relaciones `recibo_caja` y `recibo_turno` (las dos obligatorias).
 
 | Campo                | Tipo      | Qué guarda                                                                                  | Columna de `caja`              |
 | -------------------- | --------- | ------------------------------------------------------------------------------------------- | ------------------------------ |
@@ -244,6 +248,37 @@ Relaciones `linea_recibo_recibo` (campo `recibo`, obligatoria), `linea_recibo_or
 | `cantidad`, `precio_unitario` | INTEGER, DECIMAL | Solo en una línea de tasa: cuántas veces y la tarifa vigente. | `recibo_detalle.cantidad`, `precio_unitario` |
 | `monto`              | DECIMAL | El importe de la orden, o `precio_unitario × cantidad` en una tasa. Obligatorio. | la suma del desglose |
 
+### `anulacion_recibo`
+
+El acta de la anulación de un recibo (`recibo_movimiento` de `caja`, tipo `ANULACION`): **se agrega, y el recibo no se
+toca**. Crearla es el privilegio `ELIMINACION` de `caja`. Relaciones `anulacion_recibo_recibo`, `anulacion_recibo_caja`
+y `anulacion_recibo_turno` (las tres obligatorias): la caja y el turno son **los del recibo**, para que el arqueo de ese
+turno reste lo anulado.
+
+| Campo                    | Tipo      | Qué guarda                                                                                     |
+| ------------------------ | --------- | ---------------------------------------------------------------------------------------------- |
+| `recibo_anulado`         | TEXT      | El id del recibo, otra vez. Obligatorio, **único**: reemplaza `recibo_movimiento_anulacion_uq`, un recibo se anula una sola vez. |
+| `fecha`                  | DATE      | El día de la anulación, en Lima: el del turno del recibo. Obligatoria.                         |
+| `motivo`                 | TEXT      | El sustento del acto, de hasta 80 y no en blanco: se imprime en el duplicado. Obligatorio.     |
+| `autorizado_por`         | TEXT      | Quien lo autorizó, si consta: hasta 80.                                                        |
+| `documento_autorizacion` | TEXT      | El memorando o la resolución, si consta: hasta 40.                                             |
+| `importe`                | DECIMAL   | El total del recibo, congelado. Obligatorio.                                                   |
+| `usuario`                | TEXT      | Quien anuló: el correo de la sesión. Obligatorio.                                              |
+| `observacion`            | LONG_TEXT | Por qué se registra (regla 10); es otra cosa que el motivo. Obligatoria.                       |
+
+### `reimpresion_recibo`
+
+Un duplicado de un recibo (`recibo_movimiento` de `caja`, tipo `DUPLICADO`): cada reimpresión deja su fila, y de
+contarlas sale el «DUPLICADO N.°» del papel. Crearla es el privilegio `IMPRESION` de `caja`. Relación
+`reimpresion_recibo_recibo` (obligatoria).
+
+| Campo         | Tipo      | Qué guarda                                                                                         |
+| ------------- | --------- | -------------------------------------------------------------------------------------------------- |
+| `fecha`       | DATE      | El día de la reimpresión, en Lima. Obligatoria.                                                    |
+| `resumen`     | TEXT      | El SHA-256 (64 caracteres hexadecimales) de lo congelado en el recibo y sus líneas (ver «El duplicado»). Obligatorio. |
+| `usuario`     | TEXT      | Quien la pidió. Obligatorio.                                                                       |
+| `observacion` | LONG_TEXT | Por qué se reimprime (regla 10). Obligatoria.                                                      |
+
 ### `pago_evento`
 
 El buzón de salida: el aviso al sistema de origen de que se cobró un recibo. **Se escribe en la misma transacción que
@@ -275,7 +310,11 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `POST /api/caja/cobros/tasas`      | Cobra conceptos del TUPA y emite el recibo (ver «La caja de tasas»): **201**, o **200** en el reenvío de una `Idempotency-Key`. | CREATE sobre `recibo` (403 antes de empezar); al escribir, core exige además READ sobre `tasa` y CREATE sobre `turno` y `linea_recibo` |
 | `POST /api/caja/cobros/tasas/vista-previa` | Lo que costaría cobrar unos conceptos hoy, sin escribir nada: **200**. | READ sobre `tasa` |
 | `GET /api/caja/tasas`              | Las tasas vigentes a `?vigentes_a=AAAA-MM-DD` (por defecto hoy en Lima), por código: la lista que ofrece la ventanilla. | READ sobre `tasa` y sobre `area` |
-| `GET /api/caja/recibos/{numero_impreso}/pdf` | **El original** del recibo, en `application/pdf`. Solo para el cajero que lo emitió, el mismo día y con su turno abierto; si no, 409 (el duplicado llega con la consulta de recibos). | READ sobre `recibo`, `caja` y `linea_recibo` |
+| `GET /api/caja/recibos/{numero_impreso}/pdf` | **El original** del recibo, en `application/pdf`. Solo para el cajero que lo emitió, el mismo día, con su turno abierto y sin anular; si no, 409, que remite al duplicado. | READ sobre `recibo`, `caja`, `linea_recibo` y `anulacion_recibo` |
+| `GET /api/caja/recibos`            | El listado paginado (ver «La consulta de recibos»): `?documento=&caja=&cajero=&desde=&hasta=&estado=&page=&size=`, del más reciente al más antiguo. | READ sobre `recibo`, `anulacion_recibo` y `reimpresion_recibo` (y `caja` si se filtra por ella) |
+| `GET /api/caja/recibos/{numero_impreso}` | La ficha: el recibo con sus líneas, `estado`, `duplicados` y `anulacion`. **404** si no existe, **400** si el número está mal formado. | READ sobre `recibo`, `linea_recibo`, `caja`, `tasa`, `anulacion_recibo` y `reimpresion_recibo` |
+| `POST /api/caja/recibos/{numero_impreso}/duplicados` | El duplicado en PDF, marcado y numerado, y lo registra (ver «El duplicado»): **201** `application/pdf`; **409** si ya no se dibuja igual. | CREATE sobre `reimpresion_recibo` (403 antes de empezar) |
+| `POST /api/caja/recibos/{numero_impreso}/anulacion` | Anula el recibo del día (ver «La anulación»): **201** con el acta. | CREATE sobre `anulacion_recibo` (403 antes de empezar); el recibo de otro cajero, además, el rol `SUPERVISOR_CAJA`; al escribir, core exige UPDATE sobre `orden_de_cobro` y CREATE sobre `pago_evento` |
 
 - **Claves snake_case**, las de los campos del modelo, en el cuerpo y en la respuesta.
 - **Errores en problem+json** (RFC 7807). Un 400 lleva `errors[]` con el `field` (la clave snake_case que falló) y su
@@ -333,6 +372,37 @@ Las dos vistas previas reciben lo mismo que su cobro (`{"ordenes": [...], "fecha
 "fecha_de_cobro"?}`) y contestan `{"lineas": [...], "total": {"importe", "actualizado_a"} o null si no hay líneas,
 "cobrable": true|false, "motivos": ["..."]}`, con las líneas como las del recibo: solo las que se pueden cobrar.
 
+El listado (`GET /api/caja/recibos`) contesta una página de filas:
+
+```json
+{
+  "content": [
+    {"numero_impreso": "001-0000002", "emitido_en": "2026-10-02T10:20:00.123456-05:00", "pagador_documento": "12345678",
+     "pagador_nombre": "FLORES OTINIANO JUNIOR", "total": {"importe": "150.50", "actualizado_a": "2026-10-02"},
+     "forma_pago": "EFECTIVO", "duplicados": 1, "estado": "ANULADO"}
+  ],
+  "page": 0, "size": 25, "totalElements": 1, "totalPages": 1
+}
+```
+
+La ficha (`GET /api/caja/recibos/{numero_impreso}`) lleva `numero_impreso`, `serie`, `numero`, `caja` (el código),
+`cajero`, `emitido_en`, `pagador_documento`, `pagador_nombre`, `forma_pago`, `tipo_pago`, `total`, `observacion`,
+`lineas` (como las del cobro), `estado`, `duplicados` y `anulacion`: `{"fecha", "motivo", "autorizado_por",
+"documento_autorizacion", "usuario"}` o `null`. El número se escribe como en el papel (`001-0000123`; `001-123` también
+vale); lo que no tiene esa forma es 400 en `numero_impreso`.
+
+El duplicado recibe `{"observacion": "..."}` y contesta el PDF (`Content-Disposition: inline;
+filename="recibo-001-0000123-duplicado-2.pdf"`). La anulación recibe `{"motivo", "autorizado_por"?,
+"documento_autorizacion"?, "observacion"}` y contesta **201**:
+
+```json
+{"numero_impreso": "001-0000123", "estado": "ANULADO", "fecha": "2026-10-02", "motivo": "COBRO EN DEMASÍA",
+ "autorizado_por": "JEFE DE CAJA", "documento_autorizacion": "MEMO 12-2026", "usuario": "jefe@muni.gob.pe",
+ "importe": {"importe": "150.50", "actualizado_a": "2026-10-02"}, "pago_anulado_id": "…"}
+```
+
+`pago_anulado_id` es el `pagoId` del `PAGO_ANULADO`, o `null` en un recibo de tasas.
+
 ## Reglas
 
 - **La frontera.** Caja no sabe qué es un tributo: una orden no tiene `tributo`, `ejercicio` ni `periodo`. Si los
@@ -385,10 +455,11 @@ que dice cuál falta). Luego, en este orden:
 
 **Los candados** (`caja.comun.Candados`) son consultivos de transacción, en la forma de dos enteros
 `pg_advisory_xact_lock(<clase>, hashtext(<clave>))`, con **una clase fija por tipo de candado** (`caja.comun.Candado`:
-`TURNO_CLAVE`, `TURNO`, `ORDEN` y `SERIE`). wasichai no bloquea filas ni tiene unicidad compuesta. Se sueltan en el
+`TURNO_CLAVE`, `TURNO`, `ORDEN`, `SERIE` y `RECIBO`; la clave va sin prefijo, la clase la separa). wasichai no bloquea filas ni tiene unicidad compuesta. Se sueltan en el
 commit o el rollback, nunca antes, y `Candados.bloquear` **falla fuera de una transacción** (en autocommit no protegería
-nada). Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie**, para que dos cobros no se
-esperen en cruz; cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
+nada). Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie → recibo**, para que dos
+operaciones no se esperen en cruz (la anulación toma el del turno de su recibo y luego los de sus órdenes; la
+reimpresión, solo el del recibo); cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
 `numero_impreso`, `clave_idempotencia` y `evento_id` son la red: si uno salta (`DuplicateKeyException`), la transacción
 entera se revierte y el cobro contesta 409 («vuelva a intentarlo»), sin reintentar dentro (postgres no deja leer nada en
 una transacción abortada); cualquier otra violación de integridad se propaga como lo que es (500). `hashtext` da 32
@@ -441,6 +512,71 @@ del total**, en las dos vistas previas por igual: el total es el de lo que sí s
 desconocido, una fecha que no es hoy) sí es 400. `VistaPreviaApiTest` compara el total de la vista previa con el del
 recibo emitido después, para las mismas órdenes y para las mismas tasas.
 
+### El recibo después de emitido
+
+**El recibo es inmutable.** Ni se edita ni se borra: no tiene `estado`, y anularlo es **agregar** una
+`anulacion_recibo`; reimprimirlo, agregar una `reimpresion_recibo`. El número, las líneas y el total siguen donde
+estaban, porque el pagador tiene ese papel en la mano. Nadie tiene `UPDATE` ni `DELETE` sobre esos objetos
+(`test_apply_roles.py`) y `src/main` no tiene ningún `replace`, `update` ni `delete` sobre ellos
+(`InmutabilidadDelReciboTest` lo vigila). El estado (`EMITIDO` o `ANULADO`) se deriva de que exista la anulación, y
+los duplicados se cuentan.
+
+#### La consulta de recibos
+
+`GET /api/caja/recibos` (`caja.recibo.ConsultaDeRecibos`, de `ConsultaDeRecibos` de `caja`) es para quien perdió el
+papel. Todos los filtros son opcionales y exactos: `documento` (el `pagador_documento`, en mayúsculas), `caja` (su
+código; una caja que no existe no tiene recibos), `cajero` (el correo, tal cual), `desde` y `hasta` (**días de Lima**
+sobre `emitido_en`, los dos incluidos: `hasta` llega hasta las 23:59:59 de Lima) y `estado` (`EMITIDO` o `ANULADO`, que
+se resuelve con un `EXISTS` sobre la tabla de `anulacion_recibo`). Un rango al revés, una fecha mal escrita o un estado
+desconocido son **400** (un filtro que no se entiende no es «todos»). Una búsqueda sin resultados es una página vacía.
+
+El orden es `emitido_en` descendente con **desempate estable por id**: el `ORDER BY` de core es de una sola columna, así
+que se leen los recibos entre el instante del último de la página y el del primero, se cuentan los más recientes, y la
+página es el tramo que le toca en el orden (`emitido_en`, `id`). Dos recibos del mismo instante no se repiten ni se
+pierden al pasar de página.
+
+#### El duplicado
+
+`POST /api/caja/recibos/{numero}/duplicados` (`caja.recibo.DuplicadoDeRecibo`, de `DuplicadoDeRecibo` de `caja`) da el
+PDF del recibo **marcado «DUPLICADO N.° n»**, en la cabecera y en el pie, con las mismas cifras que el original: nada se
+recalcula. Si el recibo está anulado, el papel lo dice («RECIBO ANULADO — no acredita pago» y «Anulado el <fecha> —
+<motivo>»). Cada duplicado registra su `reimpresion_recibo` bajo el candado `RECIBO` del recibo: dos a la vez no salen
+con el mismo número. **Solo PDF.**
+
+**El resumen.** Cada reimpresión guarda el SHA-256 de una **representación canónica del recibo y sus líneas** (claves en
+orden fijo, cifras con `toPlainString`, el instante en ISO, las líneas en el orden del papel), no de los bytes del PDF,
+que no son deterministas. Si ya hubo una reimpresión y el resumen de ahora no coincide, **409**: el recibo ya no se
+dibuja igual, y entregarlo sería dar otro papel con el mismo número. No entra en el resumen lo que no está congelado en
+el recibo: el nombre de la caja, que se edita en el admin, se imprime como está hoy.
+
+#### La anulación
+
+`POST /api/caja/recibos/{numero}/anulacion` (`caja.recibo.AnularRecibo`, de `AnularRecibo` de `caja`). Antes de
+empezar: CREATE sobre `anulacion_recibo` (**403**) y la petición (**400**, todos los campos juntos: `motivo`
+obligatorio, de hasta 80 y no en blanco; `autorizado_por` hasta 80; `documento_autorizacion` hasta 40; `observacion`
+de 5 a 500; una clave desconocida). Luego, en **una transacción**:
+
+1. **El candado del turno del recibo** (`TURNO`, el mismo de la cobranza) y el turno releído bajo él. Un recibo que no
+   existe es **404**.
+2. **Solo el mismo día**: la fecha del turno contra el que se cobró tiene que ser hoy en Lima. Si no, **422** «fuera del
+   día de pago»: ese dinero ya cuadró en el arqueo de su día, y lo que corresponde es una devolución. Aquí, bajo el mismo
+   candado, el PR del cierre rechazará el turno ya cerrado.
+3. **Una sola vez**: si ya tiene su anulación, **409**. El `unique` de `recibo_anulado` es la red: dos anulaciones a la
+   vez dan una y un 409, sin releer dentro.
+4. **El recibo de otro cajero** exige el rol `SUPERVISOR_CAJA` (o ADMIN): **403** que lo nombra. Es el privilegio
+   `ESPECIAL` de `caja`, y es **un hueco declarado**: wasichai no tiene acciones propias además de las CRUD, así que se
+   comprueba por el nombre del rol y no por un permiso que se pueda dar en el admin.
+5. **El acta**: la `anulacion_recibo` con la caja y el turno del recibo y `importe` igual a su total.
+6. **Las órdenes del recibo vuelven a `PENDIENTE` y sin recibo**: candado `ORDEN` de cada una, por id, relectura y
+   `replace`. No se marcan `ANULADA`: el dinero volvió y la deuda sigue, así que se pueden cobrar otra vez.
+7. **El evento**: si el recibo es `NORMAL`, `PAGO_ANULADO` en el buzón, `PENDIENTE`, con el `sistema_destino` y el
+   `pagoId` (`pagoOriginalId`) de su `PAGO_REGISTRADO`. Si no existe el `PAGO_REGISTRADO`, **409**: no se anula lo que
+   no avisó. **Un recibo de tasas no avisa a nadie** (`pago_anulado_id` null).
+8. **El recibo no se modifica.** Su original ya no se imprime (409, que remite al duplicado, que dice que está anulado).
+
+El cuerpo de `PAGO_ANULADO` sigue `ComponedorDeEventosJson.pagoAnulado` de `caja`: `pagoId`, `tipo`, `pagoOriginalId`,
+`recibo` (`numero`, `serie`, `fechaDePago`, `cajero`, `formaDePago`), `motivo`, `fecha` y `total` en cadena.
+
 ### El evento `PAGO_REGISTRADO`
 
 El cuerpo sigue `docs/50-api/contratos-que-consume/rentas.json` de `caja`: `pagoId`, `tipo`, `sistemaOrigen`, `total`,
@@ -459,12 +595,15 @@ cada objeto del modelo. Los PR siguientes lo amplían con sus objetos.
 | Rol               | Puede                                                    |
 | ----------------- | -------------------------------------------------------- |
 | `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes |
-| `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra |
-| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`                                    |
+| `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime |
+| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero) y sobre `reimpresion_recibo` (reimprime) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |
 
-**Nadie tiene UPDATE ni DELETE sobre `recibo`, `linea_recibo` ni `pago_evento`** (`test_apply_roles.py` lo comprueba):
-un recibo no se corrige; su anulación se agrega.
+**Nadie tiene UPDATE ni DELETE sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo` ni
+`reimpresion_recibo`** (`test_apply_roles.py` lo comprueba): un recibo no se corrige; su anulación se agrega. Los
+privilegios de `caja` se vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo` y
+reimprimir (`IMPRESION`), CREATE sobre `reimpresion_recibo`, así que la UI los lee de `/api/auth/me/permissions`.
+`ESPECIAL` (anular el recibo de otro cajero) no cabe en CRUD: es el rol `SUPERVISOR_CAJA` (ver «La anulación»).
 
 `model/apply_roles.py` los crea o sincroniza por la API de core (`POST /api/roles` y `PUT /api/roles/{name}/permissions`).
 Es idempotente: un rol que falta se crea, uno que existe queda con los permisos de `roles.json` (**un permiso dado a mano
@@ -474,9 +613,10 @@ core lo deja pasar todo. Los usuarios y sus roles se asignan en el admin de core
 
 ## Emisión del recibo
 
-`GET /api/caja/recibos/{numero_impreso}/pdf` da **el original**: solo al cajero que lo emitió, el mismo día y con su
-turno abierto (hoy todo turno del día lo está; el cierre añadirá esa condición). Cualquier otro recibe 409, que remite
-al duplicado (PR de la consulta). Lo dibuja `caja.emision.PdfRenderer`, copiado de `srtm-backend` sin su cabecera
+`GET /api/caja/recibos/{numero_impreso}/pdf` da **el original**: solo al cajero que lo emitió, el mismo día, con su
+turno abierto (hoy todo turno del día lo está; el cierre añadirá esa condición) y mientras no esté anulado. Cualquier
+otro recibe 409, que remite al duplicado (`POST .../duplicados`), que dice «DUPLICADO N.° n» y, si se anuló, que está
+anulado. Lo dibuja `caja.emision.PdfRenderer`, copiado de `srtm-backend` sin su cabecera
 institucional: la plantilla `templates/emision/recibo.html` (Thymeleaf, standalone) a PDF con openhtmltopdf, A4, con
 DejaVu Sans incrustada (`fonts/`, con su licencia) para que las tildes y la ñ salgan igual en todas partes.
 
@@ -499,7 +639,11 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, las claves del cuerpo de
   `PAGO_REGISTRADO` y lo que llega en la petición); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
   la tarifa vigente, `12.30 × 3 = 36.90` y `0.10 × 7 = 0.70`, la vigencia al revés, la cantidad y el precio en la
-  petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF.
+  petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF (el original y el duplicado, con y sin anulación);
+  `RecibosTest`, las del recibo después de emitido (el resumen estable que cambia con una cifra, los largos de motivo,
+  autorizado y memorando, el número del papel, los filtros, el mismo día, el recibo ajeno y el cuerpo de
+  `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
+  sobre el recibo, sus líneas, su anulación, sus reimpresiones o su evento.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
   `CAJERO`) y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
@@ -511,7 +655,12 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   vigencias, el 400 de un precio en el cuerpo, 404 sin tarifa vigente, 409 con tarifa en cero, la idempotencia, el
   pagador anónimo, los 400, la numeración compartida con el cobro de órdenes, ningún `pago_evento`, el 403 de
   `TESORERIA`) y la lista de tasas vigentes; `VistaPreviaApiTest`, las dos vistas previas, sus motivos y sus permisos,
-  y que su total es el del recibo emitido después.
+  y que su total es el del recibo emitido después. `ReciboApiTest` cubre la consulta (página vacía, los seis filtros, el
+  rango de días de Lima con el `hasta` entero, el estado derivado, los duplicados contados, el desempate estable, el 403
+  sin READ y los 400) y el duplicado (marcado y registrado, dos registros, el de un anulado, el 409 si ya no se dibuja
+  igual, el 403 de un `CAJERO`); `AnulacionApiTest`, la anulación (la orden vuelve a `PENDIENTE` y el recibo sigue
+  igual, `PAGO_ANULADO` con su `pagoOriginalId`, el recibo de ayer con un `Clock` de prueba, dos veces, **diez
+  simultáneas dan una**, el recibo de tasas, sin evento, los 400, el recibo ajeno y el 403 del `CAJERO`).
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
   Comprueba que la salud responde `UP`, que los módulos instalados (views, forms, pages) responden y los que se dejan
   fuera (workflow, documents, gis, automatización) dan 404, que una ruta bajo `/api/caja/**` sin token da 401 y que la
@@ -522,5 +671,5 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 
 ## Siguientes pasos (fuera de este alcance)
 
-- **Negocio:** la consulta, el duplicado y la anulación del recibo (también el de tasas); el cierre del turno;
-  el publicador del buzón.
+- **Negocio:** el cierre del turno (y con él, la regla del turno cerrado en la anulación y en el original); el
+  publicador del buzón.

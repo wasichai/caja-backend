@@ -130,7 +130,8 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 ```
 
 **Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest`, `CajasApiTest`, `CobroApiTest`,
-`CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TasasApiTest` y `VistaPreviaApiTest`, con `@Tag("integration")`
+`CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TasasApiTest`, `VistaPreviaApiTest`, `ReciboApiTest` y
+`AnulacionApiTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -139,15 +140,20 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   y no supone que la base está vacía.
 - **Una clase nueva de la API** hereda de `CajaApiTest`: antes de cada test aplica `model/model.json` y
   `model/roles.json` (como `apply.py` y `apply_roles.py`) y deja el token del admin en `token`. Da `funcionario("CAJERO")`
-  (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio),
+  (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio;
+  `rolPropio(permisos)` da el rol para dárselo a varios con `cuenta(rol)`),
   `rejected(método, ruta, cuerpo, campo)` (un 400 cuyo primer error es ese campo), `orden(...)` (un alta válida con una
   referencia nueva), `registro(objeto, atributos)` (un registro por la API de core), `cuenta("CAJERO")` (un usuario con
   su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única), `nuevaTasa(codigo, importe, desde, hasta)` (una vigencia de
-  una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único) y `registros(objeto, filtros)`
-  (lo guardado, leído como admin). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
-- **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, y la del fallo a mitad
-  (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el `RecordChangeListener` de prueba), son el corazón de la
-  cobranza: no se dan por buenas sin correrlas contra un PostgreSQL de verdad.
+  una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único), `reciboEscrito(caja, numero, emitidoEn, documento)` (un recibo
+  con su turno escrito como admin, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento) y
+  `registros(objeto, filtros)` (lo guardado, leído como admin). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
+- **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, la de diez anulaciones
+  simultáneas y la del fallo a mitad (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el
+  `RecordChangeListener` de prueba), son el corazón de la cobranza: no se dan por buenas sin correrlas contra un
+  PostgreSQL de verdad.
+- **El reloj.** `AnulacionApiTest` tiene su propio contexto con un `Clock` `@Primary` que se adelanta (`RelojMovible`):
+  el recibo de hoy, anulado mañana, es el recibo de ayer.
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta
 `DOCKER_HOST`, pero lo busca en `localhost:<puerto publicado>`. Con un Docker remoto (otro servidor, o su socket
