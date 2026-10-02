@@ -885,8 +885,10 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   `created_at` el valor de `now()`, **el comienzo de la transacción**. Todo lo que escribe una transacción de caja lleva
   el mismo instante: la cobranza escribe el recibo, sus líneas, el `PAGO_REGISTRADO` y las órdenes `PAGADA` (su
   `updated_at`) en una sola; la anulación, su acta y el `PAGO_ANULADO` en otra. Lo prueba `BuzonApiTest`. La API genérica
-  no abre transacción y no deja escribir `created_at`: lo que entra por ella lleva **siempre otro sello**. Sobre eso, el
-  publicador comprueba:
+  no abre transacción y no deja escribir `created_at`: lo que entra por ella lleva **otro sello**. `now()` tiene
+  resolución de microsegundos, así que dos escrituras sueltas lanzadas en paralelo (un acta forjada y su `PAGO_ANULADO`)
+  podrían, en teoría, caer en el mismo instante. Es improbable y ruidoso: cada intento fallido muere con su alerta, y el
+  detector anota las dos escrituras. Sobre eso, el publicador comprueba:
   - **El evento lleva el sello de su origen.** Un `PAGO_REGISTRADO` tiene el `created_at` de su recibo; un
     `PAGO_ANULADO`, el de su `anulacion_recibo`. Si no, es una copia o un evento forjado, y muere. Uno forjado **antes**
     no le quita el lugar al legítimo, que conserva su sello y se entrega.
@@ -912,10 +914,17 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   - **La fecha de una orden tocada después del cobro.** Quien pueda editar el cuerpo de un evento `PENDIENTE` (el UPDATE
     del supervisor, abajo) y haya tocado antes esa orden puede cambiar su `actualizadoA` en el cuerpo, y nada más: el
     importe, la referencia y las órdenes siguen atados a las líneas del cobro.
-  - **Un acta forjada.** Un `SUPERVISOR_CAJA` puede crear por la API genérica una `anulacion_recibo` para un recibo. El
-    `PAGO_ANULADO` forjado para ella nace en otra transacción, así que muere y no se envía: la API genérica no escribe
-    dos registros en una transacción. Pero el acta queda. El recibo se ve anulado, y la anulación legítima ya no se
-    puede registrar (el único de `recibo_anulado`). Eso solo lo ven el detector y la auditoría de core.
+  - **Un acta forjada, que cuesta dinero.** Un `SUPERVISOR_CAJA` puede crear por la API genérica una `anulacion_recibo`
+    para un recibo, sin las reglas de la anulación (el mismo día, el turno abierto, las órdenes que vuelven a
+    `PENDIENTE`, el `PAGO_ANULADO`). El `PAGO_ANULADO` forjado para ella nace en otra transacción, así que muere y no se
+    envía. **Pero el acta queda, y el arqueo del turno resta su `importe`** (`LibroDelTurno.recibos` →
+    `ReciboDelTurno.anulado` → el neto de `ArqueoDelTurno` es el total menos lo anulado):
+    - el efectivo esperado baja, mientras el sistema de origen sigue teniendo esa deuda como pagada;
+    - **ese dinero puede salir del cajón y el cierre cuadra igual**;
+    - además, el recibo se ve anulado y la anulación legítima ya no se puede registrar (el único de `recibo_anulado`).
+
+    Solo lo ven la línea ERROR del detector y el `audit_log` de core. Cerrarlo exige la guarda de wasichai antes de
+    escribir (**wasichai#15**) o una firma del servidor en las filas que escribe caja (**#20**).
   - **Los cambios de estado de un evento**, por el UPDATE del supervisor (abajo): solo el detector y la auditoría de
     core.
   - **Quien escribe en la base directamente, o un `ADMIN`** que reescribiera el recibo y sus líneas: aquí no hay firma
@@ -934,6 +943,9 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   - poner `EXPLICADO` sin explicación, sin el candado y sin que el pago esté `MUERTO`;
   - pasar un `PENDIENTE` a `EXPLICADO`, para que nunca se entregue y su turno cierre;
   - volver un `ENTREGADO` a `PENDIENTE`, para que se entregue otra vez (el destino deduplica por `pagoId`);
+  - **cambiar a la vez el `evento_id` de un `PAGO_REGISTRADO` ya `ENTREGADO` y el `pagoId` de su cuerpo, y volverlo a
+    `PENDIENTE`**: la fila conserva su sello legítimo, pasa la defensa (a) (el cuerpo se compone con el `evento_id` de la
+    fila) y **se reenvía con otro `pagoId`**, lo que burla la deduplicación del destino. Es el mismo hueco (#20);
   - editar el `cuerpo` de un `PENDIENTE`.
 
   **Un cuerpo editado lo ataja la defensa (a)** al entregarlo: ya no se compone igual, así que muere y avisa (salvo la
