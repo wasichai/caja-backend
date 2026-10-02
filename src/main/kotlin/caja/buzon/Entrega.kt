@@ -49,6 +49,22 @@ sealed interface Respuesta {
     ) : Respuesta
 }
 
+// lo que contestó un sistema de origen a una LECTURA (GET {url}/pagos/conciliacion de la conciliación del día), sin
+// interpretar: su código y su cuerpo, ya tachado; o por qué no hubo respuesta; o que no hay a dónde preguntar. quien
+// pregunta decide qué es cada cosa, y ninguna de las tres es un cero
+sealed interface Lectura {
+    data class Contesto(
+        val estado: Int,
+        val cuerpo: String
+    ) : Lectura
+
+    data class NoContesta(
+        val motivo: String
+    ) : Lectura
+
+    data object SinDireccion : Lectura
+}
+
 // qué queda en la fila después de un intento
 enum class Marca { ENTREGADO, PENDIENTE, MUERTO }
 
@@ -137,7 +153,7 @@ private fun deCredencial(
 }
 
 // lo que mandó el destino, en una línea, sin credenciales y recortado: es lo único que dice por qué
-private fun contestado(
+internal fun contestado(
     cuerpo: String?,
     token: String?
 ): String {
