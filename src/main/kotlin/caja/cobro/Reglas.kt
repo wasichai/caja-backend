@@ -68,13 +68,20 @@ fun importe(valor: String?): BigDecimal {
         throw ValidationException("Importe inválido", "importe", "un decimal escrito con punto, como 10080.45")
     }
     val importe = BigDecimal(texto)
-    if (importe.signum() <= 0) throw ValidationException("Importe inválido", "importe", "debe ser mayor que 0")
-    if (importe.scale() > 2) throw ValidationException("Importe inválido", "importe", "a lo sumo 2 decimales")
-    if (importe.precision() - importe.scale() > ENTEROS_DEL_IMPORTE) {
-        throw ValidationException("Importe inválido", "importe", "a lo sumo $ENTEROS_DEL_IMPORTE dígitos enteros")
-    }
+    defectoDelImporte(importe)?.let { throw ValidationException("Importe inválido", "importe", it) }
     return importe
 }
+
+// lo que el alta rechaza de un importe ya leído, o null si vale. el cobro lo vuelve a mirar (motivoNoCobrable): una
+// orden escrita por la API genérica de wasichai no pasó por el alta (wasichai#15)
+fun defectoDelImporte(importe: BigDecimal?): String? =
+    when {
+        importe == null -> "no tiene importe"
+        importe.signum() <= 0 -> "debe ser mayor que 0"
+        importe.scale() > 2 -> "a lo sumo 2 decimales"
+        importe.precision() - importe.scale() > ENTEROS_DEL_IMPORTE -> "a lo sumo $ENTEROS_DEL_IMPORTE dígitos enteros"
+        else -> null
+    }
 
 fun fecha(
     valor: String?,

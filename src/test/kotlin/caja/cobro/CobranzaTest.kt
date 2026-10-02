@@ -90,6 +90,34 @@ class CobranzaTest {
         assertTrue(motivoNoCobrable(futura, hoy)!!.contains(futura.id!!))
     }
 
+    // una orden escrita por la API genérica no pasó por el alta (wasichai#15): el cobro vuelve a mirar su importe, y un
+    // importe que el alta habría rechazado es un dato roto, un 409 que nombra la orden. nunca un recibo en negativo
+    @Test
+    fun `una orden con el importe roto no se cobra, y se dice que es un dato roto y cual`() {
+        val rotas =
+            listOf("-50.00", "0", "0.00", "10.005", "10000000000000.00")
+                .map { orden(importe = BigDecimal(it)) } + orden().copy(importe = null)
+
+        rotas.forEach { rota ->
+            val motivo = motivoNoCobrable(rota, hoy)
+            assertTrue(motivo != null && motivo.contains("dato roto") && motivo.contains(rota.id!!), "${rota.importe}: $motivo")
+            val impedimento = impedimentosDelCobro(listOf(rota.id!!), mapOf(rota.id to rota), hoy).single()
+            assertTrue(impedimento is ConflictException, impedimento.toString())
+        }
+        // el mismo límite que el alta: 13 enteros y 2 decimales valen
+        assertNull(motivoNoCobrable(orden(importe = BigDecimal("9999999999999.99")), hoy))
+        assertNull(motivoNoCobrable(orden(importe = BigDecimal("0.01")), hoy))
+    }
+
+    @Test
+    fun `el importe roto es la regla del alta, con sus mismas palabras`() {
+        assertEquals("debe ser mayor que 0", defectoDelImporte(BigDecimal("-1")))
+        assertEquals("a lo sumo 2 decimales", defectoDelImporte(BigDecimal("1.001")))
+        assertEquals("a lo sumo $ENTEROS_DEL_IMPORTE dígitos enteros", defectoDelImporte(BigDecimal("10000000000000")))
+        assertNull(defectoDelImporte(BigDecimal("150.50")))
+        assertTrue(defectoDelImporte(null)!!.isNotBlank())
+    }
+
     // lo que impide cobrar unas órdenes: lo mismo para el cobro (que lanza el primero) y la vista previa (que los dice)
 
     @Test

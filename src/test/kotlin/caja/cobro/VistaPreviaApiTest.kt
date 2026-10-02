@@ -90,6 +90,43 @@ class VistaPreviaApiTest : CajaApiTest() {
         rejected("POST", VISTA_ORDENES, mapOf("ordenes" to listOf(rentas), "fecha_de_pago" to hoy.minusDays(1).toString()), "fecha_de_pago")
     }
 
+    // un SISTEMA_ORIGEN (o un ADMIN) puede escribir una orden por la API genérica, sin las reglas del alta (wasichai#15):
+    // un importe negativo, en cero, con tres decimales o de catorce enteros. el cobro la rechaza con un 409 «dato roto»
+    // que la nombra, y la vista previa lo dice en motivos: nunca un recibo en negativo, nunca un 500
+    @Test
+    fun `una orden con el importe roto escrita por fuera del alta no se cobra, y la vista previa lo dice sin un 500`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val origen = funcionario("SISTEMA_ORIGEN")
+        val rotas = listOf("-50.00", "0.00", "10.005", "12345678901234.00").map { ordenPorFuera(it, origen) }
+        val buena = post(ORDENES, orden("importe" to "20.00"))["orden_id"].asString()
+
+        rotas.forEach { rota ->
+            val problema =
+                tree(
+                    send(
+                        "POST",
+                        COBROS,
+                        mapOf("caja" to caja.codigo, "forma_pago" to "EFECTIVO", "ordenes" to listOf(rota, buena), "observacion" to "cobro en ventanilla"),
+                        HttpStatus.CONFLICT,
+                        cajero.token
+                    )
+                )
+            assertTrue(problema["detail"].asString().contains("dato roto") && problema["detail"].asString().contains(rota), problema.toString())
+            assertEquals("PENDIENTE", estadoDe(rota))
+        }
+        assertEquals("PENDIENTE", estadoDe(buena), "nada se cobró")
+        assertTrue(registros("recibo", "caja" to caja.id).isEmpty(), "ni un recibo")
+
+        val vista = vistaPrevia(VISTA_ORDENES, mapOf("ordenes" to rotas + buena), cajero.token)
+        assertFalse(vista["cobrable"].asBoolean())
+        val motivos = vista["motivos"].toList().map { it.asString() }
+        assertEquals(rotas.size, motivos.size, motivos.toString())
+        rotas.forEachIndexed { i, rota -> assertTrue(motivos[i].contains(rota) && motivos[i].contains("dato roto"), motivos.toString()) }
+        assertEquals(listOf(buena), vista["lineas"].toList().map { it["orden_id"].asString() })
+        assertEquals("20.00", vista["total"]["importe"].asString())
+    }
+
     @Test
     fun `la vista previa de unas tasas da sus precios vigentes y el total del recibo que se emite despues`() {
         val caja = nuevaCaja()
@@ -159,6 +196,27 @@ class VistaPreviaApiTest : CajaApiTest() {
         cuerpo: Map<String, Any?>,
         token: String
     ): JsonNode = tree(send("POST", ruta, cuerpo, HttpStatus.OK, token))
+
+    // una orden PENDIENTE y exigible escrita por la API genérica de core con ese token, sin pasar por el alta: su id
+    private fun ordenPorFuera(
+        importe: String,
+        token: String
+    ): String {
+        val referencia = "ROTA-${unico()}"
+        val atributos =
+            mapOf(
+                "sistema_origen" to "rentas",
+                "referencia_externa" to referencia,
+                "clave_origen" to "rentas|$referencia",
+                "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
+                "importe" to importe,
+                "fecha_exigibilidad" to hoy.minusDays(1).toString(),
+                "actualizado_a" to hoy.toString(),
+                "estado" to "PENDIENTE",
+                "observacion" to "escrita por la API genérica"
+            )
+        return tree(send("POST", "/api/objects/orden_de_cobro/records", mapOf("attributes" to atributos), HttpStatus.CREATED, token))["id"].asString()
+    }
 
     private fun estadoDe(orden: String): String =
         tree(send("GET", "/api/objects/orden_de_cobro/records/$orden", null, HttpStatus.OK))["attributes"]["estado"].asString()
