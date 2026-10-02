@@ -14,7 +14,9 @@ congela y la reversión que lo reabre, con el candado del turno que impide que u
 cierre en curso. Y **el buzón de salida**: el publicador que entrega cada pago y cada anulación al sistema de origen
 de sus órdenes (configurable y **apagado por defecto**), los pagos que no se pudieron entregar con la alerta a una
 persona con nombre, su explicación por escrito, y dos defensas frente a un evento inventado por la API genérica de
-wasichai.
+wasichai. Y **la recaudación y la conciliación**: el avance de recaudación por origen, la recaudación por área y partida
+(con lo que no tiene partida dicho aparte) y la conciliación del día contra el sistema de origen, que falla en voz alta
+cuando el origen no contesta: nunca ceros.
 
 | | |
 |---|---|
@@ -374,11 +376,14 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `POST /api/caja/recibos/{numero_impreso}/duplicados` | El duplicado en PDF, marcado y numerado, y lo registra (ver «El duplicado»): **201** `application/pdf`; **409** si ya no se dibuja igual. | CREATE sobre `reimpresion_recibo` (403 antes de empezar) |
 | `POST /api/caja/recibos/{numero_impreso}/anulacion` | Anula el recibo del día (ver «La anulación»): **201** con el acta. | CREATE sobre `anulacion_recibo` (403 antes de empezar); el recibo de otro cajero, además, el rol `SUPERVISOR_CAJA`; al escribir, core exige UPDATE sobre `orden_de_cobro` y CREATE sobre `pago_evento` |
 | `GET /api/caja/turnos/del-dia`     | Los turnos de hoy de quien pregunta y su situación (ver «El turno»). **No abre ningún turno**; cualquier parámetro es 400. | READ sobre `turno`, `caja`, `cierre_turno` y `reversion_cierre` |
-| `GET /api/caja/turnos/{turno_id}/arqueo` | El arqueo en vivo, las dos mitades del cuadre y lo que impide cerrar: **200**; **404** si el turno no existe, **400** si el id no es un uuid. | READ sobre `turno`, `recibo`, `anulacion_recibo`, `pago_evento`, `cierre_turno` y `reversion_cierre` |
+| `GET /api/caja/turnos/{turno_id}/arqueo` | El arqueo en vivo, las dos mitades del cuadre, lo que impide cerrar y, con el turno cerrado, `cierre_vigente`: el acta tal como se firmó. **200**; **404** si el turno no existe, **400** si el id no es un uuid. | READ sobre `turno`, `recibo`, `anulacion_recibo`, `pago_evento`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre` |
 | `POST /api/caja/turnos/cierre`     | Cierra el turno con su arqueo (ver «El cierre»): **201** con el acta. | CREATE sobre `cierre_turno` y `cierre_turno_linea` (403 antes de empezar) |
 | `POST /api/caja/turnos/reversion`  | Reversa el cierre vigente y reabre el turno (ver «La reversión»): **201**. | CREATE sobre `reversion_cierre` (403 antes de empezar): `SUPERVISOR_CAJA` |
 | `GET /api/caja/pagos/sin-entregar` | Los pagos `MUERTO`, del más antiguo al más reciente (ver «Los pagos sin entregar»): **200** con una lista. | READ sobre `pago_evento` y `recibo` (403 antes de empezar) |
 | `POST /api/caja/pagos/{pago_id}/explicacion` | Pasa un pago `MUERTO` a `EXPLICADO` con su `explicacion` y su `observacion`: **200** con el pago; **409** si no está `MUERTO`. | UPDATE sobre `pago_evento` (403 antes de empezar): `SUPERVISOR_CAJA` |
+| `GET /api/caja/recaudacion/avance` | Lo recaudado por origen en `?desde=&hasta=` (días del turno; por defecto, del 1 de enero a hoy), con `?origen=`, `?caja=` y `?cajero=`; con caja y cajero, además el arqueo en vivo de su turno de hoy (ver «La recaudación»): **200**; **404** sin ese turno; **400** con un rango al revés o una fecha mal escrita. | READ sobre `recibo` y `linea_recibo` (403 antes de empezar); al leer, core exige además `turno` y `anulacion_recibo` (y `caja`, `cierre_turno` y `reversion_cierre` con caja y cajero) |
+| `GET /api/caja/recaudacion/por-area` | Lo recaudado por área, partida y concepto en `?desde=&hasta=`, con `?area=` (el código o «COD — nombre»), y `neto_sin_partida`: **200**; **400** como el avance. | READ sobre `recibo`, `linea_recibo`, `area` y `tasa` (403 antes de empezar); al leer, además `turno` y `anulacion_recibo` |
+| `GET /api/caja/conciliacion` | La conciliación del día `?fecha=AAAA-MM-DD`, **obligatoria** (sin ella o mal escrita, **400** en `fecha`), contra el sistema de origen (ver «La conciliación del día»): **200**, también con el origen caído. | READ sobre `pago_evento` y `recibo` (403 antes de empezar); al leer, además `turno` |
 
 - **Claves snake_case**, las de los campos del modelo, en el cuerpo y en la respuesta.
 - **Errores en problem+json** (RFC 7807). Un 400 lleva `errors[]` con el `field` (la clave snake_case que falló) y su
@@ -494,6 +499,24 @@ El arqueo en vivo (`GET /api/caja/turnos/{turno_id}/arqueo`) lleva cada cifra co
  "lo_que_impide_cerrar": [{"pago_id": "…", "tipo": "PAGO_REGISTRADO", "estado": "PENDIENTE"}]}
 ```
 
+Con el turno **cerrado**, el arqueo lleva además `cierre_vigente`: el acta del último cierre vigente **tal como se
+guardó**, sin recalcular nada con los recibos de hoy. Así la pantalla de cierre muestra lo que se contó al cerrar
+después de recargar. Con el turno abierto (o reversado), `"cierre_vigente": null`. Sus cifras van a la fecha del turno:
+
+```json
+"cierre_vigente": {"cierre_id": "…", "secuencia": 1, "fecha": "2026-10-02", "registrado_en": "2026-10-02T18:30:05.123-05:00",
+                   "usuario": "ana@muni.gob.pe", "observacion": "cierre del turno de la mañana",
+                   "arqueo": {"lineas": [{"forma_pago": "EFECTIVO", "cobrado": {…}, "anulado": {…}, "neto": {…},
+                                          "declarado": {"importe": "180.00", "actualizado_a": "2026-10-02"},
+                                          "diferencia": {"importe": "-7.40", "actualizado_a": "2026-10-02"}}],
+                              "recibos_emitidos": 4, "recibos_anulados": 1, "total_cobrado": {…}, "total_anulado": {…},
+                              "neto": {…}, "total_declarado": {…}, "diferencia": {…}, "cuadra": false},
+                   "cobrado_con_evento": {…}, "cobrado_sin_evento": {…}}
+```
+
+La `diferencia` de cada línea es su `declarado` menos su `neto` guardados (el acta no guarda esa resta por línea), y
+`cuadra` es que la `diferencia` guardada del acta sea cero.
+
 El cierre recibe `{"caja", "cajero"?, "fecha"?, "declarado": {"EFECTIVO": "187.40", …}, "observacion"}` y contesta
 **201** con `cierre_id`, `turno_id`, `caja`, `cajero`, `fecha`, `secuencia`, `registrado_en`, `usuario`, `observacion`,
 `"estado_del_turno": "CERRADO"`, el `arqueo` (como el de en vivo, con `declarado`, `diferencia`, `total_declarado` y
@@ -501,6 +524,35 @@ El cierre recibe `{"caja", "cajero"?, "fecha"?, "declarado": {"EFECTIVO": "187.4
 "observacion"}` y contesta **201** con `reversion_id`, `turno_id`, `caja`, `cajero`, `fecha`, `secuencia`,
 `cierre_revertido`, `motivo`, `registrado_en`, `usuario`, `observacion` y `"estado_del_turno": "ABIERTO"`. El 409 de
 los pagos sin entregar lleva, además del `detail`, `"pagos_sin_entregar": [{"pago_id", "tipo", "estado"}]`.
+
+El avance (`GET /api/caja/recaudacion/avance`) contesta, con cada cifra a `a_la_fecha` (hoy):
+
+```json
+{"desde": "2026-10-01", "hasta": "2026-10-02", "a_la_fecha": "2026-10-02",
+ "filas": [{"origen": "rentas", "cobrado": {"importe": "370.50", "actualizado_a": "2026-10-02"},
+            "anulado": {"importe": "220.00", "actualizado_a": "2026-10-02"}, "neto": {"importe": "150.50", "actualizado_a": "2026-10-02"}},
+           {"origen": "TASA", "cobrado": {…}, "anulado": {…}, "neto": {…}}],
+ "cobrado": {…}, "anulado": {…}, "neto": {…},
+ "turno": null}
+```
+
+Con `caja` y `cajero`, `turno` es `{"turno_id", "caja", "cajero", "fecha", "estado_del_turno", "arqueo"}`, con el
+`arqueo` en vivo de su turno de hoy (el mismo de `GET /turnos/{turno_id}/arqueo`, sin declarado). La recaudación por
+área (`GET /api/caja/recaudacion/por-area`) contesta `{"desde", "hasta", "a_la_fecha", "filas": [{"area", "area_nombre",
+"partida", "concepto", "cobrado", "anulado", "neto"}], "neto", "neto_sin_partida"}`; en lo cobrado por órdenes, `area`,
+`area_nombre` y `partida` van en `null` y `concepto` es su sistema de origen; en una tasa, su código. La conciliación
+(`GET /api/caja/conciliacion?fecha=2026-10-02`):
+
+```json
+{"fecha": "2026-10-02", "a_la_fecha": "2026-10-03", "cuadra": false,
+ "lineas": [{"sistema_destino": "rentas", "registrados": 2, "anulados": 1, "en_transito": 0, "muertos": 0, "explicados": 0,
+             "cobrado": {"importe": "150.00", "actualizado_a": "2026-10-02"}, "anulado": {…}, "neto": {…},
+             "recibidos": null, "aplicados": null, "rechazados": null, "importe_aplicado": null, "diferencia": null,
+             "por_que_no_se_sabe": "rentas no contestó: ConnectException: …", "cuadra": false}]}
+```
+
+Con el origen contestando, `recibidos`, `aplicados` y `rechazados` son números, `importe_aplicado` y `diferencia` son
+`Importe` a la `fecha` conciliada, y `por_que_no_se_sabe` va en `null`.
 
 ## Reglas
 
@@ -724,8 +776,9 @@ pago y su total va entero a una línea, así que la suma de las partes es el tot
 `GET /api/caja/turnos/{turno_id}/arqueo` (`EstadoDelCierreController` de `caja`) es el arqueo **en vivo**, a hoy, sin
 lo declarado: `declarado`, `diferencia`, `total_declarado` y `cuadra` van en `null`, nunca en cero. Lleva las dos
 mitades, `estado_del_turno`, `puede_cerrar` (abierto y sin pagos que lo impidan) y `lo_que_impide_cerrar`: cada
-`pago_evento` del turno `PENDIENTE` o `MUERTO`, con su `pago_id`, su `tipo` y su `estado`. Lee en una sola foto
-(`Transaccion.lectura`).
+`pago_evento` del turno `PENDIENTE` o `MUERTO`, con su `pago_id`, su `tipo` y su `estado`. Con el turno cerrado lleva
+además `cierre_vigente`, el acta del último cierre vigente tal como se firmó (con el turno abierto, `null`). Lee en una
+sola foto (`Transaccion.lectura`).
 
 #### El cierre
 
@@ -924,7 +977,7 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
     - además, el recibo se ve anulado y la anulación legítima ya no se puede registrar (el único de `recibo_anulado`).
 
     Solo lo ven la línea ERROR del detector y el `audit_log` de core. Cerrarlo exige la guarda de wasichai antes de
-    escribir (**wasichai#15**) o una firma del servidor en las filas que escribe caja (**#20**).
+    escribir (**wasichai#15**) o una firma del servidor en las filas que escribe caja (**caja-backend#20**).
   - **Los cambios de estado de un evento**, por el UPDATE del supervisor (abajo): solo el detector y la auditoría de
     core.
   - **Quien escribe en la base directamente, o un `ADMIN`** que reescribiera el recibo y sus líneas: aquí no hay firma
@@ -945,7 +998,7 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   - volver un `ENTREGADO` a `PENDIENTE`, para que se entregue otra vez (el destino deduplica por `pagoId`);
   - **cambiar a la vez el `evento_id` de un `PAGO_REGISTRADO` ya `ENTREGADO` y el `pagoId` de su cuerpo, y volverlo a
     `PENDIENTE`**: la fila conserva su sello legítimo, pasa la defensa (a) (el cuerpo se compone con el `evento_id` de la
-    fila) y **se reenvía con otro `pagoId`**, lo que burla la deduplicación del destino. Es el mismo hueco (#20);
+    fila) y **se reenvía con otro `pagoId`**, lo que burla la deduplicación del destino. Es el mismo hueco (caja-backend#20);
   - editar el `cuerpo` de un `PENDIENTE`.
 
   **Un cuerpo editado lo ataja la defensa (a)** al entregarlo: ya no se compone igual, así que muere y avisa (salvo la
@@ -963,6 +1016,66 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   `null`. **Todo eso vive en una sola clase, `BuzonStore`**: es el único acceso a tablas físicas de caja (aparte de
   `Candados` y `CerrojoBuzon`, que solo toman candados). Lo que escribe no pasa por los `RecordChangeListener`.
 - **La API genérica es una segunda puerta** (**wasichai#15**): las dos defensas de arriba.
+
+### La recaudación y la conciliación
+
+`caja.recaudacion` (de `ConsultaDeRecaudacion`, `ConciliacionDelDia`, `RecaudacionRepositoryJdbc` y
+`AbonosAplicadosHttp` de `caja`, #36, RF-088, RF-089, ADR-0026 §3). Las tres rutas solo leen, como el usuario que llama,
+y cada una lee lo suyo de la base en **una sola foto** (`Transaccion.lectura`). Las agregaciones y la línea de la
+conciliación son **funciones puras** (`Recaudacion.kt` y `Conciliacion.kt`; `PurezaDeLaRecaudacionTest`), sin redondeo:
+repartir la recaudación no divide nada, así que **las partes suman el total al céntimo**.
+
+#### Los rangos van sobre la fecha del turno
+
+La recaudación de un día son los recibos de los **turnos** de ese día, no los de los instantes. `turno.fecha` es un día
+de Lima; `recibo.emitido_en` es un instante, y con él la frontera de la medianoche dependería de la zona de quien
+consulta: **un cobro de las nueve de la noche en Lima, que en UTC ya es del día siguiente, cuenta en su día**. Y el
+arqueo del turno usa la misma fecha, así que **la cifra del día cuadra con el arqueo del turno**: dos consultas, un solo
+número. Lo mismo la conciliación: cuenta los eventos de los turnos de esa `fecha`.
+
+#### El avance y la recaudación por área
+
+- **El avance agrupa por origen** (decisión 4): el `sistema_origen` de las órdenes, o `TASA` para los recibos de
+  tasas. El recibo no tiene tributo: lo que en `caja` guardaba la columna `tributo` (ADR-0045 §4).
+- **Lo anulado se resta, no se excluye.** Un recibo anulado cuenta en `cobrado` y su acta, el `importe` que congeló, en
+  `anulado`: es la cifra que resta el arqueo del turno. Un avance que solo mostrara el neto no podría explicar por qué
+  ayer decía más que hoy.
+- **Sin candados.** El avance se mira mientras el cajero cobra: una lectura que tomara el candado del turno pondría la
+  cola de la ventanilla a esperar por un informe. Un cierre en curso no lo detiene.
+- **El hueco de la partida se publica.** Solo una línea de tasa tiene área y partida (las de su `tasa`). **Lo cobrado
+  por órdenes no tiene partida**: no se rellena con la de la caja, ni con una constante, ni con «VARIOS». Va con `area`,
+  `area_nombre` y `partida` en `null` y suma en `neto_sin_partida`, para que quien lea el reporte vea que la suma de
+  las partidas no es la recaudación del periodo, y por qué.
+- **Solo cuentan las líneas del cobro**: las que llevan el sello de la transacción de su recibo (ver «La segunda
+  puerta»). Una `linea_recibo` agregada después por la API genérica no cambia el origen del recibo ni infla la
+  distribución. El total del avance es el del recibo, no la suma de sus líneas.
+- **El límite**: se agrega en la aplicación, sobre lo que core devuelve página por página (200 registros), no con un
+  `GROUP BY` en la base. Un rango de un año con mucho movimiento es lento; un agregado en la base necesitaría una lectura
+  física como `BuzonStore` o una agregación en wasichai.
+
+#### La conciliación del día
+
+Con la caja y el sistema de origen en dos bases, ningún cobro es atómico entre las dos: lo que sustituye a la atomicidad
+es **la conciliación**. **Exige el día**: una conciliación que se respondiera sola con la fecha del reloj no sería
+reproducible al día siguiente. Hay una línea por `sistema_destino` con eventos ese día:
+
+- **Lo que sale del buzón**, que la caja sabe sola: `registrados` y `anulados` (los `PAGO_REGISTRADO` y `PAGO_ANULADO`),
+  `en_transito` (los `PENDIENTE`), `muertos` y `explicados`, y `cobrado`, `anulado` y `neto`, de los totales de sus
+  recibos (un evento no lleva importe propio).
+- **Lo que sale del origen**: `GET {url}/pagos/conciliacion?fecha=` al destino de `caja.buzon.destinos.<sistema>`, con
+  su token y su `timeout` (`ClienteDelSistemaDeOrigen.leer`), **fuera de toda transacción**. Contesta `recibidos`,
+  `aplicados`, `rechazados` e `importe_aplicado` (en cadena; se lee también `importeAplicado`, como contesta hoy
+  `rentas`). `diferencia = neto − importe_aplicado`.
+- **Falla en voz alta.** Si el origen no contesta, contesta otro código, contesta algo que no se puede leer o no tiene
+  URL configurada, **sus campos y la `diferencia` van en `null`** y `por_que_no_se_sabe` dice por qué («el destino rentas
+  no está configurado…», «rentas no contestó: …»). **Nunca ceros**: un cero se leería como «no aplicaron nada», que es
+  indistinguible de un día sin cobros, y la conciliación diría que cuadra. La línea no cuadra, y el día tampoco. Lo que
+  sale del buzón se dice igual: un origen caído deja la conciliación incompleta, no ciega.
+- **`cuadra`**, por línea: nada en tránsito ni muerto, el origen contestó, la diferencia es cero y no hay rechazos. Un
+  día con la diferencia en cero y un pago en tránsito no cuadra: cuadra por casualidad. **El día cuadra** si cuadran
+  todas sus líneas, y un día sin cobros cuadra.
+
+Las cifras de la conciliación van a la `fecha` conciliada; `a_la_fecha` dice cuándo se leyó.
 
 ## Roles
 
@@ -1035,6 +1148,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado);
   `CierreDeTurnoTest`, la máquina de estados del turno y la situación del cajero; `TurnosTest`, lo que llega en las
   peticiones del turno; `PurezaDelTurnoTest`, que el arqueo y el cierre no dependen de Spring, del reloj ni de la base.
+  `RecaudacionTest` fija las agregaciones de la recaudación (el origen, el sello de las líneas, lo anulado que se resta,
+  las partes que suman el total, el hueco de la partida, el rango y el área de la petición); `ConciliacionTest`, la
+  línea de la conciliación (la diferencia, cuándo cuadra, lo que dice el origen y por qué no se sabe, sin ceros, y la
+  fecha obligatoria); `PurezaDeLaRecaudacionTest`, que no dependen de Spring, del reloj, de la base ni de la red.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
   `CAJERO`) y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
@@ -1076,7 +1193,14 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `PAGO_ANULADO` forjado antes que no impide entregar el legítimo**, la explicación que solo vale con un
   `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
   comprueba que apagado no arranca; `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y no ve lo que
-  escribe caja.
+  escribe caja. `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
+  un `Clock` movible y días lejanos propios: **ocho días que cuadran** con la línea y sus dos mitades, el día sin cobros
+  que cuadra, el origen que aplicó de menos o rechazó, el pago en tránsito, **el origen apagado y el destino sin
+  configurar, sin un solo cero** (recorre el JSON), la fecha obligatoria, **las partes que suman el total**, lo de una
+  orden sin partida, el filtro por área, la anulación que se resta, la línea forjada que no cuenta, **el cobro nocturno
+  que va a su día de Lima** y **la cifra del día que cuadra con el arqueo de su turno**, el 404 y los 400, **el avance
+  que no espera al candado de un cierre en curso** y los permisos. `CierreApiTest` comprueba además el `cierre_vigente`
+  del arqueo.
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
   Comprueba que la salud responde `UP`, que los módulos instalados (views, forms, pages) responden y los que se dejan
   fuera (workflow, documents, gis, automatización) dan 404, que una ruta bajo `/api/caja/**` sin token da 401 y que la
@@ -1087,4 +1211,19 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 
 ## Siguientes pasos (fuera de este alcance)
 
-- **Negocio:** la conciliación y la recaudación.
+- **La integración con `srtm-backend`**, el sistema de origen `rentas` reescrito: que reciba `POST /pagos` (el evento
+  del buzón) y conteste `GET /pagos/conciliacion?fecha=` con `recibidos`, `aplicados`, `rechazados` e
+  `importe_aplicado`, y que caja tenga su `caja.buzon.destinos.rentas` (url y token). Hoy solo se probó contra el
+  sistema de origen falso.
+- **`rentas.json` declara `ordenId` entero, y ahora es un UUID** en cadena: el contrato de `caja`
+  (`docs/50-api/contratos-que-consume/rentas.json`) y quien lo lea tienen que cambiar (ver «El evento
+  `PAGO_REGISTRADO`»).
+- **Los huecos de wasichai que se rodean aquí**, de wasichai#13 a wasichai#19:
+  - que `RecordService` se una a la transacción de quien llama esté documentado y probado (wasichai#13);
+  - unicidad compuesta, y el choque de un único como 409 con su campo (wasichai#14);
+  - objetos de solo agregar y una guarda antes de escribir, también para ADMIN y la API genérica (wasichai#15); con
+    ella se cierra caja-backend#20, el acta y el evento forjados;
+  - acciones propias además de las CRUD (wasichai#16): el `ESPECIAL` de anular el recibo ajeno;
+  - cuentas de servicio para los sistemas de origen (wasichai#17);
+  - trabajo de fondo con un principal y un candado de clúster (wasichai#18): el buzón;
+  - el motivo de un cambio en la auditoría (wasichai#19).

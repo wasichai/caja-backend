@@ -136,8 +136,8 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 **Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest`, `CajasApiTest`, `CobroApiTest`,
 `CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TransaccionTest`, `TasasApiTest`, `VistaPreviaApiTest`,
 `ReciboApiTest`, `AnulacionApiTest`, `OriginalEnUnaFotoApiTest`, `TurnoApiTest`, `CierreApiTest`,
-`CierreEnUnaTransaccionApiTest`, `BuzonApiTest`, `BucleDelBuzonApiTest`, `BuzonApagadoApiTest` y
-`GuardiaDeEscriturasApiTest`, con `@Tag("integration")`
+`CierreEnUnaTransaccionApiTest`, `BuzonApiTest`, `BucleDelBuzonApiTest`, `BuzonApagadoApiTest`,
+`GuardiaDeEscriturasApiTest` y `RecaudacionApiTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -174,6 +174,12 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   0,2 s. Las dos cierran su contexto con la clase (`@DirtiesContext`), y con él su bucle. **Una vuelta lee todo lo
   pendiente de la base compartida** (`por-vuelta` alto): los eventos de otras clases, sin destino configurado, solo
   suman intentos. Las alertas y el detector se leen en la salida con `OutputCaptureExtension`.
+- **La recaudación y la conciliación.** Suman TODO lo de un día de la base compartida, así que `RecaudacionApiTest`
+  cobra en días propios, lejos de hoy (entre 30 y 80 años, en un sitio distinto en cada corrida): su `Clock` `@Primary`
+  (`RelojMovible`) se pone en ese día y a esa hora de Lima (las 21:30, para el cobro nocturno). El mismo
+  `SistemaDeOrigenFalso` hace de origen: `conciliar(fecha, …)` le dice qué contesta a `GET /pagos/conciliacion?fecha=`
+  (404 si no se le dijo nada), y guarda cada consulta. Con el buzón apagado, los pagos se marcan `ENTREGADO` como admin.
+  Retiene un cierre en curso como `CierreApiTest`, para la prueba de la no contención.
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta
 `DOCKER_HOST`, pero lo busca en `localhost:<puerto publicado>`. Con un Docker remoto (otro servidor, o su socket
