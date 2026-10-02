@@ -31,7 +31,7 @@
     {
       "name": "SUPERVISOR_CAJA",
       "label": "Supervisor de caja",
-      "description": "Supervisa las ventanillas: cobra como el cajero y, además, anula recibos del día (también los de otro cajero), reimprime duplicados y reversa el cierre de su propio turno, que lo reabre. Nunca edita ni borra un recibo, su anulación, sus reimpresiones, un cierre ni su reversión.",
+      "description": "Supervisa las ventanillas: cobra como el cajero y, además, anula recibos del día (también los de otro cajero), reimprime duplicados y reversa el cierre de su propio turno, que lo reabre. Explica por escrito un pago que no se pudo entregar (MUERTO a EXPLICADO): es la única edición del buzón. Nunca edita ni borra un recibo, su anulación, sus reimpresiones, un cierre ni su reversión.",
       "permisos": {
         "area": ["READ"],
         "caja": ["READ"],
@@ -40,7 +40,7 @@
         "turno": ["READ", "CREATE"],
         "recibo": ["READ", "CREATE"],
         "linea_recibo": ["READ", "CREATE"],
-        "pago_evento": ["READ", "CREATE"],
+        "pago_evento": ["READ", "CREATE", "UPDATE"],
         "anulacion_recibo": ["READ", "CREATE"],
         "reimpresion_recibo": ["READ", "CREATE"],
         "cierre_turno": ["READ", "CREATE"],

@@ -61,10 +61,19 @@ class RolesJsonTests(unittest.TestCase):
     def test_nadie_edita_ni_borra_un_recibo_su_linea_su_evento_su_anulacion_ni_su_reimpresion(self):
         # el recibo es un papel con número correlativo que el contribuyente se lleva: no se corrige (V29 de caja). su
         # anulación y sus duplicados se agregan, y tampoco se corrigen
+        # la única excepción es la explicación de un pago sin entregar, más abajo
         for rol in self.roles.values():
             for objeto in ("recibo", "linea_recibo", "pago_evento", "anulacion_recibo", "reimpresion_recibo"):
                 for accion in ("UPDATE", "DELETE"):
+                    if (rol["name"], objeto, accion) == ("SUPERVISOR_CAJA", "pago_evento", "UPDATE"):
+                        continue
                     self.assertNotIn((objeto, accion), permisos(rol), rol["name"])
+
+    def test_solo_el_supervisor_edita_el_buzon_para_explicar_un_pago_sin_entregar(self):
+        # «nadie edita el buzón» tiene una sola excepción: el supervisor pasa un pago MUERTO a EXPLICADO, por escrito
+        # (ExplicarPagoSinEntregar de caja). el publicador marca la entrega sin pasar por los roles
+        editan = {rol["name"] for rol in self.roles.values() if ("pago_evento", "UPDATE") in permisos(rol)}
+        self.assertEqual(editan, {"SUPERVISOR_CAJA"})
 
     def test_nadie_edita_ni_borra_un_cierre_sus_lineas_ni_su_reversion(self):
         # regla 4: un cierre no se modifica ni se borra, se reversa con otro (V32 de caja). la reversión tampoco
@@ -73,12 +82,12 @@ class RolesJsonTests(unittest.TestCase):
                 for accion in ("UPDATE", "DELETE"):
                     self.assertNotIn((objeto, accion), permisos(rol), rol["name"])
 
-    def test_el_supervisor_de_caja_cobra_como_el_cajero_y_ademas_anula_reimprime_y_reversa(self):
+    def test_el_supervisor_de_caja_cobra_como_el_cajero_y_ademas_anula_reimprime_reversa_y_explica(self):
         # crear una anulacion_recibo es el privilegio ELIMINACION de caja; crear una reimpresion_recibo, IMPRESION; crear
         # una reversion_cierre, ELIMINACION de cierre_caja
         self.assertEqual(permisos(self.roles["SUPERVISOR_CAJA"]),
                          permisos(self.roles["CAJERO"]) | {("anulacion_recibo", "CREATE"), ("reimpresion_recibo", "CREATE"),
-                                                           ("reversion_cierre", "CREATE")})
+                                                           ("reversion_cierre", "CREATE"), ("pago_evento", "UPDATE")})
 
     def test_tesoreria_lee_cada_objeto_del_modelo(self):
         # un objeto nuevo en model.json sin su READ para tesorería hace fallar esta prueba
