@@ -134,6 +134,23 @@ class ConciliacionTest {
         }
 
         @Test
+        fun `un importe sin decimales se lee con la escala de un importe, y la diferencia tambien`() {
+            val linea = lineaDe(recuento(), dia, Lectura.Contesto(200, """{"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"100"}"""))
+
+            assertEquals("100.00", linea.aplicado!!.importeAplicado.toPlainString())
+            assertEquals("0.00", linea.diferencia!!.toPlainString())
+            assertTrue(linea.cuadra())
+            assertEquals(
+                "99.50",
+                lineaDe(
+                    recuento(),
+                    dia,
+                    Lectura.Contesto(200, """{"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"0.5"}""")
+                ).diferencia!!.toPlainString()
+            )
+        }
+
+        @Test
         fun `se lee tambien importeAplicado, como lo contesta hoy rentas`() {
             val linea = lineaDe(recuento(), dia, Lectura.Contesto(200, """{"recibidos":1,"aplicados":1,"rechazados":0,"importeAplicado":"100.00"}"""))
 
@@ -156,7 +173,7 @@ class ConciliacionTest {
             assertNull(linea.aplicado)
             assertNull(linea.diferencia)
             assertTrue(linea.porQueNoSeSabe!!.startsWith("el destino rentas no está configurado"), linea.porQueNoSeSabe)
-            assertTrue(linea.porQueNoSeSabe!!.contains("caja.buzon.destinos.rentas.url"), linea.porQueNoSeSabe)
+            assertTrue(linea.porQueNoSeSabe.contains("caja.buzon.destinos.rentas.url"), linea.porQueNoSeSabe)
         }
 
         @Test
@@ -189,7 +206,14 @@ class ConciliacionTest {
                 """{"recibidos":1.5,"aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""" to "recibidos",
                 """{"recibidos":"1","aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""" to "recibidos",
                 """{"fecha":"2026-10-01","recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""" to "2026-10-01",
-                "[]" to "JSON"
+                "[]" to "JSON",
+                // una fecha que no es una cadena: el motivo la nombra, y la conciliación no revienta
+                """{"fecha":{"dia":2},"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""" to "{\"dia\":2}",
+                """{"fecha":["2026-10-02"],"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""" to "fecha",
+                // un entero que no cabe en un long
+                """{"recibidos":99999999999999999999999,"aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""" to "recibidos",
+                // más de dos decimales: un importe no tiene milésimos, y la diferencia no puede decir -0.003
+                """{"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"100.003"}""" to "2 decimales"
             ).forEach { (cuerpo, dice) ->
                 val linea = lineaDe(recuento(), dia, Lectura.Contesto(200, cuerpo))
                 assertNull(linea.aplicado, cuerpo)

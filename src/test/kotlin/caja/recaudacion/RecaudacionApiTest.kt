@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Primary
 import org.springframework.http.HttpStatus
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.test.context.TestPropertySource
 import tools.jackson.databind.JsonNode
 import wasichai.core.data.RecordChange
 import wasichai.core.data.RecordChangeKind
@@ -42,6 +43,7 @@ import java.util.concurrent.atomic.AtomicReference
 // PR 8 (MockWebServer), que contesta la conciliación de cada día. el reloj de esta clase se mueve: cada prueba cobra en
 // días suyos, lejos de hoy, porque la base es compartida y la recaudación y la conciliación de un día suman TODO lo de
 // ese día. el buzón está apagado: los pagos se marcan ENTREGADO como admin, como lo haría el publicador
+@TestPropertySource(properties = ["caja.buzon.timeout=2s"])
 class RecaudacionApiTest : CajaApiTest() {
     @TestConfiguration
     class DeLaPrueba {
@@ -386,13 +388,114 @@ class RecaudacionApiTest : CajaApiTest() {
 
     @Test
     fun `con caja y cajero sin turno de hoy es 404, y un rango al reves o mal escrito es 400`() {
-        val caja = nuevaCaja()
-        val problema = tree(send("GET", "$AVANCE?caja=${caja.codigo}&cajero=nadie@caja.test", null, HttpStatus.NOT_FOUND))
-        assertTrue(problema["detail"].asString().contains("nadie@caja.test"), problema.toString())
+        val dia = diasNuevos(1).single()
+        enElDia(dia)
+        val (suya, otra) = nuevaCaja() to nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val codigo = codigoDeTasa()
+        nuevaTasa(codigo, "12.30", dia.minusDays(1))
+        cobrarTasa(suya, cajero, codigo)
+
+        // la caja existe y el cajero cobró hoy, pero en otra: no hay turno que arquear
+        val problema = tree(send("GET", "$AVANCE?caja=${otra.codigo}&cajero=${cajero.email}", null, HttpStatus.NOT_FOUND))
+        assertTrue(problema["detail"].asString().contains(cajero.email), problema.toString())
         rejected("GET", "$AVANCE?desde=2026-03-31&hasta=2026-03-01", null, "hasta")
         rejected("GET", "$AVANCE?desde=31/03/2026", null, "desde")
         rejected("GET", "$POR_AREA?desde=2026-03-31&hasta=2026-03-01", null, "hasta")
         rejected("GET", "$POR_AREA?hasta=marzo", null, "hasta")
+    }
+
+    @Test
+    fun `una caja o un cajero que no existen son 400 en su campo, no un avance en cero`() {
+        val dia = diasNuevos(1).single()
+        val caja = nuevaCaja()
+
+        val sinCaja = rejected("GET", "$AVANCE?desde=$dia&hasta=$dia&caja=NO-EXISTE", null, "caja")
+        assertTrue(sinCaja["errors"][0]["message"].asString().contains("NO-EXISTE"), sinCaja.toString())
+        val sinCajero = rejected("GET", "$AVANCE?desde=$dia&hasta=$dia&cajero=nadie@caja.test", null, "cajero")
+        assertTrue(sinCajero["errors"][0]["message"].asString().contains("nadie@caja.test"), sinCajero.toString())
+        // los dos a la vez, juntos; y con la caja que sí existe solo falla el cajero
+        val ambos = tree(send("GET", "$AVANCE?caja=NO-EXISTE&cajero=nadie@caja.test", null, HttpStatus.BAD_REQUEST))
+        assertEquals(listOf("caja", "cajero"), ambos["errors"].toList().map { it["field"].asString() })
+        rejected("GET", "$AVANCE?caja=${caja.codigo}&cajero=nadie@caja.test", null, "cajero")
+    }
+
+    // de las páginas: core lee de a 200 y ordena por created_at, que las líneas de un recibo comparten
+
+    @Test
+    fun `cada linea se cuenta una sola vez aunque las de un recibo queden a los dos lados de una pagina`() {
+        val dia = diasNuevos(1).single()
+        enElDia(dia)
+        // 23 tasas de 1.01 a 1.23, y 40 recibos con las 23, cobrados a la vez en 8 cajas: 920 líneas, cinco páginas de
+        // 200. las 23 líneas de un recibo comparten su created_at (el sello de su transacción), y los cobros simultáneos
+        // las dejan intercaladas en la tabla: un ORDER BY created_at sin desempate puede repetir unas y saltarse otras
+        // entre una página y la siguiente. cada precio es distinto, así que una línea repetida u omitida se nota
+        val precios = (1..23).map { BigDecimal(100 + it).movePointLeft(2) }
+        val codigos = precios.map { precio -> codigoDeTasa().also { nuevaTasa(it, precio.toPlainString(), dia.minusDays(1)) } }
+        val ventanillas = (1..8).map { nuevaCaja() to cuenta("CAJERO") }
+        val hilos = Executors.newFixedThreadPool(ventanillas.size)
+        try {
+            ventanillas
+                .map { (caja, cajero) -> hilos.submit { repeat(5) { cobrarTasas(caja, cajero, codigos) } } }
+                .forEach { it.get(300, TimeUnit.SECONDS) }
+        } finally {
+            hilos.shutdownNow()
+        }
+        val recibos = ventanillas.flatMap { (caja, _) -> registros("recibo", "caja" to caja.id) }
+        assertEquals(40, recibos.size, "la premisa: 40 recibos")
+        assertEquals(920, recibos.sumOf { registros("linea_recibo", "recibo" to it["id"].asString()).size }, "la premisa: 920 líneas")
+
+        val avance = avance("desde=$dia&hasta=$dia")
+        val porArea = porArea("desde=$dia&hasta=$dia")
+
+        assertEquals(listOf("TASA 1030.40 0.00 1030.40"), filas(avance, "origen"))
+        assertEquals("1030.40", cifra(porArea["neto"], hoy), "la distribución suma exactamente lo mismo que el avance")
+        assertEquals(
+            codigos.zip(precios).map { (codigo, precio) -> "$codigo ${precio.multiply(BigDecimal(40)).toPlainString()}" }.sorted(),
+            porArea["filas"].toList().map { "${it["concepto"].asString()} ${cifra(it["cobrado"], hoy)}" }.sorted(),
+            "cada línea, una sola vez"
+        )
+    }
+
+    // del cliente del origen: el token, su tachadura y el origen colgado
+
+    @Test
+    fun `el token va en la cabecera de la consulta, no sale en el motivo, y un origen colgado agota su timeout`() {
+        val (conToken, conEco, colgado) = diasNuevos(3)
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        listOf(conToken to TOKEN_SISTEMA, conEco to TOKEN_SISTEMA, colgado to LENTO).forEach { (dia, sistema) ->
+            enElDia(dia)
+            entregar(cobrarOrden(caja, cajero, sistema, "100.00").pagoId)
+        }
+        origen.conciliar(conToken, 1, 1, 0, "100.00")
+        // el eco del token en las formas que tacha el patrón (cabecera, Bearer, token=) y suelto, que solo tacha el token
+        // configurado
+        origen.conciliar(conEco, 503, """{"detail":"no autorizado: $TOKEN","eco":"Authorization: Bearer $TOKEN","token":"$TOKEN"}""")
+        origen.conciliar(
+            colgado,
+            200,
+            """{"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"100.00"}""",
+            demora = Duration.ofSeconds(8)
+        )
+
+        assertTrue(conciliacion(conToken)["cuadra"].asBoolean())
+        val consulta = origen.consultadas.single { it.first == "/con-token/pagos/conciliacion?fecha=$conToken" }
+        assertEquals("Bearer $TOKEN", consulta.second)
+
+        val eco = conciliacion(conEco)["lineas"].single()
+        val motivo = eco["por_que_no_se_sabe"].asString()
+        assertTrue(motivo.startsWith("$TOKEN_SISTEMA no contestó: ") && motivo.contains("503") && motivo.contains("no autorizado"), motivo)
+        assertFalse(motivo.contains(TOKEN), "el token no sale en el motivo: $motivo")
+        assertFalse(eco.toString().contains(TOKEN), eco.toString())
+
+        val antes = Instant.now()
+        val lento = conciliacion(colgado)["lineas"].single()
+        val espera = Duration.between(antes, Instant.now())
+        assertTrue(espera < Duration.ofSeconds(6), "esperó el timeout (2 s), no la respuesta (8 s): $espera")
+        assertTrue(lento["por_que_no_se_sabe"].asString().startsWith("$LENTO no contestó: "), lento.toString())
+        assertTrue(lento["por_que_no_se_sabe"].asString().contains("Timeout"), lento.toString())
+        CAMPOS_DEL_ORIGEN.forEach { assertTrue(lento[it].isNull, "$it: $lento") }
     }
 
     // de la no contención (CierreDeCajaJdbcTest.DeLaNoContencion)
@@ -504,6 +607,22 @@ class RecaudacionApiTest : CajaApiTest() {
             cajero.token
         )["recibo"]["numero_impreso"].asString()
 
+    // un recibo de tasas con una línea por código
+    private fun cobrarTasas(
+        caja: CajaDePrueba,
+        cajero: Cuenta,
+        codigos: List<String>
+    ) = post(
+        TASAS,
+        mapOf(
+            "caja" to caja.codigo,
+            "forma_pago" to "EFECTIVO",
+            "conceptos" to codigos.map { mapOf("codigo" to it, "cantidad" to 1) },
+            "observacion" to "cobro de tasas en ventanilla"
+        ),
+        cajero.token
+    )
+
     // la anulación del recibo, por un supervisor: el acta, con el pago_anulado_id de su PAGO_ANULADO (null en un recibo
     // de tasas)
     private fun anular(numero: String): JsonNode = post("/api/caja/recibos/$numero/anulacion", ANULACION, funcionario("SUPERVISOR_CAJA"))
@@ -576,6 +695,9 @@ class RecaudacionApiTest : CajaApiTest() {
         const val OK = "conc-ok"
         const val CAIDO = "conc-caido"
         const val SIN_URL = "conc-sin-url"
+        const val TOKEN_SISTEMA = "conc-token"
+        const val LENTO = "conc-lento"
+        const val TOKEN = "el-token-de-la-conciliacion"
         val CAMPOS_DEL_ORIGEN = listOf("recibidos", "aplicados", "rechazados", "importe_aplicado", "diferencia")
         val ANULACION = mapOf("motivo" to "COBRO EN DEMASÍA", "observacion" to "el pagador pagó dos veces en ventanilla")
 
@@ -594,6 +716,9 @@ class RecaudacionApiTest : CajaApiTest() {
             registro.add("caja.buzon.destinos.$OK.url") { origen.url() }
             // nadie escucha en el puerto 1: la conexión se rechaza
             registro.add("caja.buzon.destinos.$CAIDO.url") { "http://127.0.0.1:1" }
+            registro.add("caja.buzon.destinos.$TOKEN_SISTEMA.url") { origen.url("con-token") }
+            registro.add("caja.buzon.destinos.$TOKEN_SISTEMA.token") { TOKEN }
+            registro.add("caja.buzon.destinos.$LENTO.url") { origen.url("lento") }
         }
 
         @JvmStatic

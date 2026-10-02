@@ -5,9 +5,11 @@ import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import tools.jackson.databind.json.JsonMapper
+import java.time.Duration
 import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 
 // el buzón de entrada de un sistema de origen, por http de verdad (MockWebServer): contesta a cada pago lo que la
 // prueba le diga por su pagoId (503 si no le dijo nada) y guarda lo que recibió. alRecibir corre mientras el
@@ -19,6 +21,7 @@ class SistemaDeOrigenFalso : AutoCloseable {
     private val respuestas = ConcurrentHashMap<String, Pair<Int, String>>()
     val recibidas = CopyOnWriteArrayList<Recibida>()
     private val conciliaciones = ConcurrentHashMap<String, Pair<Int, String>>()
+    private val demoras = ConcurrentHashMap<String, Duration>()
 
     // cada GET que llegó, con su ruta y su consulta, y la cabecera Authorization
     val consultadas = CopyOnWriteArrayList<Pair<String, String?>>()
@@ -80,19 +83,24 @@ class SistemaDeOrigenFalso : AutoCloseable {
         """{"fecha":"$fecha","recibidos":$recibidos,"aplicados":$aplicados,"rechazados":$rechazados,"importe_aplicado":"$importeAplicado"}"""
     )
 
+    // demora: cuánto tarda en empezar a contestar, para el origen colgado
     fun conciliar(
         fecha: LocalDate,
         estado: Int,
-        cuerpo: String
+        cuerpo: String,
+        demora: Duration = Duration.ZERO
     ) {
         conciliaciones[fecha.toString()] = estado to cuerpo
+        demoras[fecha.toString()] = demora
     }
 
     private fun conciliacion(request: RecordedRequest): MockResponse {
         consultadas += "${request.url.encodedPath}?${request.url.encodedQuery}" to request.headers["Authorization"]
-        val (estado, cuerpo) = conciliaciones[request.url.queryParameter("fecha")] ?: (404 to "")
+        val fecha = request.url.queryParameter("fecha")
+        val (estado, cuerpo) = conciliaciones[fecha] ?: (404 to "")
         return MockResponse
             .Builder()
+            .headersDelay(demoras[fecha]?.toMillis() ?: 0, TimeUnit.MILLISECONDS)
             .code(estado)
             .setHeader("Content-Type", "application/json")
             .body(cuerpo)

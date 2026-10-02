@@ -24,7 +24,9 @@ import caja.turno.EstadoDelTurno
 import caja.turno.LibroDelTurno
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
+import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException
+import wasichai.core.common.ValidationException
 import wasichai.core.data.RecordCriterion
 import wasichai.core.identity.CurrentUser
 import wasichai.core.platform.SqlIdentifier
@@ -76,10 +78,19 @@ class ConsultaDeRecaudacion(
         val laCaja = caja?.trim()?.ifEmpty { null }
         val elCajero = cajero?.trim()?.ifEmpty { null }
         return transaccion.lectura {
+            // una caja o un cajero que no existen son un 400 en su campo, no un avance en cero: una errata se leería como
+            // «no cobró nada». un cajero existe para la caja si abrió algún turno, cualquier día
+            val errores = mutableListOf<FieldViolation>()
             val cajaLeida = laCaja?.let { registros.primero(CAJA, Caja::class.java, mapOf("codigo" to it)) }
-            val turno = if (laCaja != null && elCajero != null) turnoDeHoy(laCaja, cajaLeida, elCajero, hoy) else null
-            val recibos =
-                if (laCaja != null && cajaLeida == null) emptyList() else leidos(rango, cajaLeida?.id, elCajero)
+            if (laCaja != null && cajaLeida == null) {
+                errores += FieldViolation("caja", "no hay ninguna caja con el código '$laCaja'")
+            }
+            if (elCajero != null && registros.count(TURNO, mapOf("cajero" to elCajero)) == 0L) {
+                errores += FieldViolation("cajero", "'$elCajero' no abrió ningún turno, ningún día: no hay nada suyo que sumar")
+            }
+            if (errores.isNotEmpty()) throw ValidationException("El avance no es válido", errores)
+            val turno = if (cajaLeida != null && elCajero != null) turnoDeHoy(laCaja, cajaLeida, elCajero, hoy) else null
+            val recibos = leidos(rango, cajaLeida?.id, elCajero)
             val avance = Avance.de(recibos.filter { esDelOrigen(it.origen, origen) })
             AvanceRespuesta(
                 desde = rango.desde.toString(),
@@ -210,15 +221,15 @@ class ConsultaDeRecaudacion(
     }
 
     // el turno de hoy de ese cajero en esa caja, con su arqueo en vivo: el mismo de GET /turnos/{id}/arqueo, sin
-    // declarado, reusando ArqueoDelTurno. sin ese turno (o sin esa caja), 404
+    // declarado, reusando ArqueoDelTurno. sin ese turno, 404
     private suspend fun turnoDeHoy(
         codigo: String,
-        caja: Caja?,
+        caja: Caja,
         cajero: String,
         hoy: LocalDate
     ): TurnoDelAvance {
         val turno =
-            caja?.let { registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveDelTurno(it.id!!, cajero, hoy))) }
+            registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveDelTurno(caja.id!!, cajero, hoy)))
                 ?: throw NotFoundException(
                     "El cajero '$cajero' no abrió turno en la caja '$codigo' el $hoy: no hay nada que arquear, y un arqueo en ceros " +
                         "haría pensar que abrió y no cobró"

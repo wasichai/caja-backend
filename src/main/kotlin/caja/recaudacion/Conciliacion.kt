@@ -146,6 +146,8 @@ fun lineaDe(
                     LineaDeConciliacion(recuento, aplicadoDe(lectura.cuerpo, dia), null)
                 } catch (e: IllegalArgumentException) {
                     noSeSabe(recuento, "$noContesto una conciliación que se pueda leer: ${e.message}")
+                } catch (e: JacksonException) {
+                    noSeSabe(recuento, "$noContesto una conciliación que se pueda leer: ${e.javaClass.simpleName}")
                 }
             }
     }
@@ -169,13 +171,17 @@ private fun aplicadoDe(
             null
         }
     require(json != null && json.isObject) { "su respuesta no es un objeto JSON: ${contestado(cuerpo, token = null)}" }
+    // cada valor del otro sistema se nombra con toString(): asString() sobre un objeto o una lista lanza, y una respuesta
+    // mal formada tiene que acabar en «no se sabe», no en un 500 de toda la conciliación
     json["fecha"]?.takeUnless { it.isNull }?.let { fecha ->
-        require(fecha.isString && fecha.asString() == dia.toString()) { "contestó por el día ${fecha.asString()} y se le preguntó por el $dia" }
+        require(fecha.isString && fecha.asString() == dia.toString()) { "contestó con la fecha $fecha y se le preguntó por el $dia" }
     }
 
     fun cuenta(campo: String): Long {
         val valor = json[campo]
-        require(valor != null && valor.isIntegralNumber && valor.asLong() >= 0) { "$campo no es un número entero no negativo (${valor ?: "falta"})" }
+        require(valor != null && valor.isIntegralNumber && valor.canConvertToLong() && valor.asLong() >= 0) {
+            "$campo no es un número entero no negativo (${valor ?: "falta"})"
+        }
         return valor.asLong()
     }
     val recibidos = cuenta("recibidos")
@@ -184,8 +190,12 @@ private fun aplicadoDe(
     val importe: JsonNode? = json["importe_aplicado"] ?: json["importeAplicado"]
     require(importe != null && !importe.isNull) { "falta importe_aplicado" }
     require(importe.isString) { "importe_aplicado llega como ${importe.nodeType} y no en cadena: un importe no viaja como número (regla 1)" }
-    require(DECIMAL.matches(importe.asString())) { "importe_aplicado no es un decimal sin signo escrito con punto: «${importe.asString()}»" }
-    return AplicadoEnElOrigen(recibidos, aplicados, rechazados, BigDecimal(importe.asString()))
+    val texto = importe.asString()
+    require(DECIMAL.matches(texto)) { "importe_aplicado no es un decimal sin signo escrito con punto: «$texto»" }
+    require(BigDecimal(texto).scale() <= 2) { "importe_aplicado tiene más de 2 decimales: «$texto»; un importe no tiene milésimos" }
+    // con la escala de un importe: «100» se lee 100.00, sin redondear nada (sumar el cero de dos decimales solo agrega
+    // ceros), y la diferencia sale como las demás cifras
+    return AplicadoEnElOrigen(recibidos, aplicados, rechazados, BigDecimal(texto).add(CERO))
 }
 
 // la petición: la conciliación EXIGE EL DÍA. sin él habría que elegir uno («hoy»), y una conciliación que se responde
