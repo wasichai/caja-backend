@@ -35,7 +35,14 @@ class Registros(
         return PageResponse(result.content.map { read(type, it) }, result.page, result.size, result.totalElements, result.totalPages)
     }
 
-    // cada registro que coincide, página por página: para los pocos de un pagador y los catálogos
+    // cada registro que coincide, página por página (los de un recibo, los de un turno, los de un rango de días).
+    //
+    // LAS PÁGINAS VAN POR id, nunca por la clave pedida. core ordena por una sola columna (created_at por defecto) y
+    // pagina con LIMIT/OFFSET; sobre una columna con empates, postgres no garantiza el mismo orden de los empatados de
+    // una consulta a otra, así que una fila puede salir en dos páginas y otra en ninguna. y los empates son lo normal:
+    // todo lo que escribe una transacción de caja lleva el mismo created_at (las líneas de un recibo). una suma hecha
+    // sobre esas páginas contaba unas líneas dos veces y otras ninguna (RecaudacionApiTest). el id es único: cada fila
+    // sale una vez. si se pide un orden, se aplica después, sobre todo lo leído, con el id como desempate
     suspend fun <T : Any> all(
         objectName: String,
         type: Class<T>,
@@ -52,8 +59,7 @@ class Registros(
                     objectName,
                     RecordQuery(
                         page = PageRequest.of(page, PageRequest.MAX_SIZE),
-                        sort = sort,
-                        descending = descending,
+                        sort = POR_ID,
                         filters = filters,
                         criteria = criteria
                     )
@@ -61,7 +67,7 @@ class Registros(
             rows += result.content
             page++
         } while (page < result.totalPages)
-        return rows.map { read(type, it) }
+        return enOrden(rows, sort, descending).map { read(type, it) }
     }
 
     // el primero que cumple los filtros en ese orden, o null
@@ -174,6 +180,44 @@ class Registros(
     ) = soloEscribibles(metadata.definitionOf(objectName), attributes)
 
     companion object {
+        // la única columna única por la que core sabe ordenar
+        private const val POR_ID = "id"
+
+        // lo leído en el orden pedido, como lo haría postgres (ascendente con los null al final; descendente al revés),
+        // y los empatados por id: dos lecturas iguales salen iguales. sin orden pedido, el de las páginas (por id)
+        internal fun enOrden(
+            rows: List<RecordResponse>,
+            sort: String?,
+            descending: Boolean
+        ): List<RecordResponse> {
+            val clave = sort?.trim()?.lowercase()?.ifEmpty { null } ?: return rows
+            val ascendente =
+                Comparator<RecordResponse> { a, b ->
+                    val x = valorDe(a, clave)
+                    val y = valorDe(b, clave)
+                    when {
+                        x == null && y == null -> 0
+                        x == null -> 1
+                        y == null -> -1
+                        else ->
+                            @Suppress("UNCHECKED_CAST")
+                            (x as Comparable<Any>).compareTo(y)
+                    }
+                }.thenBy { it.id }
+            return rows.sortedWith(if (descending) ascendente.reversed() else ascendente)
+        }
+
+        private fun valorDe(
+            row: RecordResponse,
+            clave: String
+        ): Any? =
+            when (clave) {
+                "id" -> row.id
+                "created_at" -> row.createdAt
+                "updated_at" -> row.updatedAt
+                else -> row.attributes[clave]
+            }
+
         // el instante en que core creó el registro, como created_at: un dto que lo quiere (el pago_evento, cuya hora es la
         // del tránsito) lo declara; los demás lo ignoran. un campo del modelo con ese nombre ganaría
         private fun creadoEn(response: RecordResponse): Map<String, Any?> =
