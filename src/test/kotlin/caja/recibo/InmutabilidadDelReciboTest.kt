@@ -25,8 +25,8 @@ class InmutabilidadDelReciboTest {
             "reversion_cierre"
         )
 
-    // una escritura que cambia o borra (Registros.replace, RecordService.update, delete, Listas.cambiar/borrar) cuyo
-    // primer argumento nombra un objeto inmutable, por su constante o por su nombre
+    // una escritura que cambia o borra (Registros.replace, RecordService.update o delete, o una ayuda que las envuelva)
+    // cuyo primer argumento nombra un objeto inmutable, por su constante o por su nombre
     private val cambio =
         Regex(
             "\\b(replace|update|delete|cambiar|borrar)\\(\\s*(" +
@@ -51,6 +51,23 @@ class InmutabilidadDelReciboTest {
         val (explicacion, resto) = hallazgos.partition { it.contains("caja/buzon/ExplicarPagoSinEntregar.kt") && it.contains("replace(PAGO_EVENTO,") }
         assertEquals(emptyList<String>(), resto)
         assertEquals(1, explicacion.size, "la explicación de un pago sin entregar, y solo ella: $explicacion")
+    }
+
+    // caja no borra nada: ni una puerta para borrar en src/main (un records.delete, un Registros.delete o una ayuda que
+    // los envuelva, como la Listas de srtm), aunque hoy nadie la llame. una puerta latente es la que alguien usa mañana
+    @Test
+    fun `src main no tiene ninguna puerta para borrar`() {
+        val borrar = Regex("\\.delete\\(|fun (<[^>]*> )?(delete|borrar|cambiar)\\(")
+        val hallazgos =
+            File("src/main/kotlin")
+                .walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .flatMap { fuente ->
+                    fuente.readLines().mapIndexedNotNull { i, linea ->
+                        if (borrar.containsMatchIn(linea)) "${fuente.path}:${i + 1}: ${linea.trim()}" else null
+                    }
+                }.toList()
+        assertEquals(emptyList<String>(), hallazgos)
     }
 
     @Test

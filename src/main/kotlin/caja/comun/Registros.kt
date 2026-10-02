@@ -20,7 +20,8 @@ import java.util.UUID
 // Transaccion.en se une a la transacción en curso y se confirma con ella (la cobranza). un dto lleva
 // todos sus campos, y core rechaza la escritura entera que nombra un campo que el usuario no puede escribir: las
 // escrituras mandan solo los escribibles. cada escritura lleva la marca EscrituraDeCaja: es la api de caja, y
-// GuardiaDeEscrituras no la anota
+// GuardiaDeEscrituras no la anota. NO HAY delete: caja no borra nada (un recibo se anula, un cierre se reversa), y una
+// puerta para borrar que nadie llama es la que alguien usa mañana (InmutabilidadDelReciboTest)
 @Component
 class Registros(
     private val records: RecordService,
@@ -145,11 +146,6 @@ class Registros(
         val stored = records.get(objectName, id).attributes
         return withContext(EscrituraDeCaja) { read(type, records.update(objectName, id, RecordRequest(escribibles(objectName, stored + attributes)))) }
     }
-
-    suspend fun delete(
-        objectName: String,
-        id: UUID
-    ) = withContext(EscrituraDeCaja) { records.delete(objectName, id) }
 
     // el valor más alto que guarda un campo. los null quedan fuera: postgres los ordena primero al descender
     suspend fun highest(
