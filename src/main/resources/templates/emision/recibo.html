@@ -7,14 +7,14 @@
     </head>
     <body>
         <div class="pie">
-            <span th:text="|Original · recibo ${r.numeroImpreso} · emitido el ${r.emitido} (hora de Lima)|">Original</span>
+            <span th:text="|${r.copia} · recibo ${r.numeroImpreso} · emitido el ${r.emitido} (hora de Lima)|">ORIGINAL</span>
         </div>
 
         <table class="cabecera">
             <tr>
                 <td>
                     <div class="municipalidad" th:text="${r.municipalidad}">MUNICIPALIDAD</div>
-                    <div class="documento">RECIBO DE CAJA · ORIGINAL</div>
+                    <div class="documento" th:text="|RECIBO DE CAJA · ${r.copia}|">RECIBO DE CAJA · ORIGINAL</div>
                 </td>
                 <td class="numero">
                     <span class="etiqueta">N.° de recibo</span>
@@ -22,6 +22,11 @@
                 </td>
             </tr>
         </table>
+
+        <div class="anulado" th:if="${r.anulacion != null}">
+            <div class="aviso">RECIBO ANULADO — no acredita pago. La deuda que canceló volvió a estar pendiente.</div>
+            <div th:text="${r.anulacion}">Anulado el</div>
+        </div>
 
         <div class="bloque">
             <div class="titulo">Emisión</div>

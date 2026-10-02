@@ -10,6 +10,7 @@ import wasichai.core.data.RecordResponse
 import wasichai.core.data.RecordService
 import wasichai.core.metadata.MetadataService
 import wasichai.core.metadata.ObjectDefinition
+import wasichai.core.platform.SqlIdentifier
 import java.util.UUID
 
 // el RecordService de wasichai con los dtos de caja encima (portado de srtm-backend). RecordService comprueba los
@@ -38,7 +39,8 @@ class Registros(
         type: Class<T>,
         filters: Map<String, String> = emptyMap(),
         sort: String? = null,
-        descending: Boolean = false
+        descending: Boolean = false,
+        criteria: List<RecordCriterion> = emptyList()
     ): List<T> {
         val rows = mutableListOf<RecordResponse>()
         var page = 0
@@ -46,7 +48,13 @@ class Registros(
             val result =
                 records.list(
                     objectName,
-                    RecordQuery(page = PageRequest.of(page, PageRequest.MAX_SIZE), sort = sort, descending = descending, filters = filters)
+                    RecordQuery(
+                        page = PageRequest.of(page, PageRequest.MAX_SIZE),
+                        sort = sort,
+                        descending = descending,
+                        filters = filters,
+                        criteria = criteria
+                    )
                 )
             rows += result.content
             page++
@@ -87,6 +95,30 @@ class Registros(
                 records.list(objectName, RecordQuery(page = PageRequest.of(0, chunk.size), ids = chunk.map(UUID::fromString))).content
             }.associate { it.id to read(type, it) }
 
+    // los registros cuya relación `field` nombra alguno de esos ids (las anulaciones de una página de recibos...): una
+    // consulta por página de resultados, no una por id
+    suspend fun <T : Any> byRelation(
+        objectName: String,
+        type: Class<T>,
+        field: String,
+        ids: Collection<String>
+    ): List<T> {
+        if (ids.isEmpty()) return emptyList()
+        val uuids = ids.distinct().map(UUID::fromString).toTypedArray()
+        val criterion =
+            RecordCriterion { definition, bind ->
+                "${SqlIdentifier.quote(definition.fields.first { it.name == field }.columnName)} = ANY(${bind(uuids)})"
+            }
+        return all(objectName, type, criteria = listOf(criterion))
+    }
+
+    // cuántos registros cumplen los filtros y las condiciones
+    suspend fun count(
+        objectName: String,
+        filters: Map<String, String> = emptyMap(),
+        criteria: List<RecordCriterion> = emptyList()
+    ): Long = records.list(objectName, RecordQuery(page = PageRequest.of(0, 1), filters = filters, criteria = criteria)).totalElements
+
     suspend fun <T : Any> create(
         objectName: String,
         type: Class<T>,
@@ -110,8 +142,6 @@ class Registros(
         objectName: String,
         id: UUID
     ) = records.delete(objectName, id)
-
-    suspend fun count(objectName: String): Long = records.list(objectName, RecordQuery(page = PageRequest.of(0, 1))).totalElements
 
     // el valor más alto que guarda un campo. los null quedan fuera: postgres los ordena primero al descender
     suspend fun highest(

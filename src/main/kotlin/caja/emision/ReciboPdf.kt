@@ -8,11 +8,14 @@ import caja.cobro.nombreImpreso
 import caja.comun.LIMA
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
+import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// el original del recibo en pdf (templates/emision/recibo.html): lo que el papel dice, congelado en el recibo y sus
-// líneas. la hora es la de Lima, los importes van con su moneda y con la fecha a la que están (regla 9)
+// el recibo en pdf (templates/emision/recibo.html), original o duplicado: lo que el papel dice, congelado en el recibo
+// y sus líneas. la hora es la de Lima, los importes van con su moneda y con la fecha a la que están (regla 9). el
+// duplicado dice que lo es, con su número, y si el recibo se anuló lo dice también: un duplicado sin marca circula como
+// si fuera el original
 @Component
 class ReciboPdf(
     private val renderer: PdfRenderer,
@@ -22,13 +25,26 @@ class ReciboPdf(
         recibo: Recibo,
         caja: Caja,
         lineas: List<LineaRecibo>
-    ): ByteArray = renderer.render("recibo", mapOf("r" to impreso(recibo, caja, lineas)))
+    ): ByteArray = renderer.render("recibo", mapOf("r" to impreso(recibo, caja, lineas, ORIGINAL, null)))
+
+    // cual: el número de esta reimpresión, desde 1
+    fun duplicado(
+        recibo: Recibo,
+        caja: Caja,
+        lineas: List<LineaRecibo>,
+        cual: Int,
+        anulado: Anulado?
+    ): ByteArray = renderer.render("recibo", mapOf("r" to impreso(recibo, caja, lineas, "DUPLICADO N.° $cual", anulado)))
 
     private fun impreso(
         recibo: Recibo,
         caja: Caja,
-        lineas: List<LineaRecibo>
+        lineas: List<LineaRecibo>,
+        copia: String,
+        anulado: Anulado?
     ) = ReciboImpreso(
+        copia = copia,
+        anulacion = anulado?.let { "Anulado el ${it.fecha.format(FECHA)} — ${it.motivo}" },
         municipalidad = municipalidad.nombre,
         numeroImpreso = recibo.numeroImpreso!!,
         emitido = recibo.emitidoEn!!.atZone(LIMA).format(FECHA_HORA),
@@ -43,8 +59,11 @@ class ReciboPdf(
         observacion = recibo.observacion!!
     )
 
-    // lo que la plantilla imprime, ya escrito
+    // lo que la plantilla imprime, ya escrito. copia: ORIGINAL o DUPLICADO N.° <n>; anulacion: la línea de la
+    // anulación, o null
     class ReciboImpreso(
+        val copia: String,
+        val anulacion: String?,
         val municipalidad: String,
         val numeroImpreso: String,
         val emitido: String,
@@ -66,7 +85,14 @@ class ReciboPdf(
         val monto: String
     )
 
+    // la anulación que el duplicado tiene que decir
+    class Anulado(
+        val fecha: LocalDate,
+        val motivo: String
+    )
+
     private companion object {
+        const val ORIGINAL = "ORIGINAL"
         val FECHA: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
         val FECHA_HORA: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
 

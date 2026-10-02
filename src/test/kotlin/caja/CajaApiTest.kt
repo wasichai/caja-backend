@@ -11,6 +11,8 @@ import tools.jackson.databind.json.JsonMapper
 import wasichai.test.WasichaiIntegrationTest
 import java.io.File
 import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.util.UUID
 
 // la base de las pruebas de integración de la api de caja (portada de SrtmApiTest): antes de cada prueba, el modelo
@@ -223,11 +225,14 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     protected fun cuenta(rol: String): Cuenta = usuario(rol)
 
     // un usuario (no ADMIN) con un rol propio: lo que puede hacer
-    protected fun funcionario(permisos: List<Map<String, Any?>>): String {
+    protected fun funcionario(permisos: List<Map<String, Any?>>): String = usuario(rolPropio(permisos)).token
+
+    // un rol propio con esos permisos, para darlo a varios usuarios con cuenta(rol): su nombre
+    protected fun rolPropio(permisos: List<Map<String, Any?>>): String {
         val rol = uniqueName("ROL").uppercase()
         send("POST", "/api/roles", mapOf("name" to rol, "label" to rol), HttpStatus.CREATED)
         send("PUT", "/api/roles/$rol/permissions", mapOf("permissions" to permisos), HttpStatus.OK)
-        return usuario(rol).token
+        return rol
     }
 
     private fun usuario(rol: String): Cuenta {
@@ -310,6 +315,51 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
 
     // un código de tasa nuevo, único en la base compartida
     protected fun codigoDeTasa(): String = "T-${unico()}"
+
+    // un recibo escrito como admin por la api de core, con su turno, sin pasar por la cobranza: para fijar un instante de
+    // emisión o un recibo sin evento. el número va en la serie de la caja; su id
+    protected fun reciboEscrito(
+        caja: CajaDePrueba,
+        numero: Long,
+        emitidoEn: OffsetDateTime,
+        documento: String,
+        cajero: String = "escrito@caja.test",
+        tipoPago: String = "NORMAL",
+        total: String = "10.00"
+    ): String {
+        val fecha = emitidoEn.atZoneSameInstant(ZoneId.of("America/Lima")).toLocalDate()
+        val turno =
+            registro(
+                "turno",
+                mapOf(
+                    "caja" to caja.id,
+                    "cajero" to cajero,
+                    "fecha" to fecha.toString(),
+                    "abierto_en" to emitidoEn.toString(),
+                    "observacion" to "turno escrito por la prueba",
+                    "clave_turno" to "${caja.id}|$cajero|$fecha|$numero"
+                )
+            )
+        return registro(
+            "recibo",
+            mapOf(
+                "serie" to caja.serie,
+                "numero" to numero,
+                "numero_impreso" to "${caja.serie}-${"%07d".format(numero)}",
+                "caja" to caja.id,
+                "turno" to turno,
+                "cajero" to cajero,
+                "pagador_documento" to documento,
+                "pagador_nombre" to "PAGADOR DE LA PRUEBA",
+                "emitido_en" to emitidoEn.toString(),
+                "forma_pago" to "EFECTIVO",
+                "tipo_pago" to tipoPago,
+                "total" to total,
+                "actualizado_a" to fecha.toString(),
+                "observacion" to "recibo escrito por la prueba"
+            )
+        )
+    }
 
     // los registros de un objeto que cumplen los filtros, leídos como admin por la api de core
     protected fun registros(

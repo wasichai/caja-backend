@@ -3,6 +3,7 @@ package caja.emision
 import caja.cobro.Caja
 import caja.cobro.LineaRecibo
 import caja.cobro.Recibo
+import caja.comun.ANULACION_RECIBO
 import caja.comun.CAJA
 import caja.comun.LIMA
 import caja.comun.LINEA_RECIBO
@@ -17,9 +18,10 @@ import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
 
-// el original de un recibo: solo lo obtiene el cajero que lo emitió, el mismo día, con su turno abierto. cualquier
-// otra copia es un duplicado, que dice que lo es (llega con la consulta de recibos). hoy todo turno del día está
-// abierto: el cierre añadirá aquí esa condición. se lee como el usuario que llama: sin READ sobre recibo, 403 de core
+// el original de un recibo: solo lo obtiene el cajero que lo emitió, el mismo día, con su turno abierto, y mientras no
+// esté anulado. cualquier otra copia es un duplicado (POST /api/caja/recibos/{numero}/duplicados), que dice que lo es y
+// dice si se anuló. hoy todo turno del día está abierto: el cierre añadirá aquí esa condición. se lee como el usuario
+// que llama: sin READ sobre recibo, 403 de core
 @Service
 class OriginalDelRecibo(
     private val registros: Registros,
@@ -38,6 +40,10 @@ class OriginalDelRecibo(
             throw ConflictException(
                 "El original del recibo $numero solo lo imprime quien lo emitió, el mismo día y con su turno abierto: pida un duplicado"
             )
+        }
+        // un original sin la marca de su anulación circularía como un pago que ya no vale
+        if (registros.count(ANULACION_RECIBO, mapOf("recibo" to recibo.id!!)) > 0) {
+            throw ConflictException("El recibo $numero está anulado: su original ya no se imprime, pida un duplicado, que lo dice")
         }
         val caja = registros.get(CAJA, Caja::class.java, UUID.fromString(recibo.caja))
         val lineas = registros.all(LINEA_RECIBO, LineaRecibo::class.java, filters = mapOf("recibo" to recibo.id!!))

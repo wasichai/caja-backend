@@ -11,14 +11,16 @@ import org.springframework.transaction.reactive.TransactionSynchronizationManage
 // hashtext entre una clave de turno y una de serie las volvería el mismo candado, y dos cobros podrían tomarlo en
 // órdenes distintos y esperarse en cruz (40P01). los números llevan «CA» (0x4341) en los 16 bits altos: no se
 // confunden con los de otro en la misma base. el orden en que se toman es el de la lista: turno-clave → turno →
-// órdenes (por id) → serie
+// órdenes (por id) → serie → recibo. el cobro toma los cuatro primeros; la anulación, el del turno del recibo y los de
+// sus órdenes; la reimpresión, solo el del recibo
 enum class Candado(
     val clase: Int
 ) {
     TURNO_CLAVE(0x4341_0001),
     TURNO(0x4341_0002),
     ORDEN(0x4341_0003),
-    SERIE(0x4341_0004)
+    SERIE(0x4341_0004),
+    RECIBO(0x4341_0005)
 }
 
 // los candados consultivos de transacción de postgres, por clase y clave (DocumentRepository.lockRecordType de
