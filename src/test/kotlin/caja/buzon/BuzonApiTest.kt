@@ -379,6 +379,79 @@ class BuzonApiTest : CajaApiTest() {
         assertTrue(origen.de(editada["attributes"]["evento_id"].asString()).isEmpty())
     }
 
+    // del orden: un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (caja-backend#23)
+
+    @Test
+    fun `un PAGO_ANULADO espera a su PAGO_REGISTRADO sin contar intento, y sale despues de el`() {
+        val cobro = cobrar(PRUEBAS)
+        // el origen no contesta al pago (503: nadie le dijo nada) y sí contestaría a su anulación
+        send("POST", "/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, HttpStatus.CREATED, funcionario("SUPERVISOR_CAJA"))
+        val anulacion = anulacionDe(cobro)["attributes"]["evento_id"].asString()
+        origen.contestar(anulacion, 200)
+
+        vuelta()
+
+        val pago = evento(cobro.pagoId)["attributes"]
+        assertEquals("PENDIENTE", pago["estado"].asString())
+        assertEquals(1, pago["intentos"].asInt())
+        val esperando = evento(anulacion)["attributes"]
+        assertEquals("PENDIENTE", esperando["estado"].asString())
+        assertEquals(0, esperando["intentos"].asInt(), "esperar a su pago no es un intento")
+        assertTrue(esperando["ultimo_error"].isNull, esperando.toString())
+        assertTrue(origen.de(anulacion).isEmpty(), "la anulación no salió antes que su pago")
+
+        origen.contestar(cobro.pagoId, 200)
+        vuelta()
+
+        assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString())
+        val entregada = evento(anulacion)["attributes"]
+        assertEquals("ENTREGADO", entregada["estado"].asString(), "sale en la misma vuelta que su pago")
+        assertEquals(1, entregada["intentos"].asInt())
+        val pagoEntregado = origen.recibidas.indexOfLast { it.pagoId == cobro.pagoId }
+        val anulacionRecibida = origen.recibidas.indexOfFirst { it.pagoId == anulacion }
+        assertTrue(pagoEntregado in 0 until anulacionRecibida, "el origen recibe el pago antes que su anulación: $pagoEntregado, $anulacionRecibida")
+    }
+
+    @Test
+    fun `si su PAGO_REGISTRADO muere, la anulacion no se envia, muere con su motivo y el turno cierra al explicar los dos`(salida: CapturedOutput) {
+        val cajero = cuenta("CAJERO")
+        val supervisor = funcionario("SUPERVISOR_CAJA")
+        val cobro = cobrar(PRUEBAS, cajero = cajero)
+        origen.contestar(cobro.pagoId, 422, """{"detail":"rentas no conoce esa orden"}""")
+        send("POST", "/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, HttpStatus.CREATED, supervisor)
+        val anulacion = anulacionDe(cobro)["attributes"]["evento_id"].asString()
+        origen.contestar(anulacion, 200)
+
+        vuelta()
+
+        assertEquals("MUERTO", evento(cobro.pagoId)["attributes"]["estado"].asString())
+        val muerta = evento(anulacion)["attributes"]
+        assertEquals("MUERTO", muerta["estado"].asString(), "su pago nunca llegó: la anulación no va a salir")
+        assertEquals(1, muerta["intentos"].asInt())
+        val motivo = muerta["ultimo_error"].asString()
+        assertTrue(motivo.contains(cobro.pagoId) && motivo.contains("no se envía"), motivo)
+        assertTrue(origen.de(anulacion).isEmpty(), "el origen no recibe la anulación de un pago que no conoce")
+        assertTrue(alertaDe(salida, anulacion).contains("PAGO_ANULADO"))
+
+        // los dos impiden cerrar el turno, y los dos se explican
+        val cierre = mapOf("caja" to cobro.caja.codigo, "declarado" to mapOf("EFECTIVO" to "0.00"), "observacion" to "cierre del turno")
+        val problema = tree(send("POST", CIERRE, cierre, HttpStatus.CONFLICT, cajero.token))
+        assertEquals(
+            setOf("${cobro.pagoId} PAGO_REGISTRADO MUERTO", "$anulacion PAGO_ANULADO MUERTO"),
+            problema["pagos_sin_entregar"].toList().map { "${it["pago_id"].asString()} ${it["tipo"].asString()} ${it["estado"].asString()}" }.toSet()
+        )
+        listOf(cobro.pagoId, anulacion).forEach {
+            send(
+                "POST",
+                explicar(it),
+                mapOf("explicacion" to "rentas nunca registró el pago y el recibo se anuló: nada que anular allí", "observacion" to "conciliado con rentas"),
+                HttpStatus.OK,
+                supervisor
+            )
+        }
+        assertEquals("CERRADO", post(CIERRE, cierre, cajero.token)["estado_del_turno"].asString())
+    }
+
     @Test
     fun `un valor con saltos de linea no parte la alerta en dos`(salida: CapturedOutput) {
         val cobro = cobrar(PRUEBAS)

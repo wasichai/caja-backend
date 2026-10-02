@@ -118,7 +118,8 @@ class BuzonStore(
 
     // el recibo del evento, tal como está, con lo que hace falta para volver a componer el cuerpo de su evento
     // (incoherencia): el recibo, sus líneas, el actualizado_a de cada orden, su anulación y los eventos de su buzón por
-    // (created_at, id), cada fila con su sello (su created_at, o el updated_at de la orden). null si no existe
+    // (created_at, id), cada fila con su sello (su created_at, o el updated_at de la orden). cada evento lleva además su
+    // estado: un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (salida). null si no existe
     suspend fun recibo(
         buzon: Buzon,
         reciboId: String?
@@ -198,7 +199,7 @@ class BuzonStore(
         val e = buzon.eventos
         val eventos =
             filas(
-                "SELECT id, ${e.c("evento_id")} AS evento_id, ${e.c("tipo")} AS tipo, created_at FROM ${e.nombre} " +
+                "SELECT id, ${e.c("evento_id")} AS evento_id, ${e.c("tipo")} AS tipo, ${e.c("estado")} AS estado, created_at FROM ${e.nombre} " +
                     "WHERE ${e.c("recibo")} = :id AND organization_id = :organizacion ORDER BY created_at, id",
                 buzon,
                 id
@@ -207,7 +208,8 @@ class BuzonStore(
                     row.get("id", UUID::class.java)!!,
                     row.get("evento_id", UUID::class.java)!!.toString(),
                     row.get("tipo", String::class.java),
-                    sello(row)
+                    sello(row),
+                    row.get("estado", String::class.java)
                 )
             }
         return ReciboDelEvento(recibo, creadoEn, lineas, ordenes, anulacion, eventos)

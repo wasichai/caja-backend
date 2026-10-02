@@ -103,8 +103,25 @@ data class EventoDelRecibo(
     val id: UUID,
     val eventoId: String,
     val tipo: String?,
-    val creadoEn: Instant
+    val creadoEn: Instant,
+    val estado: String?
 )
+
+// si un evento que ya coincide con su recibo sale ahora (caja-backend#23). un PAGO_ANULADO no sale antes que el
+// PAGO_REGISTRADO que deshace: el origen anularía un pagoId que no conoce, y después registraría el pago
+sealed interface Salida {
+    data object Sale : Salida
+
+    // su PAGO_REGISTRADO todavía se está intentando: no se llama, no se marca y no cuenta intento
+    data class Espera(
+        val motivo: String
+    ) : Salida
+
+    // su PAGO_REGISTRADO no va a llegar: no se envía nunca, y muere con este motivo
+    data class NoSale(
+        val motivo: String
+    ) : Salida
+}
 
 // la respuesta del destino a POST {url}/pagos (ClienteHttpDelSistemaDeOrigen.publicar de caja). el 409 es «ya lo
 // tengo»: el receptor deduplicó por pagoId, y es un éxito. 401 y 403 hablan de quien llama, no del pago: se reintentan,
@@ -279,12 +296,46 @@ fun incoherencia(
         } else {
             val anulacion = recibo.anulacion!!
             val registrado =
-                recibo.eventos.firstOrNull { it.tipo == PAGO_REGISTRADO && it.creadoEn == recibo.creadoEn }
+                registradoDelCobro(recibo)
                     ?: return "el recibo $numero no tiene el PAGO_REGISTRADO de su cobro, que esta anulación deshace"
             cuerpoPagoAnulado(UUID.fromString(evento.eventoId), registrado.eventoId, recibo.recibo, anulacion.motivo.orEmpty(), anulacion.fecha!!)
         }
     val diferencias = diferentes(normalizado(guardado), normalizado(JSON.readTree(esperado)))
     return if (diferencias.isEmpty()) null else "el cuerpo no es el que se compone de su recibo: difiere en ${diferencias.joinToString(", ")}"
+}
+
+// el PAGO_REGISTRADO del cobro del recibo: el que lleva su sello. uno forjado (otro sello) no cuenta, ni para el
+// pagoOriginalId de la anulación ni para lo que ella espera
+fun registradoDelCobro(recibo: ReciboDelEvento): EventoDelRecibo? = recibo.eventos.firstOrNull { it.tipo == PAGO_REGISTRADO && it.creadoEn == recibo.creadoEn }
+
+// si un evento que ya coincide con su recibo (incoherencia) sale ahora (caja-backend#23). el publicador lee por
+// created_at, y un PAGO_REGISTRADO que falla queda PENDIENTE mientras el PAGO_ANULADO que va detrás sí contestaría:
+// el origen recibiría la anulación de un pagoId que no conoce, y después el pago, y la deuda quedaría pagada allí
+// mientras la caja devolvió el dinero. así que un PAGO_ANULADO mira a su PAGO_REGISTRADO, el del sello del cobro:
+// - ENTREGADO: sale;
+// - PENDIENTE: espera, sin intento. no atasca el buzón: el registrado nació antes (el acta es otra transacción,
+//   posterior al cobro), así que va delante en la misma vuelta, y la espera dura lo que él tarde en entregarse o morir;
+// - MUERTO, EXPLICADO o cualquier otro estado: el origen nunca supo de ese pago, y no tiene nada que anular. la
+//   anulación no se envía nunca: muere, salta la alerta y se explica a mano, como cualquier MUERTO. quien la explica
+//   decide si el pago se registró a mano en el origen y entonces hay que anularlo allí también
+fun salida(
+    evento: EventoDelBuzon,
+    recibo: ReciboDelEvento
+): Salida {
+    if (evento.tipo != PAGO_ANULADO) return Salida.Sale
+    val registrado =
+        registradoDelCobro(recibo)
+            ?: return Salida.NoSale("el recibo ${recibo.recibo.numeroImpreso} no tiene el PAGO_REGISTRADO de su cobro, que esta anulación deshace")
+    return when (registrado.estado) {
+        BuzonStore.ENTREGADO -> Salida.Sale
+        BuzonStore.PENDIENTE -> Salida.Espera("espera a su PAGO_REGISTRADO ${registrado.eventoId}, que todavía no llegó a su sistema de origen")
+        else ->
+            Salida.NoSale(
+                "su PAGO_REGISTRADO ${registrado.eventoId} no llegó a su sistema de origen (está ${enUnaLinea(registrado.estado)}): esta " +
+                    "anulación no se envía, porque el origen anularía un pago que no conoce. Explíquela junto con él: si el pago se " +
+                    "registró a mano en el origen, anúlelo allí también"
+            )
+    }
 }
 
 // la fecha de una orden tal como la dice el cuerpo del evento, o null

@@ -916,10 +916,25 @@ vuelve a esperar. En cada vuelta:
    que muere lo suelta con su sesión.
 2. Con el cerrojo, recorre cada organización y lee hasta `por-vuelta` eventos `PENDIENTE`, por orden de creación
    (`BuzonStore`).
-3. Cada evento se comprueba contra su recibo (la defensa (a), abajo). Si coincide, se entrega **fuera de cualquier
-   transacción**: `POST {url}/pagos` con el `cuerpo` **congelado**, tal cual se escribió al cobrar.
-   `ClienteDelSistemaDeOrigen` comprueba que no hay una transacción abierta antes de llamar, y falla si la hay.
-4. Cada marca va **en su propia transacción y es condicional**: `WHERE estado = 'PENDIENTE' AND intentos = :leidos`.
+3. Cada evento se comprueba contra su recibo (la defensa (a), abajo).
+4. **Un `PAGO_ANULADO` no sale antes que su `PAGO_REGISTRADO`** (caja-backend#23). Mira el estado del
+   `PAGO_REGISTRADO` que deshace, el que lleva el sello del cobro (uno forjado no cuenta):
+   - `ENTREGADO`: sale.
+   - `PENDIENTE`: **espera**. No se llama al destino, no se marca nada y **no cuenta intento**. No atasca el buzón:
+     el acta se escribe en una transacción posterior al cobro, así que su `PAGO_REGISTRADO` va delante en la misma
+     vuelta, y cada evento vuelve a leer su recibo. Si el pago se entrega, la anulación sale detrás en esa misma
+     vuelta; la espera dura lo que el pago tarde en entregarse o morir.
+   - `MUERTO` o `EXPLICADO`: el origen nunca supo de ese pago y no tiene nada que anular. **La anulación no se envía
+     nunca**: muere, con un `ultimo_error` que nombra su `PAGO_REGISTRADO`, y salta la alerta. Bloquea el cierre de su
+     turno como cualquier `MUERTO` y se explica igual: quien la explica decide si el pago se registró a mano en el
+     origen y entonces hay que anularlo allí también.
+
+   Sin esto, el origen recibía la anulación de un `pagoId` que no conoce y después el pago, y la deuda quedaba pagada
+   allí mientras la caja devolvía el dinero: la conciliación decía «no cuadra».
+5. Si le toca salir, se entrega **fuera de cualquier transacción**: `POST {url}/pagos` con el `cuerpo` **congelado**,
+   tal cual se escribió al cobrar. `ClienteDelSistemaDeOrigen` comprueba que no hay una transacción abierta antes de
+   llamar, y falla si la hay.
+6. Cada marca va **en su propia transacción y es condicional**: `WHERE estado = 'PENDIENTE' AND intentos = :leidos`.
    Si dos publicadores llegaran a coincidir, se cuenta un solo intento. Cada marca se audita con `AuditService` y
    usuario `null` (la escribió el sistema).
 
@@ -946,8 +961,9 @@ Cuando un pago muere, el publicador escribe **en ese mismo momento**, no al fina
 empieza con `DINERO COBRADO SIN REGISTRAR`**: el pago (su `pagoId`, tipo, destino, número de recibo, turno, intentos y
 último error) y el responsable de la conciliación con su canal. Así, si algo corta la vuelta después, el aviso de los
 que ya murieron no se pierde. Cada valor va en una sola línea: un `sistema_destino` escrito por la API genérica con un
-salto de línea no inyecta otra línea en el registro. Es dinero que entró por ventanilla y que su sistema de origen no sabe que entró. **Es un
-registro, no un correo**: llega a una persona si la observabilidad del despliegue alerta sobre las líneas ERROR, y
+salto de línea no inyecta otra línea en el registro. Es dinero que entró por ventanilla y que su sistema de origen no sabe que entró.
+También salta por un `PAGO_ANULADO` que muere sin salir porque su `PAGO_REGISTRADO` nunca llegó (caja-backend#23):
+el par se explica entero. **Es un registro, no un correo**: llega a una persona si la observabilidad del despliegue alerta sobre las líneas ERROR, y
 aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistro` de `caja`).
 
 #### Los pagos sin entregar
@@ -1214,7 +1230,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión, salvo
   la explicación de un pago sin entregar, y falla si aparece cualquier puerta para borrar (un `delete`, aunque nadie lo
   llame). `EntregaTest` fija las reglas del publicador: la clasificación de cada
-  respuesta, el recorte de `ultimo_error`, la marca de cada intento y la coherencia del evento con su recibo;
+  respuesta, el recorte de `ultimo_error`, la marca de cada intento, la coherencia del evento con su recibo y la salida
+  de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`;
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
   `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado), con los
   recibos rotos que quedan fuera y se nombran;
@@ -1264,7 +1281,9 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   después** (con un disparador de prueba que hace fallar la marca en la base), **el sello de la transacción** (un cobro
   y una anulación escriben todo con el mismo `created_at`, y una escritura suelta lleva otro), **la línea forjada con el
   cuerpo editado para incluirla**, la línea forjada o la orden tocada que no matan al evento legítimo, **el
-  `PAGO_ANULADO` forjado antes que no impide entregar el legítimo**, la explicación que solo vale con un
+  `PAGO_ANULADO` forjado antes que no impide entregar el legítimo**, **el `PAGO_ANULADO` que espera a su
+  `PAGO_REGISTRADO` sin contar intento y sale detrás de él**, **la anulación que no se envía y muere si su pago murió, y
+  el turno que cierra al explicar los dos**, la explicación que solo vale con un
   `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
   comprueba que apagado no arranca; `CerrojoBuzonTest`, que el cerrojo del buzón es exclusivo (un segundo `tomar()` da
   `null` y, suelto, se toma otra vez); `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y una orden
@@ -1297,9 +1316,6 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 - **El sistema de origen tiene que comprobar el importe** de cada `PAGO_REGISTRADO` contra su propia deuda (la
   `referenciaExterna` y su importe): un `CAJERO` puede bajar el importe de una orden por la API genérica antes de
   cobrarla, y el evento llega válido por menos (ver «Lo que queda abierto», caja-backend#20).
-- **No entregar un `PAGO_ANULADO` antes que su `PAGO_REGISTRADO`** (caja-backend#23): hoy el publicador lee por
-  `created_at`, y si el pago falla y queda `PENDIENTE` (o muere), la anulación que va detrás puede llegar primero al
-  origen, que anula un `pagoId` que no conoce.
 - **Decidir quién reabre el turno cerrado de un `CAJERO`** (ver «La reversión»): dar CREATE sobre `reversion_cierre` al
   `CAJERO`, o una regla `ESPECIAL` para que un supervisor reverse el cierre de otro.
 - **Los huecos de wasichai que se rodean aquí**, de wasichai#13 a wasichai#20:
