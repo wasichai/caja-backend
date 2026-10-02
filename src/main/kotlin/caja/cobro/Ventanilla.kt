@@ -1,5 +1,6 @@
 package caja.cobro
 
+import caja.comun.ANULACION_RECIBO
 import caja.comun.CAJA
 import caja.comun.Candado
 import caja.comun.Candados
@@ -32,6 +33,7 @@ import java.util.Locale
 // leer nada en una transacción abortada). cualquier otra violación de integridad sigue su camino como lo que es.
 //
 // el turno cerrado no cobra: se mira bajo el candado del turno, el mismo que toma el cierre (caja.turno.CerrarTurno).
+// el reenvío de un intento ya emitido se contesta antes de todo eso, con una lectura por su clave.
 //
 // todo pasa por RecordService como el usuario que llama: sus permisos son los de core
 @Component
@@ -77,14 +79,25 @@ class Ventanilla(
         preparar: suspend () -> Contenido<D>,
         despues: suspend (Emitido, D) -> R,
         reenviado: suspend (Recibo, List<LineaRecibo>) -> R
-    ): R =
-        try {
+    ): R {
+        // el reenvío de un intento ya emitido se contesta ANTES de la transacción: antes de abrir o crear el turno y de
+        // mirar si la caja sigue activa. un recibo confirmado no cambia, así que basta una lectura por su clave: el reenvío
+        // del día siguiente no abre un turno vacío, y el de después de dar de baja la caja devuelve el recibo de la
+        // primera vez. la carrera de dos primeras peticiones con la misma clave la resuelve, dentro, el candado del turno
+        apertura.clave
+            ?.let { registros.primero(RECIBO, Recibo::class.java, mapOf("clave_idempotencia" to it)) }
+            ?.let { recibo ->
+                val caja = registros.primero(CAJA, Caja::class.java, mapOf("codigo" to apertura.caja))
+                return reenvio(recibo, apertura, caja?.id, reenviado)
+            }
+        return try {
             transaccion.en { emitir(apertura, preparar, despues, reenviado) }
         } catch (choque: DuplicateKeyException) {
             // la red de un unique saltó: otro cobro se confirmó a la vez. la transacción ya se revirtió entera
             throw ConflictException("El cobro chocó con otro que se confirmó a la vez y no se emitió nada: vuelva a intentarlo")
                 .apply { initCause(choque) }
         }
+    }
 
     // dentro de la transacción, en el orden de los candados
     private suspend fun <D, R> emitir(
@@ -119,14 +132,11 @@ class Ventanilla(
         // cierre en curso
         candados.bloquear(Candado.TURNO, turnoId)
 
-        // 3. el reenvío del mismo intento: bajo el candado del turno, dos reenvíos de la misma clave se ordenan. la clave
-        // es del cajero que la mandó, en esa caja y para ese tipo de cobro: la de otro cobro es un choque, no un reenvío
+        // 3. el reenvío del mismo intento, otra vez bajo el candado del turno: dos primeras peticiones con la misma clave
+        // se ordenan, y la segunda devuelve el recibo de la primera
         apertura.clave?.let { clave ->
             registros.primero(RECIBO, Recibo::class.java, mapOf("clave_idempotencia" to clave))?.let { recibo ->
-                if (recibo.cajero != apertura.cajero || recibo.caja != cajaId || recibo.tipoPago != apertura.tipoPago) {
-                    throw ConflictException("La Idempotency-Key ya nombra el recibo ${recibo.numeroImpreso} de otro cobro: mande una nueva")
-                }
-                return reenviado(recibo, registros.all(LINEA_RECIBO, LineaRecibo::class.java, filters = mapOf("recibo" to recibo.id!!)))
+                return reenvio(recibo, apertura, cajaId, reenviado)
             }
         }
 
@@ -192,6 +202,27 @@ class Ventanilla(
 
         // 8. lo que el cobro agrega, en la misma transacción
         return despues(Emitido(recibo, lineas, turnoId), contenido.datos)
+    }
+
+    // el reenvío de un intento: la clave es del cajero que la mandó, en esa caja y para ese tipo de cobro (la de otro
+    // cobro es un choque, no un reenvío), y su recibo tiene que seguir en pie: devolver el de un recibo anulado como un
+    // cobro exitoso dejaría al cliente creyendo que cobró
+    private suspend fun <R> reenvio(
+        recibo: Recibo,
+        apertura: Apertura,
+        cajaId: String?,
+        reenviado: suspend (Recibo, List<LineaRecibo>) -> R
+    ): R {
+        if (recibo.cajero != apertura.cajero || recibo.caja != cajaId || recibo.tipoPago != apertura.tipoPago) {
+            throw ConflictException("La Idempotency-Key ya nombra el recibo ${recibo.numeroImpreso} de otro cobro: mande una nueva")
+        }
+        if (registros.count(ANULACION_RECIBO, mapOf("recibo" to recibo.id!!)) > 0) {
+            throw ConflictException(
+                "No se devuelve como cobrado: el recibo de ese cobro está anulado. La Idempotency-Key nombra el recibo " +
+                    "${recibo.numeroImpreso}, que se anuló, y no se cobró otra vez; para cobrar de nuevo, mande una Idempotency-Key nueva"
+            )
+        }
+        return reenviado(recibo, registros.all(LINEA_RECIBO, LineaRecibo::class.java, filters = mapOf("recibo" to recibo.id)))
     }
 
     // la caja por su código: 404 si no existe, 409 si se dio de baja

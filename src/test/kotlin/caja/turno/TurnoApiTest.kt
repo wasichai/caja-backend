@@ -19,7 +19,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.util.UUID
 
-// GET /api/caja/turnos/del-dia y /{turno_id}/arqueo, y el cajero y el día del cierre
+// GET /api/caja/turnos/del-dia y /{turno_id}/arqueo, el cajero y el día del cierre y el reenvío de un cobro
 // (ElTurnoYSuArqueoEnVivoTest, TurnoDelDiaFronteraTest y ElCajeroYElDiaSalenDelTokenTest de caja). el reloj de esta
 // clase se puede adelantar: el turno de «ayer» es el de hoy visto mañana
 class TurnoApiTest : CajaApiTest() {
@@ -232,6 +232,42 @@ class TurnoApiTest : CajaApiTest() {
         assertEquals(setOf("caja", "motivo", "observacion"), reversion["errors"].toList().map { it["field"].asString() }.toSet())
         // una caja que no existe es 404
         send("POST", CIERRE, mapOf("caja" to "C-NO-EXISTE", "observacion" to "cierre del día"), HttpStatus.NOT_FOUND, supervisor.token)
+    }
+
+    // del reenvío
+
+    @Test
+    fun `un reenvio al dia siguiente devuelve el recibo sin crear un turno`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val codigo = nuevaTasaVigente()
+        val clave = mapOf("Idempotency-Key" to UUID.randomUUID().toString())
+        val primero = tree(send("POST", TASAS, cobroDeTasa(caja, codigo, 1), HttpStatus.CREATED, cajero.token, clave))
+
+        reloj.desfase = Duration.ofDays(1)
+        val reenvio = tree(send("POST", TASAS, cobroDeTasa(caja, codigo, 1), HttpStatus.OK, cajero.token, clave))
+
+        assertEquals(false, reenvio["emitido"].asBoolean())
+        assertEquals(primero["recibo"]["numero_impreso"].asString(), reenvio["recibo"]["numero_impreso"].asString())
+        assertEquals(1, registros("turno", "caja" to caja.id).size, "el reenvío no abrió un turno vacío")
+        assertEquals("SIN_ABRIR", delDia(cajero)["situacion"].asString())
+    }
+
+    @Test
+    fun `un reenvio despues de dar de baja la caja, o con el turno cerrado, devuelve el recibo de la primera vez`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val codigo = nuevaTasaVigente()
+        val clave = mapOf("Idempotency-Key" to UUID.randomUUID().toString())
+        val primero = tree(send("POST", TASAS, cobroDeTasa(caja, codigo, 1), HttpStatus.CREATED, cajero.token, clave))
+        post(CIERRE, cierreDe(caja), cajero.token)
+        cambiarComoAdmin("caja", caja.id, "activa" to false)
+
+        val reenvio = tree(send("POST", TASAS, cobroDeTasa(caja, codigo, 1), HttpStatus.OK, cajero.token, clave))
+
+        assertEquals(primero["recibo"].toString(), reenvio["recibo"].toString())
+        // un cobro nuevo sí encuentra la caja de baja
+        send("POST", TASAS, cobroDeTasa(caja, codigo, 1), HttpStatus.CONFLICT, cajero.token)
     }
 
     // ayudas

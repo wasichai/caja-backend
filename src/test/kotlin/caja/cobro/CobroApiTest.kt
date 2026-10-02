@@ -83,6 +83,28 @@ class CobroApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `el reenvio de un cobro cuyo recibo se anulo da 409 y no lo devuelve como cobrado`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val ordenId = post(ORDENES, orden())["orden_id"].asString()
+        val clave = mapOf("Idempotency-Key" to UUID.randomUUID().toString())
+        val numero = tree(send("POST", COBROS, cobro(caja, ordenId), HttpStatus.CREATED, cajero.token, clave))["recibo"]["numero_impreso"].asString()
+        post(
+            "/api/caja/recibos/$numero/anulacion",
+            mapOf("motivo" to "COBRO EN DEMASÍA", "observacion" to "el pagador pagó dos veces en ventanilla"),
+            funcionario("SUPERVISOR_CAJA")
+        )
+
+        val problema = tree(send("POST", COBROS, cobro(caja, ordenId), HttpStatus.CONFLICT, cajero.token, clave))
+
+        assertTrue(problema["detail"].asString().contains("el recibo de ese cobro está anulado"), problema.toString())
+        assertTrue(problema["detail"].asString().contains(numero), problema.toString())
+        // no se cobró otra vez: la orden sigue PENDIENTE y hay un solo recibo
+        assertEquals("PENDIENTE", estadoDe(ordenId))
+        assertEquals(1, registros("recibo", "caja" to caja.id).size)
+    }
+
+    @Test
     fun `el segundo cobro de la misma orden da 409 y no emite otro recibo`() {
         val caja = nuevaCaja()
         val cajero = cuenta("CAJERO")
