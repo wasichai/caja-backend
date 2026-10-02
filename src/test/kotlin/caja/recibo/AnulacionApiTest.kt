@@ -10,15 +10,20 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
 import org.springframework.http.HttpStatus
+import wasichai.core.data.RecordChange
+import wasichai.core.data.RecordChangeKind
+import wasichai.core.data.RecordChangeListener
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.util.Collections
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 // POST /api/caja/recibos/{numero}/anulacion: anular es agregar una anulacion_recibo; el recibo no se toca. el mismo día,
 // una vez, bajo el candado del turno; las órdenes vuelven a PENDIENTE y el PAGO_ANULADO sale al buzón. el reloj de
@@ -43,9 +48,28 @@ class AnulacionApiTest : CajaApiTest() {
         fun relojMovible(): Clock = reloj
     }
 
+    // revienta al encolar el PAGO_ANULADO, cuando el acta y la orden PENDIENTE ya están escritas: si la anulación no
+    // fuera una sola transacción, quedarían. solo lo arma la prueba del fallo a mitad
+    @TestConfiguration
+    class FalloAlEncolarLaAnulacion {
+        @Bean
+        fun revientaAlEncolarLaAnulacion() =
+            object : RecordChangeListener {
+                override suspend fun recordChanged(change: RecordChange) {
+                    if (!armado.get()) return
+                    vistos += "${change.objectName} ${change.kind}"
+                    if (change.objectName == "pago_evento" && change.kind == RecordChangeKind.CREATED) {
+                        throw IllegalStateException("fallo simulado al encolar el PAGO_ANULADO")
+                    }
+                }
+            }
+    }
+
     @AfterEach
     fun relojEnHora() {
         reloj.desfase = Duration.ZERO
+        armado.set(false)
+        vistos.clear()
     }
 
     private val hoy: LocalDate get() = LocalDate.now(LIMA)
@@ -104,6 +128,31 @@ class AnulacionApiTest : CajaApiTest() {
                 funcionario("CAJERO")
             )
         assertEquals("${caja.serie}-0000002", otraVez["recibo"]["numero_impreso"].asString())
+    }
+
+    @Test
+    fun `un fallo a mitad de la anulacion no deja acta, ni orden pendiente, ni PAGO_ANULADO`() {
+        val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
+        val antes = registros("recibo", "numero_impreso" to cobro.numero).single()
+        val reciboId = antes["id"].asString()
+
+        armado.set(true)
+        send("POST", anulacion(cobro.numero), PETICION, HttpStatus.INTERNAL_SERVER_ERROR, funcionario("SUPERVISOR_CAJA"))
+        armado.set(false)
+
+        // el listener vio cada escritura antes de reventar: estaban hechas
+        assertEquals(listOf("anulacion_recibo CREATED", "orden_de_cobro UPDATED", "pago_evento CREATED"), vistos.toList())
+        // y la transacción se las llevó todas
+        assertEquals(0, registros("anulacion_recibo", "recibo" to reciboId).size, "ninguna acta")
+        val orden = tree(send("GET", "/api/objects/orden_de_cobro/records/${cobro.ordenId}", null, HttpStatus.OK))["attributes"]
+        assertEquals("PAGADA", orden["estado"].asString(), "la orden sigue pagada")
+        assertEquals(reciboId, orden["recibo"].asString(), "y sigue nombrando su recibo")
+        assertEquals(antes, registros("recibo", "numero_impreso" to cobro.numero).single(), "el recibo, intacto")
+        assertEquals(listOf("PAGO_REGISTRADO"), registros("pago_evento", "recibo" to reciboId).map { it["attributes"]["tipo"].asString() })
+
+        // el reintento, ya sin el fallo, anula
+        post(anulacion(cobro.numero), PETICION, funcionario("SUPERVISOR_CAJA"))
+        assertEquals("PENDIENTE", estadoDe(cobro.ordenId))
     }
 
     @Test
@@ -316,6 +365,10 @@ class AnulacionApiTest : CajaApiTest() {
 
     private companion object {
         val reloj = RelojMovible()
+
+        // solo la prueba del fallo a mitad lo arma: el resto del contexto anula como siempre
+        val armado = AtomicBoolean(false)
+        val vistos: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
         val PETICION =
             mapOf(

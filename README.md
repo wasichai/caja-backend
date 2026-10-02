@@ -533,7 +533,9 @@ desconocido son **400** (un filtro que no se entiende no es «todos»). Una bús
 El orden es `emitido_en` descendente con **desempate estable por id**: el `ORDER BY` de core es de una sola columna, así
 que se leen los recibos entre el instante del último de la página y el del primero, se cuentan los más recientes, y la
 página es el tramo que le toca en el orden (`emitido_en`, `id`). Dos recibos del mismo instante no se repiten ni se
-pierden al pasar de página.
+pierden al pasar de página. Esas lecturas, y las de las anulaciones y reimpresiones de la página, van en **una
+transacción de solo lectura en `REPEATABLE READ`** (`Transaccion.lectura`): ven una sola foto de la base, y un cobro que
+se confirme entre una y otra no las descuadra.
 
 #### El duplicado
 

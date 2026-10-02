@@ -96,6 +96,18 @@ class RecibosTest {
         }
     }
 
+    // la página del listado dentro de su tramo desempatado
+
+    @Test
+    fun `la pagina sale del tramo en su desplazamiento, y una lectura descuadrada no revienta`() {
+        val tramo = listOf("a", "b", "c", "d")
+        assertEquals(listOf("b", "c"), paginaDelTramo(tramo, 3, 2, 2))
+        assertEquals(listOf("a", "b"), paginaDelTramo(tramo, 0, 0, 2))
+        // la carrera de la revisión: en la página 0, un cobro confirmado entre la lectura de la página y la cuenta de
+        // los más recientes deja masRecientes = 1 > desplazamiento = 0. drop(-1) lanzaba IllegalArgumentException (500)
+        assertEquals(listOf("a", "b"), paginaDelTramo(tramo, 0, 1, 2))
+    }
+
     // los filtros del listado
 
     @Test

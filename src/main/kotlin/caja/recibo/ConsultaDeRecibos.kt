@@ -16,6 +16,7 @@ import caja.comun.RECIBO
 import caja.comun.REIMPRESION_RECIBO
 import caja.comun.Registros
 import caja.comun.TASA
+import caja.comun.Transaccion
 import org.springframework.stereotype.Service
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException
@@ -34,6 +35,16 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.Locale
 
+// la página dentro del tramo ordenado: empieza donde la deja el desplazamiento, descontados los más recientes que el
+// tramo. con una sola foto de la base, desplazamiento >= masRecientes siempre; si no (una lectura descuadrada), empieza
+// en 0 en vez de reventar
+internal fun <T> paginaDelTramo(
+    tramo: List<T>,
+    desplazamiento: Long,
+    masRecientes: Long,
+    tamano: Int
+): List<T> = tramo.drop((desplazamiento - masRecientes).coerceIn(0, Int.MAX_VALUE.toLong()).toInt()).take(tamano)
+
 // la consulta de recibos (ConsultaDeRecibos y la vista previa de DuplicadoDeRecibo de caja): el listado para quien
 // perdió el papel y la ficha de un recibo por su número. no escribe ni recalcula nada: cada cifra es la que el recibo
 // congeló, con su fecha (regla 9), y el estado y los duplicados se derivan de la anulación y las reimpresiones. todo se
@@ -41,6 +52,7 @@ import java.util.Locale
 @Service
 class ConsultaDeRecibos(
     private val registros: Registros,
+    private val transaccion: Transaccion,
     private val metadata: MetadataService,
     private val schemas: WasichaiSchemas
 ) {
@@ -84,16 +96,25 @@ class ConsultaDeRecibos(
                 estadoFiltrado?.let { add(conAnulacion(it == ANULADO, metadata.definitionOf(ANULACION_RECIBO))) }
             }
 
-        val pagina =
-            registros.page(
-                RECIBO,
-                Recibo::class.java,
-                RecordQuery(page = pedida, sort = "emitido_en", descending = true, filters = filtros, criteria = criterios)
-            )
-        val recibos = desempatada(pagina.content, pedida, filtros, criterios)
-        val ids = recibos.map { it.id!! }
-        val anulados = registros.byRelation(ANULACION_RECIBO, AnulacionRecibo::class.java, "recibo", ids).mapTo(HashSet()) { it.recibo }
-        val duplicados = registros.byRelation(REIMPRESION_RECIBO, ReimpresionRecibo::class.java, "recibo", ids).groupingBy { it.recibo }.eachCount()
+        // la página, su desempate, las anulaciones y las reimpresiones se leen en UNA foto de la base (REPEATABLE READ):
+        // un cobro o una anulación que se confirme entre dos lecturas no las descuadra
+        val (pagina, recibos, anulados, duplicados) =
+            transaccion.lectura {
+                val pagina =
+                    registros.page(
+                        RECIBO,
+                        Recibo::class.java,
+                        RecordQuery(page = pedida, sort = "emitido_en", descending = true, filters = filtros, criteria = criterios)
+                    )
+                val recibos = desempatada(pagina.content, pedida, filtros, criterios)
+                val ids = recibos.map { it.id!! }
+                Leido(
+                    pagina,
+                    recibos,
+                    registros.byRelation(ANULACION_RECIBO, AnulacionRecibo::class.java, "recibo", ids).mapTo(HashSet()) { it.recibo },
+                    registros.byRelation(REIMPRESION_RECIBO, ReimpresionRecibo::class.java, "recibo", ids).groupingBy { it.recibo }.eachCount()
+                )
+            }
         return PageResponse(
             recibos.map { recibo ->
                 ReciboEnLista(
@@ -173,8 +194,15 @@ class ConsultaDeRecibos(
                     filtros,
                     criteria = criterios + emitido(">=", ultimo.atOffset(ZoneOffset.UTC)) + emitido("<=", primero.atOffset(ZoneOffset.UTC))
                 ).sortedWith(compareByDescending<Recibo> { it.emitidoEn }.thenByDescending { it.id })
-        return tramo.drop((pedida.offset - masRecientes).toInt()).take(leidos.size)
+        return paginaDelTramo(tramo, pedida.offset, masRecientes, leidos.size)
     }
+
+    private data class Leido(
+        val pagina: PageResponse<Recibo>,
+        val recibos: List<Recibo>,
+        val anulados: Set<String?>,
+        val duplicados: Map<String?, Int>
+    )
 
     // emitido_en comparado con un instante, que va enlazado
     private fun emitido(
