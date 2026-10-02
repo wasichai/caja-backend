@@ -1,0 +1,56 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: caja-backend
+
+wasichai:
+  database:
+    host: ${WASICHAI_DB_HOST:localhost}
+    # compose.yml publica postgres en 5434. nunca 5432: puede haber un postgres de otra app ahí
+    port: ${WASICHAI_DB_PORT:5434}
+    name: ${WASICHAI_DB_NAME:caja}
+    username: ${WASICHAI_DB_USERNAME:caja}
+    password: ${WASICHAI_DB_PASSWORD:caja}
+  seed:
+    # admin@wasichai.local / admin. solo para desarrollo: apagarlo en cualquier entorno real
+    dev: ${WASICHAI_SEED_DEV:true}
+  security:
+    jwt:
+      # solo para desarrollo. un despliegue real pone WASICHAI_JWT_SECRET (>= 32 bytes)
+      secret: ${WASICHAI_JWT_SECRET:caja-dev-only-secret-change-me-0123456789}
+
+logging:
+  level:
+    # openhtmltopdf registra cada render (fuentes cargadas, hojas de estilo leídas) en INFO
+    com.openhtmltopdf: WARN
+
+caja:
+  municipalidad:
+    # el nombre que encabeza el recibo. obligatorio: la app no arranca sin él (caja.emision.Municipalidad)
+    nombre: ${CAJA_MUNICIPALIDAD_NOMBRE:}
+  # el buzón de salida (caja.buzon.PublicadorDelBuzon): entrega PAGO_REGISTRADO y PAGO_ANULADO al sistema de origen de
+  # las órdenes. APAGADO POR DEFECTO: sin él, los pagos quedan PENDIENTE y el turno que los tiene no cierra
+  buzon:
+    habilitado: ${CAJA_BUZON_HABILITADO:false}
+    # la espera entre el final de una vuelta y la siguiente
+    intervalo: PT10S
+    # cuántos eventos PENDIENTE lee por organización en cada vuelta
+    por-vuelta: 50
+    # con cuántos intentos fallidos un pago que no contesta pasa a MUERTO (un rechazo 4xx muere al primero)
+    intentos: 8
+    # la espera de la conexión y de la respuesta de cada destino
+    timeout: 10s
+    # un destino por sistema de origen, por su nombre (el sistema_origen de sus órdenes): POST {url}/pagos. el token es
+    # opcional y viaja como Authorization: Bearer. sin url, el pago no se entrega y suma intentos. por ejemplo:
+    #   destinos:
+    #     rentas:
+    #       url: ${CAJA_BUZON_DESTINOS_RENTAS_URL:}
+    #       token: ${CAJA_BUZON_DESTINOS_RENTAS_TOKEN:}
+    # (o las variables CAJA_BUZON_DESTINOS_<SISTEMA>_URL y _TOKEN, sin tocar este archivo)
+  # a quién avisa un pago que muere (DINERO COBRADO SIN REGISTRAR). OBLIGATORIOS con el buzón habilitado: sin ellos la
+  # app no arranca
+  conciliacion:
+    responsable: ${CAJA_CONCILIACION_RESPONSABLE:}
+    canal: ${CAJA_CONCILIACION_CANAL:}

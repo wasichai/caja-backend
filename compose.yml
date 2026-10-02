@@ -1,0 +1,27 @@
+name: caja
+
+services:
+  # postgres plano: caja no usa extensiones (ni PostGIS)
+  postgres:
+    image: postgres:18
+    container_name: caja-postgres
+    environment:
+      POSTGRES_USER: caja
+      POSTGRES_PASSWORD: caja
+      POSTGRES_DB: caja
+    ports:
+      # 5434, nunca 5432: un postgres que ya corra ahí (de otra app) no se toca.
+      # solo loopback: con un DOCKER_HOST remoto esto abriría la base en la ip pública del servidor;
+      # se llega por un túnel ssh (ssh -N -L 5434:localhost:5434 <host>)
+      - '127.0.0.1:${CAJA_PG_PORT:-5434}:5432'
+    volumes:
+      # las imágenes de pg18 quieren el montaje un nivel más arriba, los datos caen en un subdirectorio de versión
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U caja -d caja']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:

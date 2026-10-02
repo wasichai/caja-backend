@@ -1,0 +1,1020 @@
+{
+  "enums": {
+    "estado_orden": [
+      "PENDIENTE",
+      "PAGADA",
+      "ANULADA"
+    ],
+    "forma_pago": [
+      "EFECTIVO",
+      "CHEQUE",
+      "DEPOSITO",
+      "TARJETA",
+      "TRANSFERENCIA"
+    ],
+    "tipo_pago": [
+      "NORMAL",
+      "TASA"
+    ],
+    "tipo_evento_pago": [
+      "PAGO_REGISTRADO",
+      "PAGO_ANULADO"
+    ],
+    "estado_evento": [
+      "PENDIENTE",
+      "ENTREGADO",
+      "MUERTO",
+      "EXPLICADO"
+    ]
+  },
+  "objects": [
+    {
+      "name": "area",
+      "label": "Área",
+      "pluralLabel": "Áreas",
+      "description": "Dependencia de la municipalidad a la que se imputa lo que recauda una caja, y que fija las tasas (model/data/ejemplos/cajas.csv).",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "Como la nombra la municipalidad, por ejemplo A-10. Es la clave con la que cajas y tasas la buscan."
+        },
+        {
+          "name": "nombre",
+          "label": "Nombre",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "activa",
+          "label": "Activa",
+          "type": "BOOLEAN",
+          "required": true,
+          "description": "Un área que ya no se usa se da de baja, no se borra."
+        }
+      ]
+    },
+    {
+      "name": "caja",
+      "label": "Caja",
+      "pluralLabel": "Cajas",
+      "description": "Ventanilla de cobro (model/data/ejemplos/cajas.csv). Las cajas tributarias no tienen área.",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "Como la nombra la municipalidad, por ejemplo C-10."
+        },
+        {
+          "name": "nombre",
+          "label": "Nombre",
+          "type": "TEXT",
+          "required": true,
+          "description": "El rótulo de la ventanilla."
+        },
+        {
+          "name": "serie",
+          "label": "Serie",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "La serie de sus recibos: de 1 a 5 caracteres, en mayúsculas, única en la municipalidad. Es lo que impide que dos ventanillas compitan por el mismo correlativo."
+        },
+        {
+          "name": "activa",
+          "label": "Activa",
+          "type": "BOOLEAN",
+          "required": true,
+          "description": "Una caja que ya no se usa se da de baja, no se borra."
+        }
+      ]
+    },
+    {
+      "name": "tasa",
+      "label": "Tasa",
+      "pluralLabel": "Tasas",
+      "description": "Tarifa de un trámite o servicio del TUPA en una vigencia. La cifra es un dato publicado desde la normativa verificada, no un literal del código. Clave natural: codigo y vigencia_desde, que clave_vigencia reúne en un campo.",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "TEXT",
+          "required": true,
+          "description": "El código de la tasa en el TUPA. Se repite en cada vigencia."
+        },
+        {
+          "name": "descripcion",
+          "label": "Descripción",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "partida_presupuestal",
+          "label": "Partida presupuestal",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "importe",
+          "label": "Importe",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La tarifa en soles, con hasta 2 decimales y no negativa."
+        },
+        {
+          "name": "vigencia_desde",
+          "label": "Vigencia desde",
+          "type": "DATE",
+          "required": true
+        },
+        {
+          "name": "vigencia_hasta",
+          "label": "Vigencia hasta",
+          "type": "DATE",
+          "description": "Vacía: sigue vigente. Si está, no es anterior a vigencia_desde."
+        },
+        {
+          "name": "documento_fuente",
+          "label": "Documento fuente",
+          "type": "TEXT",
+          "required": true,
+          "description": "La norma o el TUPA de donde sale la tarifa."
+        },
+        {
+          "name": "clave_vigencia",
+          "label": "Clave de vigencia",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<codigo>|<vigencia_desde en ISO>. Reemplaza la unicidad compuesta (codigo, vigencia_desde), que wasichai no tiene."
+        }
+      ]
+    },
+    {
+      "name": "turno",
+      "label": "Turno",
+      "pluralLabel": "Turnos",
+      "description": "La apertura de una caja por un cajero en un día (cierre_caja de caja, con el nombre que tiene mientras está viva). No tiene endpoint propio: el primer cobro del día lo abre, de forma implícita e idempotente, y el resto del turno cobra contra él. Lo cierra el arqueo.",
+      "fields": [
+        {
+          "name": "cajero",
+          "label": "Cajero",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien atiende: el correo de la sesión que cobró, nunca uno que mande el cliente."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día de trabajo, en Lima."
+        },
+        {
+          "name": "abierto_en",
+          "label": "Abierto en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante en que se abrió, según el reloj de la caja. Un turno sin su hora sería un turno inventado."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se abrió (regla 10): la del cobro que lo abrió."
+        },
+        {
+          "name": "clave_turno",
+          "label": "Clave del turno",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<caja id>|<cajero>|<fecha en ISO>. Un cajero tiene un solo turno al día por caja: reemplaza cierre_uq, la unicidad compuesta que wasichai no tiene."
+        }
+      ]
+    },
+    {
+      "name": "recibo",
+      "label": "Recibo",
+      "pluralLabel": "Recibos",
+      "description": "El papel que se entrega en ventanilla. No se edita ni se borra: ningún rol tiene UPDATE ni DELETE sobre él (V29 de caja). Su anulación llega como un registro que se agrega.",
+      "fields": [
+        {
+          "name": "serie",
+          "label": "Serie",
+          "type": "TEXT",
+          "required": true,
+          "description": "La serie de la caja que lo emitió."
+        },
+        {
+          "name": "numero",
+          "label": "Número",
+          "type": "INTEGER",
+          "required": true,
+          "description": "El correlativo dentro de la serie, desde 1 y sin huecos: max(numero) + 1 de la serie, bajo el candado de la serie."
+        },
+        {
+          "name": "numero_impreso",
+          "label": "Número impreso",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "Como lo dice el papel: <serie>-<número en 7 dígitos>, por ejemplo 001-0000123. Su unicidad es la red de la numeración."
+        },
+        {
+          "name": "cajero",
+          "label": "Cajero",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien cobró: el correo de la sesión."
+        },
+        {
+          "name": "pagador_documento",
+          "label": "Documento del pagador",
+          "type": "TEXT",
+          "description": "Copiado de la primera orden, congelado: un duplicado sale igual al original."
+        },
+        {
+          "name": "pagador_nombre",
+          "label": "Nombre del pagador",
+          "type": "TEXT",
+          "description": "Lo que se imprime, copiado de la primera orden."
+        },
+        {
+          "name": "pagador_externo_id",
+          "label": "Id externo del pagador",
+          "type": "INTEGER",
+          "description": "El que le da el sistema de origen; viaja en el evento del pago."
+        },
+        {
+          "name": "emitido_en",
+          "label": "Emitido en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante de emisión, según el reloj de la caja."
+        },
+        {
+          "name": "forma_pago",
+          "label": "Forma de pago",
+          "type": "ENUM",
+          "enum": "forma_pago",
+          "required": true
+        },
+        {
+          "name": "tipo_pago",
+          "label": "Tipo de pago",
+          "type": "ENUM",
+          "enum": "tipo_pago",
+          "required": true,
+          "description": "NORMAL si cobra órdenes (y produce un evento de pago), TASA si cobra tasas del TUPA (no produce ninguno)."
+        },
+        {
+          "name": "total",
+          "label": "Total",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La suma exacta de sus líneas, sin redondear: nunca una cifra aparte."
+        },
+        {
+          "name": "actualizado_a",
+          "label": "Actualizado a",
+          "type": "DATE",
+          "required": true,
+          "description": "A qué fecha están sus importes (regla 9): la fecha de pago."
+        },
+        {
+          "name": "clave_idempotencia",
+          "label": "Clave de idempotencia",
+          "type": "TEXT",
+          "unique": true,
+          "description": "La cabecera Idempotency-Key del cobro, si vino: el reenvío devuelve este recibo en vez de emitir otro."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se cobró, escrito por quien cobró (regla 10)."
+        }
+      ]
+    },
+    {
+      "name": "orden_de_cobro",
+      "label": "Orden de cobro",
+      "pluralLabel": "Órdenes de cobro",
+      "description": "Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo y a qué fecha está esa cifra. No es deuda tributaria: no tiene tributo, ejercicio ni periodo, y si los ganara la caja dejaría de servir para cobrar un puesto de mercado. La da de alta el sistema de origen por POST /api/caja/ordenes-de-cobro.",
+      "fields": [
+        {
+          "name": "sistema_origen",
+          "label": "Sistema de origen",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quién la mandó: en minúsculas, [a-z0-9_-], de 1 a 20 caracteres. Es texto y no un enumerado: añadir un sistema no es un despliegue de la caja."
+        },
+        {
+          "name": "referencia_externa",
+          "label": "Referencia externa",
+          "type": "TEXT",
+          "required": true,
+          "description": "Cómo la reconoce quien la mandó, hasta 120 caracteres. Opaca: no se analiza, no se compara por partes y no se ordena."
+        },
+        {
+          "name": "clave_origen",
+          "label": "Clave de origen",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<sistema_origen>|<referencia_externa>. El alta es idempotente por aquí: reemplaza orden_referencia_uq, la unicidad compuesta que wasichai no tiene."
+        },
+        {
+          "name": "concepto",
+          "label": "Concepto",
+          "type": "TEXT",
+          "required": true,
+          "description": "Lo que se imprime en la línea del recibo, hasta 120 caracteres."
+        },
+        {
+          "name": "detalle",
+          "label": "Detalle",
+          "type": "TEXT",
+          "description": "Lo que el origen quiera añadir, hasta 200 caracteres."
+        },
+        {
+          "name": "importe",
+          "label": "Importe",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Cuánto, en soles, a la fecha de actualizado_a: mayor que 0 y con 2 decimales a lo sumo. La caja no lo recalcula."
+        },
+        {
+          "name": "fecha_exigibilidad",
+          "label": "Fecha de exigibilidad",
+          "type": "DATE",
+          "required": true,
+          "description": "Desde cuándo se puede cobrar."
+        },
+        {
+          "name": "actualizado_a",
+          "label": "Actualizado a",
+          "type": "DATE",
+          "required": true,
+          "description": "A qué fecha está el importe (regla 9): toda cifra lleva su fecha."
+        },
+        {
+          "name": "pagador_documento",
+          "label": "Documento del pagador",
+          "type": "TEXT",
+          "description": "Con lo que se busca en ventanilla, en mayúsculas, hasta 20 caracteres. Opcional: la caja no lo cruza contra ningún padrón."
+        },
+        {
+          "name": "pagador_nombre",
+          "label": "Nombre del pagador",
+          "type": "TEXT",
+          "description": "Lo que se imprime en el recibo, hasta 150 caracteres."
+        },
+        {
+          "name": "pagador_externo_id",
+          "label": "Id externo del pagador",
+          "type": "INTEGER",
+          "description": "El identificador que le da el sistema de origen (en rentas, el contribuyente), mayor que 0. Viaja de vuelta en el evento del pago."
+        },
+        {
+          "name": "estado",
+          "label": "Estado",
+          "type": "ENUM",
+          "enum": "estado_orden",
+          "required": true,
+          "description": "PENDIENTE al nacer. PAGADA la deja la cobranza, y nombra su recibo (orden_recibo_ck de caja). No hay VENCIDA: que sea exigible se deriva de fecha_exigibilidad."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se dio de alta (regla 10): de 5 a 500 caracteres."
+        }
+      ]
+    },
+    {
+      "name": "linea_recibo",
+      "label": "Línea de recibo",
+      "pluralLabel": "Líneas de recibo",
+      "description": "Lo que cobró un recibo, una línea por orden (o por tasa), congelada. Sale solo de la orden: no lleva tributo, ejercicio, periodo, predio ni vehículo, ni un desglose en insoluto, reajuste, interés y gastos (ADR-0045 de caja no se porta).",
+      "fields": [
+        {
+          "name": "sistema_origen",
+          "label": "Sistema de origen",
+          "type": "TEXT",
+          "description": "El de la orden cobrada."
+        },
+        {
+          "name": "concepto",
+          "label": "Concepto",
+          "type": "TEXT",
+          "required": true,
+          "description": "Lo que se imprime: el concepto de la orden."
+        },
+        {
+          "name": "detalle",
+          "label": "Detalle",
+          "type": "TEXT"
+        },
+        {
+          "name": "referencia_externa",
+          "label": "Referencia externa",
+          "type": "TEXT",
+          "description": "La de la orden: con ella el sistema de origen reconoce lo que se pagó."
+        },
+        {
+          "name": "cantidad",
+          "label": "Cantidad",
+          "type": "INTEGER",
+          "description": "Solo en una línea de tasa: cuántas veces se cobró."
+        },
+        {
+          "name": "precio_unitario",
+          "label": "Precio unitario",
+          "type": "DECIMAL",
+          "description": "Solo en una línea de tasa: la tarifa vigente que se aplicó."
+        },
+        {
+          "name": "monto",
+          "label": "Monto",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que cobra la línea: el importe de la orden, a la fecha del recibo."
+        }
+      ]
+    },
+    {
+      "name": "pago_evento",
+      "label": "Evento de pago",
+      "pluralLabel": "Eventos de pago",
+      "description": "El buzón de salida: el aviso al sistema de origen de que se cobró (o se anuló) un recibo. Se escribe en la misma transacción que el recibo: si la fila está, el recibo está. Lo entrega un proceso aparte.",
+      "fields": [
+        {
+          "name": "evento_id",
+          "label": "Id del evento",
+          "type": "UUID",
+          "required": true,
+          "unique": true,
+          "description": "El pagoId. Lo genera la caja al cobrar, no quien entrega: un reintento de entrega manda el mismo y el receptor deduplica."
+        },
+        {
+          "name": "tipo",
+          "label": "Tipo",
+          "type": "ENUM",
+          "enum": "tipo_evento_pago",
+          "required": true
+        },
+        {
+          "name": "sistema_destino",
+          "label": "Sistema de destino",
+          "type": "TEXT",
+          "required": true,
+          "description": "El sistema de origen de las órdenes del recibo."
+        },
+        {
+          "name": "cuerpo",
+          "label": "Cuerpo",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "El evento entero en JSON, congelado al cobrar: no se recompone al entregar."
+        },
+        {
+          "name": "estado",
+          "label": "Estado",
+          "type": "ENUM",
+          "enum": "estado_evento",
+          "required": true,
+          "description": "PENDIENTE al nacer."
+        },
+        {
+          "name": "intentos",
+          "label": "Intentos",
+          "type": "INTEGER",
+          "required": true,
+          "description": "Cuántas veces se intentó entregar, desde 0."
+        },
+        {
+          "name": "ultimo_error",
+          "label": "Último error",
+          "type": "TEXT"
+        },
+        {
+          "name": "entregado_en",
+          "label": "Entregado en",
+          "type": "DATETIME",
+          "description": "Solo si está ENTREGADO."
+        },
+        {
+          "name": "explicacion",
+          "label": "Explicación",
+          "type": "LONG_TEXT",
+          "description": "Solo si está EXPLICADO: quien se hizo cargo dice por qué."
+        }
+      ]
+    },
+    {
+      "name": "anulacion_recibo",
+      "label": "Anulación de recibo",
+      "pluralLabel": "Anulaciones de recibo",
+      "description": "La anulación de un recibo el mismo día del pago: se agrega, y el recibo no se toca (recibo_movimiento de caja, tipo ANULACION). Las órdenes del recibo vuelven a PENDIENTE y, si el recibo avisó su pago, sale un PAGO_ANULADO en la misma transacción. Crearla es el privilegio ELIMINACION de caja; nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "recibo_anulado",
+          "label": "Recibo anulado",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "El id del recibo, otra vez: su unicidad es la red de que un recibo se anula una sola vez (reemplaza recibo_movimiento_anulacion_uq, un índice único parcial que wasichai no tiene)."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día de la anulación, en Lima: el del turno del recibo."
+        },
+        {
+          "name": "motivo",
+          "label": "Motivo",
+          "type": "TEXT",
+          "required": true,
+          "description": "El sustento del acto, hasta 80 caracteres y no en blanco: se imprime en el duplicado."
+        },
+        {
+          "name": "autorizado_por",
+          "label": "Autorizado por",
+          "type": "TEXT",
+          "description": "Quien lo autorizó, si consta: hasta 80 caracteres."
+        },
+        {
+          "name": "documento_autorizacion",
+          "label": "Documento de autorización",
+          "type": "TEXT",
+          "description": "El memorando o la resolución que lo sustenta, si consta: hasta 40 caracteres."
+        },
+        {
+          "name": "importe",
+          "label": "Importe",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "El total del recibo, congelado: lo que se devuelve del cajón en el arqueo de ese turno."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien anuló: el correo de la sesión."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se registra, escrito por quien anula (regla 10). Es otra cosa que el motivo."
+        }
+      ]
+    },
+    {
+      "name": "reimpresion_recibo",
+      "label": "Reimpresión de recibo",
+      "pluralLabel": "Reimpresiones de recibo",
+      "description": "Un duplicado de un recibo ya emitido (recibo_movimiento de caja, tipo DUPLICADO): cada reimpresión deja su fila, y de contarlas sale el «DUPLICADO N.°» del papel. Crearla es el privilegio IMPRESION de caja; nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día de la reimpresión, en Lima."
+        },
+        {
+          "name": "resumen",
+          "label": "Resumen",
+          "type": "TEXT",
+          "required": true,
+          "description": "El SHA-256 en hexadecimal (64 caracteres) de la representación canónica de lo congelado en el recibo y sus líneas, no de los bytes del pdf. Si cambia entre dos reimpresiones, el duplicado se niega: ya no saldría igual."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien pidió el duplicado: el correo de la sesión."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se reimprime, escrito por quien lo pide (regla 10)."
+        }
+      ]
+    },
+    {
+      "name": "cierre_turno",
+      "label": "Cierre de turno",
+      "pluralLabel": "Cierres de turno",
+      "description": "El acta del cierre de un turno con su arqueo congelado (cierre_turno de caja, V32, RF-087). Solo se agrega: un cierre no se modifica ni se borra, se reversa con una reversion_cierre, que reabre el turno. El estado del turno no es una columna: se deriva del último movimiento por secuencia. Crearlo es el privilegio REGISTRO de cierre_caja; nadie lo edita ni lo borra.",
+      "fields": [
+        {
+          "name": "secuencia",
+          "label": "Secuencia",
+          "type": "INTEGER",
+          "required": true,
+          "description": "El lugar del movimiento en la historia del turno, desde 1, común al cierre y a la reversión: los movimientos que había más uno. La serializa el candado del turno."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día del turno que se cierra, en Lima: la fecha a la que se leyó el arqueo."
+        },
+        {
+          "name": "registrado_en",
+          "label": "Registrado en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante en que se firmó, según el reloj de la caja."
+        },
+        {
+          "name": "total_cobrado",
+          "label": "Total cobrado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que cobraron los recibos del turno: la suma de las líneas, congelada."
+        },
+        {
+          "name": "total_anulado",
+          "label": "Total anulado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que las anulaciones de sus recibos sacaron del cajón, congelado."
+        },
+        {
+          "name": "neto",
+          "label": "Neto",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo cobrado menos lo anulado."
+        },
+        {
+          "name": "total_declarado",
+          "label": "Total declarado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que el cajero declaró haber contado en el cajón: la suma de lo declarado por forma de pago."
+        },
+        {
+          "name": "diferencia",
+          "label": "Diferencia",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo declarado menos el neto: negativa si falta dinero en el cajón, positiva si sobra. Un descuadre no impide cerrar: se deja escrito."
+        },
+        {
+          "name": "recibos_emitidos",
+          "label": "Recibos emitidos",
+          "type": "INTEGER",
+          "required": true,
+          "description": "Cuántos recibos emitió el turno."
+        },
+        {
+          "name": "recibos_anulados",
+          "label": "Recibos anulados",
+          "type": "INTEGER",
+          "required": true,
+          "description": "Cuántos de ellos se anularon."
+        },
+        {
+          "name": "cobrado_con_evento",
+          "label": "Cobrado con evento",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La mitad del neto que se cobró contra una orden y produjo un evento para su sistema de origen."
+        },
+        {
+          "name": "cobrado_sin_evento",
+          "label": "Cobrado sin evento",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "La mitad del neto que no avisa a nadie: las tasas. Las dos mitades suman el neto."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien cerró: el correo de la sesión, el cajero del turno."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se cierra, escrito por quien cierra (regla 10)."
+        },
+        {
+          "name": "clave_secuencia",
+          "label": "Clave de la secuencia",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<turno>|<secuencia>. La red de que dos cierres a la vez no tomen la misma secuencia (cierre_turno_secuencia_uq de caja, una unicidad compuesta que wasichai no tiene)."
+        }
+      ]
+    },
+    {
+      "name": "cierre_turno_linea",
+      "label": "Línea de cierre de turno",
+      "pluralLabel": "Líneas de cierre de turno",
+      "description": "El arqueo de un cierre, forma de pago por forma de pago (cierre_turno_detalle de caja): lo cobrado, lo anulado, el neto y lo declarado. Se escribe con su cierre y nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "forma_pago",
+          "label": "Forma de pago",
+          "type": "ENUM",
+          "enum": "forma_pago",
+          "required": true
+        },
+        {
+          "name": "cobrado",
+          "label": "Cobrado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que los recibos de esa forma de pago sumaron en el turno."
+        },
+        {
+          "name": "anulado",
+          "label": "Anulado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que las anulaciones devolvieron de esa forma de pago, congelado."
+        },
+        {
+          "name": "neto",
+          "label": "Neto",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo cobrado menos lo anulado."
+        },
+        {
+          "name": "declarado",
+          "label": "Declarado",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "Lo que el cajero contó en el cajón: el único dato del arqueo que el sistema no puede recomponer. Cero si no lo declaró."
+        },
+        {
+          "name": "clave",
+          "label": "Clave",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<cierre>|<forma_pago>: una línea por forma de pago y cierre (la clave primaria compuesta de cierre_turno_detalle)."
+        }
+      ]
+    },
+    {
+      "name": "reversion_cierre",
+      "label": "Reversión de cierre",
+      "pluralLabel": "Reversiones de cierre",
+      "description": "Deja sin efecto el cierre vigente de un turno y lo reabre (cierre_turno de caja, tipo REVERSION). El cierre reversado no se toca: sigue diciendo lo que decía, con su arqueo. Crearla es el privilegio ELIMINACION de cierre_caja; nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "cierre_revertido",
+          "label": "Cierre revertido",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "El id del cierre_turno que deja sin efecto: su unicidad es la red de que un cierre se reversa una sola vez (cierre_turno_reversion_uq de caja)."
+        },
+        {
+          "name": "secuencia",
+          "label": "Secuencia",
+          "type": "INTEGER",
+          "required": true,
+          "description": "El lugar del movimiento en la historia del turno, común con el cierre: los movimientos que había más uno."
+        },
+        {
+          "name": "motivo",
+          "label": "Motivo",
+          "type": "TEXT",
+          "required": true,
+          "description": "El sustento de reabrir una caja cuyo arqueo ya estaba firmado: hasta 80 caracteres y no en blanco."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día del turno que se reabre, en Lima."
+        },
+        {
+          "name": "registrado_en",
+          "label": "Registrado en",
+          "type": "DATETIME",
+          "required": true,
+          "description": "El instante en que se reversó, según el reloj de la caja."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien reversó: el correo de la sesión."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se registra, escrito por quien reversa (regla 10). Es otra cosa que el motivo."
+        },
+        {
+          "name": "clave_secuencia",
+          "label": "Clave de la secuencia",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "<turno>|<secuencia>, como la del cierre: la red de que dos movimientos del mismo objeto no tomen la misma secuencia."
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "caja_area",
+      "label": "Área",
+      "inverseLabel": "Cajas",
+      "source": "caja",
+      "target": "area",
+      "fieldName": "area",
+      "required": false
+    },
+    {
+      "name": "tasa_area",
+      "label": "Área",
+      "inverseLabel": "Tasas",
+      "source": "tasa",
+      "target": "area",
+      "fieldName": "area",
+      "required": true
+    },
+    {
+      "name": "turno_caja",
+      "label": "Caja",
+      "inverseLabel": "Turnos",
+      "source": "turno",
+      "target": "caja",
+      "fieldName": "caja",
+      "required": true
+    },
+    {
+      "name": "recibo_caja",
+      "label": "Caja",
+      "inverseLabel": "Recibos",
+      "source": "recibo",
+      "target": "caja",
+      "fieldName": "caja",
+      "required": true
+    },
+    {
+      "name": "recibo_turno",
+      "label": "Turno",
+      "inverseLabel": "Recibos",
+      "source": "recibo",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "orden_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Órdenes cobradas",
+      "source": "orden_de_cobro",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": false
+    },
+    {
+      "name": "linea_recibo_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Líneas",
+      "source": "linea_recibo",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "linea_recibo_orden",
+      "label": "Orden de cobro",
+      "inverseLabel": "Líneas de recibo",
+      "source": "linea_recibo",
+      "target": "orden_de_cobro",
+      "fieldName": "orden",
+      "required": false
+    },
+    {
+      "name": "linea_recibo_tasa",
+      "label": "Tasa",
+      "inverseLabel": "Líneas de recibo",
+      "source": "linea_recibo",
+      "target": "tasa",
+      "fieldName": "tasa",
+      "required": false
+    },
+    {
+      "name": "pago_evento_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Eventos de pago",
+      "source": "pago_evento",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "pago_evento_turno",
+      "label": "Turno",
+      "inverseLabel": "Eventos de pago",
+      "source": "pago_evento",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "anulacion_recibo_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Anulación",
+      "source": "anulacion_recibo",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "anulacion_recibo_caja",
+      "label": "Caja",
+      "inverseLabel": "Anulaciones de recibo",
+      "source": "anulacion_recibo",
+      "target": "caja",
+      "fieldName": "caja",
+      "required": true
+    },
+    {
+      "name": "anulacion_recibo_turno",
+      "label": "Turno",
+      "inverseLabel": "Anulaciones de recibo",
+      "source": "anulacion_recibo",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "reimpresion_recibo_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Reimpresiones",
+      "source": "reimpresion_recibo",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "cierre_turno_turno",
+      "label": "Turno",
+      "inverseLabel": "Cierres",
+      "source": "cierre_turno",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "cierre_turno_linea_cierre_turno",
+      "label": "Cierre de turno",
+      "inverseLabel": "Líneas",
+      "source": "cierre_turno_linea",
+      "target": "cierre_turno",
+      "fieldName": "cierre_turno",
+      "required": true
+    },
+    {
+      "name": "reversion_cierre_turno",
+      "label": "Turno",
+      "inverseLabel": "Reversiones de cierre",
+      "source": "reversion_cierre",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    }
+  ]
+}

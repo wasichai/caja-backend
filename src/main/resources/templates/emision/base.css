@@ -1,0 +1,160 @@
+/* lo que comparten los documentos de caja (de srtm-backend, sin su cabecera institucional): A4, DejaVu Sans incrustada,
+   cajas con borde y barra de título, rejillas de etiqueta y valor y tablas con filete. PdfRenderer la incrusta en cada
+   plantilla */
+@page {
+    size: A4;
+    margin: 12mm 11mm 16mm 11mm;
+
+    @bottom-left {
+        content: element(pie);
+    }
+
+    @bottom-right {
+        content: 'Página ' counter(page) ' de ' counter(pages);
+        font-family: 'DejaVu Sans', sans-serif;
+        font-size: 7pt;
+        color: #333;
+    }
+}
+
+body {
+    font-family: 'DejaVu Sans', sans-serif;
+    font-size: 8.5pt;
+    color: #000;
+    margin: 0;
+}
+
+.pie {
+    position: running(pie);
+    font-size: 7pt;
+    color: #333;
+}
+
+/* la cabecera: la municipalidad y el documento a la izquierda, el número enmarcado a la derecha */
+.cabecera {
+    width: 100%;
+    border: 1.2pt solid #000;
+    border-collapse: collapse;
+    margin-bottom: 3mm;
+}
+
+.cabecera td {
+    padding: 2mm 3mm;
+    vertical-align: middle;
+}
+
+.cabecera .municipalidad {
+    font-size: 11pt;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.cabecera .documento {
+    font-size: 9pt;
+    margin-top: 1mm;
+}
+
+.cabecera .numero {
+    width: 34%;
+    border-left: 1.2pt solid #000;
+    text-align: center;
+}
+
+.cabecera .numero .valor {
+    font-size: 13pt;
+}
+
+/* una caja con título */
+.bloque {
+    border: 0.8pt solid #000;
+    margin-bottom: 2.5mm;
+    page-break-inside: avoid;
+}
+
+.bloque > .titulo {
+    background: #d9d9d9;
+    border-bottom: 0.8pt solid #000;
+    font-weight: bold;
+    padding: 1mm 2mm;
+    text-transform: uppercase;
+}
+
+/* pares etiqueta/valor: etiquetas pequeñas y grises sobre sus valores */
+.datos {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.datos td {
+    border-right: 0.5pt solid #999;
+    padding: 0.8mm 1.5mm;
+    vertical-align: top;
+}
+
+.datos td:last-child {
+    border-right: none;
+}
+
+.etiqueta {
+    display: block;
+    font-size: 6.5pt;
+    color: #444;
+    text-transform: uppercase;
+}
+
+.valor {
+    font-weight: bold;
+}
+
+/* tablas con filete: las líneas del recibo */
+.tabla {
+    width: 100%;
+    border-collapse: collapse;
+    -fs-table-paginate: paginate;
+}
+
+.tabla th,
+.tabla td {
+    border: 0.5pt solid #777;
+    padding: 1mm 1.5mm;
+}
+
+.tabla th {
+    background: #efefef;
+    font-size: 7pt;
+    font-weight: bold;
+    text-align: center;
+}
+
+.tabla .num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.tabla .detalle {
+    font-size: 7pt;
+    color: #333;
+}
+
+.tabla .total td {
+    background: #efefef;
+    font-weight: bold;
+}
+
+.nota {
+    font-size: 7.5pt;
+    padding: 1mm 2mm;
+}
+
+/* el aviso de un recibo anulado, en su duplicado: que no se lea como un pago */
+.anulado {
+    border: 1.5pt solid #000;
+    padding: 2mm 3mm;
+    margin-bottom: 3mm;
+}
+
+.anulado .aviso {
+    font-size: 10pt;
+    font-weight: bold;
+}

@@ -1,0 +1,72 @@
+{
+  "roles": [
+    {
+      "name": "SISTEMA_ORIGEN",
+      "label": "Sistema de origen",
+      "description": "El usuario técnico de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor.",
+      "permisos": {
+        "orden_de_cobro": ["READ", "CREATE"]
+      }
+    },
+    {
+      "name": "CAJERO",
+      "label": "Cajero",
+      "description": "Atiende una ventanilla: lee las cajas, sus áreas, las tasas y las órdenes, y cobra. Cobrar abre su turno, emite el recibo con sus líneas, encola el evento del pago y marca las órdenes PAGADA. Ve las anulaciones y los duplicados, y no crea ninguno. Cierra su turno con su arqueo y ve las reversiones, sin reversar. Nunca edita ni borra un recibo, una línea, un evento ni un cierre.",
+      "permisos": {
+        "area": ["READ"],
+        "caja": ["READ"],
+        "tasa": ["READ"],
+        "orden_de_cobro": ["READ", "UPDATE"],
+        "turno": ["READ", "CREATE"],
+        "recibo": ["READ", "CREATE"],
+        "linea_recibo": ["READ", "CREATE"],
+        "pago_evento": ["READ", "CREATE"],
+        "anulacion_recibo": ["READ"],
+        "reimpresion_recibo": ["READ"],
+        "cierre_turno": ["READ", "CREATE"],
+        "cierre_turno_linea": ["READ", "CREATE"],
+        "reversion_cierre": ["READ"]
+      }
+    },
+    {
+      "name": "SUPERVISOR_CAJA",
+      "label": "Supervisor de caja",
+      "description": "Supervisa las ventanillas: cobra como el cajero y, además, anula recibos del día (también los de otro cajero), reimprime duplicados y reversa el cierre de su propio turno, que lo reabre. Explica por escrito un pago que no se pudo entregar (MUERTO a EXPLICADO): es la única edición del buzón. Nunca edita ni borra un recibo, su anulación, sus reimpresiones, un cierre ni su reversión.",
+      "permisos": {
+        "area": ["READ"],
+        "caja": ["READ"],
+        "tasa": ["READ"],
+        "orden_de_cobro": ["READ", "UPDATE"],
+        "turno": ["READ", "CREATE"],
+        "recibo": ["READ", "CREATE"],
+        "linea_recibo": ["READ", "CREATE"],
+        "pago_evento": ["READ", "CREATE", "UPDATE"],
+        "anulacion_recibo": ["READ", "CREATE"],
+        "reimpresion_recibo": ["READ", "CREATE"],
+        "cierre_turno": ["READ", "CREATE"],
+        "cierre_turno_linea": ["READ", "CREATE"],
+        "reversion_cierre": ["READ", "CREATE"]
+      }
+    },
+    {
+      "name": "TESORERIA",
+      "label": "Tesorería",
+      "description": "Consulta: lee cada objeto del modelo y no escribe ninguno.",
+      "permisos": {
+        "area": ["READ"],
+        "caja": ["READ"],
+        "tasa": ["READ"],
+        "turno": ["READ"],
+        "recibo": ["READ"],
+        "orden_de_cobro": ["READ"],
+        "linea_recibo": ["READ"],
+        "pago_evento": ["READ"],
+        "anulacion_recibo": ["READ"],
+        "reimpresion_recibo": ["READ"],
+        "cierre_turno": ["READ"],
+        "cierre_turno_linea": ["READ"],
+        "reversion_cierre": ["READ"]
+      }
+    }
+  ]
+}
