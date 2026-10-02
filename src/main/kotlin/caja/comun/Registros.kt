@@ -1,5 +1,6 @@
 package caja.comun
 
+import kotlinx.coroutines.withContext
 import org.springframework.stereotype.Component
 import wasichai.core.common.PageRequest
 import wasichai.core.common.PageResponse
@@ -18,7 +19,8 @@ import java.util.UUID
 // transacción: cada escritura se confirma sola, y un unique que salta llega como DuplicateKeyException. dentro de
 // Transaccion.en se une a la transacción en curso y se confirma con ella (la cobranza). un dto lleva
 // todos sus campos, y core rechaza la escritura entera que nombra un campo que el usuario no puede escribir: las
-// escrituras mandan solo los escribibles
+// escrituras mandan solo los escribibles. cada escritura lleva la marca EscrituraDeCaja: es la api de caja, y
+// GuardiaDeEscrituras no la anota
 @Component
 class Registros(
     private val records: RecordService,
@@ -123,7 +125,7 @@ class Registros(
         objectName: String,
         type: Class<T>,
         attributes: Map<String, Any?>
-    ): T = read(type, records.create(objectName, RecordRequest(escribibles(objectName, attributes))))
+    ): T = withContext(EscrituraDeCaja) { read(type, records.create(objectName, RecordRequest(escribibles(objectName, attributes)))) }
 
     // el update de core reemplaza cada campo que el usuario puede escribir: uno que falta en la petición se borra.
     // se manda lo que el dto sabe sobre lo guardado, así un campo agregado en el admin (y ausente del dto) no se borra.
@@ -135,13 +137,13 @@ class Registros(
         attributes: Map<String, Any?>
     ): T {
         val stored = records.get(objectName, id).attributes
-        return read(type, records.update(objectName, id, RecordRequest(escribibles(objectName, stored + attributes))))
+        return withContext(EscrituraDeCaja) { read(type, records.update(objectName, id, RecordRequest(escribibles(objectName, stored + attributes)))) }
     }
 
     suspend fun delete(
         objectName: String,
         id: UUID
-    ) = records.delete(objectName, id)
+    ) = withContext(EscrituraDeCaja) { records.delete(objectName, id) }
 
     // el valor más alto que guarda un campo. los null quedan fuera: postgres los ordena primero al descender
     suspend fun highest(
