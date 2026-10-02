@@ -83,6 +83,31 @@ class CobroApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `el recibo trae el pagador tal como quedo guardado, en el cobro, el reenvio y la ficha`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        // el pagador de la orden, que el recibo congela
+        val ordenId =
+            post(
+                ORDENES,
+                orden("pagador_documento" to "  ab-1234 ", "pagador_nombre" to "QUISPE MAMANI, ROSA", "pagador_externo_id" to "77")
+            )["orden_id"].asString()
+        val clave = mapOf("Idempotency-Key" to UUID.randomUUID().toString())
+
+        val cobro = tree(send("POST", COBROS, cobro(caja, ordenId), HttpStatus.CREATED, cajero.token, clave))["recibo"]
+        val reenvio = tree(send("POST", COBROS, cobro(caja, ordenId), HttpStatus.OK, cajero.token, clave))["recibo"]
+        val ficha = tree(send("GET", "/api/caja/recibos/${cobro["numero_impreso"].asString()}", null, HttpStatus.OK, cajero.token))
+
+        val guardado = registros("recibo", "numero_impreso" to cobro["numero_impreso"].asString()).single()["attributes"]
+        listOf(cobro, reenvio, ficha).forEach { recibo ->
+            assertEquals(guardado["pagador_documento"].asString(), recibo["pagador_documento"].asString(), recibo.toString())
+            assertEquals("QUISPE MAMANI, ROSA", recibo["pagador_nombre"].asString(), recibo.toString())
+            assertEquals(77L, recibo["pagador_externo_id"].asLong(), recibo.toString())
+        }
+        assertEquals("AB-1234", cobro["pagador_documento"].asString())
+    }
+
+    @Test
     fun `el reenvio de un cobro cuyo recibo se anulo da 409 y no lo devuelve como cobrado`() {
         val caja = nuevaCaja()
         val cajero = cuenta("CAJERO")

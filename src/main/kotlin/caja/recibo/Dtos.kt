@@ -101,6 +101,7 @@ data class ReciboEnFicha(
     val emitidoEn: String,
     val pagadorDocumento: String?,
     val pagadorNombre: String?,
+    val pagadorExternoId: Long?,
     val formaPago: String,
     val tipoPago: String,
     val total: Importe,

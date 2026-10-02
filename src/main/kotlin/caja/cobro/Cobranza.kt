@@ -170,6 +170,9 @@ fun respuestaDelCobro(
                 serie = recibo.serie!!,
                 numero = recibo.numero!!,
                 cajero = recibo.cajero!!,
+                pagadorDocumento = recibo.pagadorDocumento,
+                pagadorNombre = recibo.pagadorNombre,
+                pagadorExternoId = recibo.pagadorExternoId,
                 formaPago = recibo.formaPago!!,
                 tipoPago = recibo.tipoPago!!,
                 emitidoEn =

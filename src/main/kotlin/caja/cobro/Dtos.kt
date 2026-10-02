@@ -366,13 +366,17 @@ data class CobroRespuesta(
     val emitido: Boolean
 )
 
-// el recibo como sale por la api: el total con su fecha (regla 9) y las líneas
+// el recibo como sale por la api: el pagador tal como quedó guardado (la ventanilla muestra lo que dice el recibo, no
+// lo que tecleó el cajero), el total con su fecha (regla 9) y las líneas
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class ReciboRespuesta(
     val numeroImpreso: String,
     val serie: String,
     val numero: Long,
     val cajero: String,
+    val pagadorDocumento: String?,
+    val pagadorNombre: String?,
+    val pagadorExternoId: Long?,
     val formaPago: String,
     val tipoPago: String,
     val emitidoEn: String,

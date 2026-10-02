@@ -157,6 +157,7 @@ class ConsultaDeRecibos(
             emitidoEn = enLima(recibo.emitidoEn!!),
             pagadorDocumento = recibo.pagadorDocumento,
             pagadorNombre = recibo.pagadorNombre,
+            pagadorExternoId = recibo.pagadorExternoId,
             formaPago = recibo.formaPago!!,
             tipoPago = recibo.tipoPago!!,
             total = Importe.de(recibo.total!!, fecha),

@@ -124,18 +124,29 @@ class TasasApiTest : CajaApiTest() {
         val codigo = codigoDeTasa()
         nuevaTasa(codigo, "12.30", hoy.minusDays(1))
 
-        val anonimo = post(TASAS, cobro(caja, concepto(codigo)), cajero.token)["recibo"]["numero_impreso"].asString()
+        val sinPagador = post(TASAS, cobro(caja, concepto(codigo)), cajero.token)["recibo"]
+        val anonimo = sinPagador["numero_impreso"].asString()
+        assertTrue(
+            listOf("pagador_documento", "pagador_nombre", "pagador_externo_id").all { sinPagador.has(it) && sinPagador[it].isNull },
+            sinPagador.toString()
+        )
         val guardado = registros("recibo", "numero_impreso" to anonimo).single()["attributes"]
         assertTrue(listOf("pagador_documento", "pagador_nombre", "pagador_externo_id").all { guardado[it] == null || guardado[it].isNull }, guardado.toString())
 
-        val dicho =
+        val conDicho =
             post(
                 TASAS,
-                cobro(caja, concepto(codigo)) + mapOf("pagador_documento" to "12345678", "pagador_nombre" to "SANTOS RIVERA, ELENA", "pagador_externo_id" to 7),
+                cobro(caja, concepto(codigo)) +
+                    mapOf("pagador_documento" to " ce-12345678 ", "pagador_nombre" to "SANTOS RIVERA, ELENA", "pagador_externo_id" to 7),
                 cajero.token
-            )["recibo"]["numero_impreso"].asString()
+            )["recibo"]
+        val dicho = conDicho["numero_impreso"].asString()
         val conPagador = registros("recibo", "numero_impreso" to dicho).single()["attributes"]
-        assertEquals("12345678", conPagador["pagador_documento"].asString())
+        assertEquals("CE-12345678", conPagador["pagador_documento"].asString())
+        // la respuesta dice lo que quedó guardado (recortado y en mayúsculas), no lo que tecleó el cajero
+        assertEquals("CE-12345678", conDicho["pagador_documento"].asString())
+        assertEquals("SANTOS RIVERA, ELENA", conDicho["pagador_nombre"].asString())
+        assertEquals(7L, conDicho["pagador_externo_id"].asLong())
         assertEquals("SANTOS RIVERA, ELENA", conPagador["pagador_nombre"].asString())
         assertEquals(7L, conPagador["pagador_externo_id"].asLong())
 
