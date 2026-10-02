@@ -73,7 +73,8 @@ fun importe(valor: String?): BigDecimal {
 }
 
 // lo que el alta rechaza de un importe ya leído, o null si vale. el cobro lo vuelve a mirar (motivoNoCobrable): una
-// orden escrita por la API genérica de wasichai no pasó por el alta (wasichai#15)
+// orden escrita en la base no pasó por el alta. GuardiaDeEscrituras lo nombra en el alta que rechaza por la API
+// genérica
 fun defectoDelImporte(importe: BigDecimal?): String? =
     when {
         importe == null -> "no tiene importe"

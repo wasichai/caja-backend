@@ -1,13 +1,20 @@
 package caja
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.TestPropertySource
 import org.springframework.test.web.reactive.server.WebTestClient
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
+import wasichai.core.data.PhysicalTableRecordStore
+import wasichai.core.metadata.FieldTypeRegistry
+import wasichai.core.metadata.MetadataService
+import wasichai.core.platform.WasichaiSchemas
 import wasichai.test.WasichaiIntegrationTest
 import java.io.File
 import java.time.LocalDate
@@ -25,6 +32,19 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     protected lateinit var token: String
 
     protected val json: JsonMapper get() = JSON
+
+    // por debajo de la guarda: el almacén de wasichai sin GuardiaDeEscrituras, y la metadata que da su definición
+    @Autowired
+    private lateinit var conexion: DatabaseClient
+
+    @Autowired
+    private lateinit var esquemas: WasichaiSchemas
+
+    @Autowired
+    private lateinit var tipos: FieldTypeRegistry
+
+    @Autowired
+    private lateinit var metadatos: MetadataService
 
     @BeforeEach
     fun adminModeloYRoles() {
@@ -316,7 +336,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     // un código de tasa nuevo, único en la base compartida
     protected fun codigoDeTasa(): String = "T-${unico()}"
 
-    // un recibo escrito como admin por la api de core, con su turno, sin pasar por la cobranza: para fijar un instante de
+    // un recibo escrito en la base, con su turno, sin pasar por la cobranza (forjarEnLaBase): para fijar un instante de
     // emisión o un recibo sin evento. el número va en la serie de la caja; su id
     protected fun reciboEscrito(
         caja: CajaDePrueba,
@@ -329,7 +349,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     ): String {
         val fecha = emitidoEn.atZoneSameInstant(ZoneId.of("America/Lima")).toLocalDate()
         val turno =
-            registro(
+            forjarEnLaBase(
                 "turno",
                 mapOf(
                     "caja" to caja.id,
@@ -340,7 +360,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                     "clave_turno" to "${caja.id}|$cajero|$fecha|$numero"
                 )
             )
-        return registro(
+        return forjarEnLaBase(
             "recibo",
             mapOf(
                 "serie" to caja.serie,
@@ -370,9 +390,49 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         return tree(send("GET", "/api/objects/$objeto/records?$query", null, HttpStatus.OK))["content"].toList()
     }
 
-    // cambia campos de un registro como admin por la api de core, sin pasar por caja: lo que haría el publicador del
-    // buzón al entregar un pago (con el buzón apagado), o el admin al dar de baja una caja. core reemplaza todo: se manda lo guardado con los
-    // cambios encima
+    // un registro escrito EN LA BASE, por debajo de GuardiaDeEscrituras: la puerta que queda abierta (quien escribe en la
+    // base directamente), y la única por la que una prueba escribe un objeto de caja sin pasar por caja: un recibo roto,
+    // una línea o un evento forjados, un recibo con un instante fijo. el almacén de wasichai sin la guarda, en la
+    // organización del admin y a su nombre; fuera de una transacción, así que lleva su propio sello. su id
+    protected fun forjarEnLaBase(
+        objeto: String,
+        atributos: Map<String, Any?>
+    ): String =
+        runBlocking {
+            val (organizacion, usuario) = admin()
+            almacen().insert(metadatos.loadDefinition(organizacion, objeto), organizacion, usuario, atributos, emptyMap()).id.toString()
+        }
+
+    // cambia campos de un registro EN LA BASE, por debajo de GuardiaDeEscrituras: lo que haría el publicador del buzón al
+    // entregar un pago con el buzón apagado, o quien toca la base por fuera. como el PUT de core, reemplaza cada campo:
+    // va lo guardado con los cambios encima
+    protected fun cambiarEnLaBase(
+        objeto: String,
+        id: String,
+        vararg cambios: Pair<String, Any?>
+    ) {
+        val guardado = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))["attributes"]
+
+        @Suppress("UNCHECKED_CAST")
+        val atributos = json.convertValue(guardado, Map::class.java) as Map<String, Any?> + cambios
+        runBlocking {
+            val (organizacion, usuario) = admin()
+            almacen().update(metadatos.loadDefinition(organizacion, objeto), organizacion, usuario, UUID.fromString(id), atributos, emptyMap())
+        }
+    }
+
+    private fun almacen() = PhysicalTableRecordStore(conexion, esquemas, tipos)
+
+    // la organización y el id del admin sembrado
+    private fun admin(): Pair<UUID, UUID> {
+        val yo = tree(send("GET", "/api/auth/me", null, HttpStatus.OK))
+        return UUID.fromString(yo["organizationId"].asString()) to UUID.fromString(yo["userId"].asString())
+    }
+
+    // cambia campos de un registro como admin por la api de core, sin pasar por caja: el admin al dar de baja una caja.
+    // solo vale para lo que no es de caja (una caja, un área): un objeto de caja no se escribe por esa puerta
+    // (GuardiaDeEscrituras), y se cambia con cambiarEnLaBase. core reemplaza todo: se manda lo guardado con los cambios
+    // encima
     protected fun cambiarComoAdmin(
         objeto: String,
         id: String,

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.TestConfiguration
@@ -273,8 +274,8 @@ class CierreApiTest : CajaApiTest() {
         post(CIERRE, cierreDe(caja, "EFECTIVO" to "150.50"), cajero.token)
     }
 
-    // un recibo roto (un CAJERO tiene CREATE sobre recibo, y la API genérica se lo deja usar con un total negativo, en
-    // su turno o en el de otro: wasichai#15) no tumba el arqueo con un 500 ni bloquea el cierre para siempre. queda
+    // un recibo roto (un total negativo escrito en la base: la API genérica ya no escribe un recibo, GuardiaDeEscrituras)
+    // no tumba el arqueo con un 500 ni bloquea el cierre para siempre. queda
     // fuera de las cifras y se nombra con su porqué, en el arqueo en vivo y en la respuesta del cierre
     @Test
     fun `un recibo roto no tumba el arqueo ni bloquea el cierre, queda fuera de las cifras y se nombra`() {
@@ -285,29 +286,24 @@ class CierreApiTest : CajaApiTest() {
         cobrarTasa(caja, cajero, codigo, 1, "EFECTIVO")
         val turnoId = turnoDe(caja, cajero)
         val roto = "${caja.serie}-9999999"
-        send(
-            "POST",
-            "/api/objects/recibo/records",
+        val forjado =
             mapOf(
-                "attributes" to
-                    mapOf(
-                        "serie" to caja.serie,
-                        "numero" to 9_999_999,
-                        "numero_impreso" to roto,
-                        "caja" to caja.id,
-                        "turno" to turnoId,
-                        "cajero" to cajero.email,
-                        "emitido_en" to OffsetDateTime.now(LIMA).toString(),
-                        "forma_pago" to "EFECTIVO",
-                        "tipo_pago" to "TASA",
-                        "total" to "-30.00",
-                        "actualizado_a" to hoy.toString(),
-                        "observacion" to "un recibo forjado en negativo"
-                    )
-            ),
-            HttpStatus.CREATED,
-            cajero.token
-        )
+                "serie" to caja.serie,
+                "numero" to 9_999_999,
+                "numero_impreso" to roto,
+                "caja" to caja.id,
+                "turno" to turnoId,
+                "cajero" to cajero.email,
+                "emitido_en" to OffsetDateTime.now(LIMA).toString(),
+                "forma_pago" to "EFECTIVO",
+                "tipo_pago" to "TASA",
+                "total" to "-30.00",
+                "actualizado_a" to hoy.toString(),
+                "observacion" to "un recibo forjado en negativo"
+            )
+        // un CAJERO tiene CREATE sobre recibo para cobrar, y la API genérica no lo deja usar fuera de la cobranza
+        send("POST", "/api/objects/recibo/records", mapOf("attributes" to forjado), HttpStatus.FORBIDDEN, cajero.token)
+        forjarEnLaBase("recibo", forjado)
 
         val enVivo = arqueoDe(turnoId, cajero)
         assertEquals("12.30", cifra(enVivo["arqueo"]["neto"]))
@@ -346,8 +342,8 @@ class CierreApiTest : CajaApiTest() {
             val (estado, cuerpo) = exchange(metodo, CIERRE, if (metodo == "PUT") cierreDe(caja) else null, cajero.token)
             assertTrue(estado == HttpStatus.METHOD_NOT_ALLOWED || estado == HttpStatus.NOT_FOUND, "$metodo $CIERRE: $estado $cuerpo")
         }
-        // y por la api genérica de core, ningún rol de caja puede: roles.json no da UPDATE ni DELETE
-        listOf(cajero.token, funcionario("CAJERO")).forEach { quien ->
+        // y por la api genérica de core nadie puede: roles.json no da UPDATE ni DELETE, y ni el ADMIN pasa la guarda
+        listOf(cajero.token, funcionario("CAJERO"), token).forEach { quien ->
             listOf("cierre_turno" to cierreId, "cierre_turno_linea" to linea).forEach { (objeto, id) ->
                 val ruta = "/api/objects/$objeto/records/$id"
                 assertEquals(HttpStatus.FORBIDDEN, exchange("PUT", ruta, mapOf("attributes" to mapOf("observacion" to "otra")), quien).first, ruta)
@@ -361,27 +357,24 @@ class CierreApiTest : CajaApiTest() {
         assertTrue(problema["detail"].asString().contains("Nada que reversar"), problema.toString())
         val ruta = "/api/objects/reversion_cierre/records/${reversion["reversion_id"].asString()}"
         assertEquals(HttpStatus.FORBIDDEN, exchange("DELETE", ruta, null, cajero.token).first)
-        // y aunque alguien la escribiera por fuera de caja, el unique de cierre_revertido es la red
-        val (estado, cuerpo) =
-            exchange(
-                "POST",
-                "/api/objects/reversion_cierre/records",
-                mapOf(
-                    "attributes" to
-                        mapOf(
-                            "turno" to turnoId,
-                            "cierre_revertido" to cierreId,
-                            "secuencia" to 9,
-                            "motivo" to "OTRA VEZ",
-                            "fecha" to hoy.toString(),
-                            "registrado_en" to OffsetDateTime.now(LIMA).toString(),
-                            "usuario" to "admin",
-                            "observacion" to "escrita por fuera de caja",
-                            "clave_secuencia" to "$turnoId|9"
-                        )
-                )
+        // otra reversión del mismo cierre, escrita por fuera de caja
+        val otra =
+            mapOf(
+                "turno" to turnoId,
+                "cierre_revertido" to cierreId,
+                "secuencia" to 9,
+                "motivo" to "OTRA VEZ",
+                "fecha" to hoy.toString(),
+                "registrado_en" to OffsetDateTime.now(LIMA).toString(),
+                "usuario" to "admin",
+                "observacion" to "escrita por fuera de caja",
+                "clave_secuencia" to "$turnoId|9"
             )
-        assertFalse(estado.is2xxSuccessful, "$estado $cuerpo")
+        // por la API genérica, ni el ADMIN: la guarda (caja-backend#20)
+        val (estado, cuerpo) = exchange("POST", "/api/objects/reversion_cierre/records", mapOf("attributes" to otra))
+        assertEquals(HttpStatus.FORBIDDEN, estado, cuerpo)
+        // y en la base, el unique de cierre_revertido es la red
+        assertThrows(Exception::class.java) { forjarEnLaBase("reversion_cierre", otra) }
         assertEquals(1, registros("reversion_cierre", "turno" to turnoId).size)
         assertEquals(1, registros("cierre_turno", "turno" to turnoId).size)
     }
@@ -565,7 +558,7 @@ class CierreApiTest : CajaApiTest() {
     private fun entregarLosPagos(turnoId: String): Int {
         val pendientes = registros("pago_evento", "turno" to turnoId, "estado" to "PENDIENTE")
         pendientes.forEach {
-            cambiarComoAdmin("pago_evento", it["id"].asString(), "estado" to "ENTREGADO", "entregado_en" to OffsetDateTime.now(LIMA).toString())
+            cambiarEnLaBase("pago_evento", it["id"].asString(), "estado" to "ENTREGADO", "entregado_en" to OffsetDateTime.now(LIMA).toString())
         }
         return pendientes.size
     }

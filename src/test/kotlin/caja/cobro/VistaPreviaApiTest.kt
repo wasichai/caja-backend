@@ -90,9 +90,9 @@ class VistaPreviaApiTest : CajaApiTest() {
         rejected("POST", VISTA_ORDENES, mapOf("ordenes" to listOf(rentas), "fecha_de_pago" to hoy.minusDays(1).toString()), "fecha_de_pago")
     }
 
-    // un SISTEMA_ORIGEN (o un ADMIN) puede escribir una orden por la API genérica, sin las reglas del alta (wasichai#15):
-    // un importe negativo, en cero, con tres decimales o de catorce enteros. el cobro la rechaza con un 409 «dato roto»
-    // que la nombra, y la vista previa lo dice en motivos: nunca un recibo en negativo, nunca un 500
+    // una orden escrita en la base, sin las reglas del alta (la API genérica ya no la escribe: GuardiaDeEscrituras): un
+    // importe negativo, en cero, con tres decimales o de catorce enteros. el cobro la rechaza con un 409 «dato roto» que
+    // la nombra, y la vista previa lo dice en motivos: nunca un recibo en negativo, nunca un 500
     @Test
     fun `una orden con el importe roto escrita por fuera del alta no se cobra, y la vista previa lo dice sin un 500`() {
         val caja = nuevaCaja()
@@ -197,7 +197,8 @@ class VistaPreviaApiTest : CajaApiTest() {
         token: String
     ): JsonNode = tree(send("POST", ruta, cuerpo, HttpStatus.OK, token))
 
-    // una orden PENDIENTE y exigible escrita por la API genérica de core con ese token, sin pasar por el alta: su id
+    // una orden PENDIENTE y exigible escrita en la base, sin pasar por el alta: su id. por la API genérica, con ese token,
+    // no se escribe
     private fun ordenPorFuera(
         importe: String,
         token: String
@@ -213,9 +214,10 @@ class VistaPreviaApiTest : CajaApiTest() {
                 "fecha_exigibilidad" to hoy.minusDays(1).toString(),
                 "actualizado_a" to hoy.toString(),
                 "estado" to "PENDIENTE",
-                "observacion" to "escrita por la API genérica"
+                "observacion" to "escrita en la base"
             )
-        return tree(send("POST", "/api/objects/orden_de_cobro/records", mapOf("attributes" to atributos), HttpStatus.CREATED, token))["id"].asString()
+        send("POST", "/api/objects/orden_de_cobro/records", mapOf("attributes" to atributos), HttpStatus.FORBIDDEN, token)
+        return forjarEnLaBase("orden_de_cobro", atributos)
     }
 
     private fun estadoDe(orden: String): String =

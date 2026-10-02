@@ -3,73 +3,191 @@ package caja.comun
 import caja.cobro.defectoDelImporte
 import kotlinx.coroutines.currentCoroutineContext
 import org.slf4j.LoggerFactory
-import org.springframework.stereotype.Component
-import wasichai.core.data.RecordChange
-import wasichai.core.data.RecordChangeKind
-import wasichai.core.data.RecordChangeListener
+import wasichai.core.common.ForbiddenException
+import wasichai.core.data.ObjectWorkflowState
+import wasichai.core.data.RecordRow
+import wasichai.core.data.RecordStore
+import wasichai.core.metadata.ObjectDefinition
+import java.util.UUID
 
-// el detector de la segunda puerta (wasichai#15; hallazgo de la revisión del PR 4b). la API genérica de wasichai
-// (POST/PUT/DELETE /api/objects/{objeto}/records) aplica los permisos de objeto de core y nada más: un cajero, que tiene
-// CREATE sobre pago_evento para cobrar, puede escribir por ella un pago_evento inventado, o un cierre_turno que cierre
-// el turno de otro. ninguna regla de caja corre por esa puerta.
+// la guarda de la segunda puerta (caja-backend#20): el rodeo de wasichai#15 mientras wasichai no tenga una guarda antes
+// de escribir. la API genérica de wasichai (POST/PUT/DELETE /api/objects/{objeto}/records) aplica los permisos de
+// objeto de core y nada más, y caja escribe como el usuario que llama, así que quien cobra o anula tiene esos permisos.
+// por esa puerta un SUPERVISOR_CAJA escribía un acta de anulación forjada (el arqueo restaba su importe: el dinero
+// salía del cajón y el cierre cuadraba igual), o cambiaba el evento_id de un pago ENTREGADO y lo volvía a PENDIENTE,
+// para que se reenviara con otro pagoId; un CAJERO le bajaba el importe a una orden antes de cobrarla, o escribía un
+// recibo. ninguna regla de caja corría por ahí, y un detector que corre después de escribir solo podía anotarlo.
 //
-// esto escribe una línea ERROR por cada creación, cambio o borrado de un objeto protegido que NO lleva la marca
-// EscrituraDeCaja, es decir, que no pasó por la api de caja: el recibo y sus líneas, el buzón, la anulación y la
-// reimpresión, el turno, su cierre con sus líneas y su reversión, y la orden de cobro: su alta (la puerta de un sistema
-// de origen es POST /api/caja/ordenes-de-cobro; por la API genérica no corre NINGUNA regla del alta: el importe, el
-// sistema, la clave de origen, nacer PENDIENTE), y sus cambios (marcarla PAGADA sin recibo, devolverla a PENDIENTE,
-// bajarle el importe). se anota TODA alta por fuera, no solo la que hoy rompe una regla: comprobarlas aquí sería
-// copiar el alta en un listener, y una orden que las pasa sigue sin haber pasado por ella. si su importe es uno que el
-// alta rechazaría (el que rompe un recibo), la línea lo dice. NO PUEDE VETAR: wasichai llama a los listeners después
-// de escribir (ADR-0025), y lanzar aquí solo convertiría en un 500 una escritura que ya ocurrió. la línea es para que
-// se vea; impedirla es wasichai#15
-@Component
-class GuardiaDeEscrituras : RecordChangeListener {
+// esto envuelve el RecordStore de wasichai (AlmacenDeRegistros), por donde pasa TODA escritura de RecordService: la API
+// genérica, el admin y la api de caja. RecordService ya comprobó los permisos (ADMIN se los salta) y llama al store en
+// la corrutina de quien escribe, así que aquí se ve la marca EscrituraDeCaja que Registros pone alrededor de cada
+// create y replace. un cliente http no puede ponerla. sobre los objetos de caja:
+// - SIN LA MARCA NO SE ESCRIBE NADA: ni un alta, ni un cambio, ni un borrado, tampoco un ADMIN. 403 antes de tocar la
+//   base: no queda fila, ni auditoría, ni listener al que avisar;
+// - lo que SOLO SE AGREGA (el recibo, sus líneas, su acta, sus reimpresiones, el cierre, sus líneas y su reversión) no
+//   se cambia ni con la marca: anular es agregar un acta y reversar es agregar una reversión
+//   (InmutabilidadDelReciboTest lo vigila además en el código);
+// - NADA SE BORRA, nunca: caja no borra.
+// cada rechazo deja una línea WARN que empieza con ESCRITURA FUERA DE CAJA RECHAZADA, con el objeto, el id y el
+// usuario: alguien con permiso lo intentó por la segunda puerta. lo que NO ve: quien escribe en la base directamente
+// (así marca BuzonStore sus entregas, y es caja), el borrado del objeto entero por la api de metadatos y un módulo que
+// escriba sin pasar por el RecordStore (wasichai-automation, que caja no instala)
+class GuardiaDeEscrituras(
+    private val almacen: RecordStore
+) : RecordStore by almacen {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    override suspend fun recordChanged(change: RecordChange) {
-        if (currentCoroutineContext()[EscrituraDeCaja.Clave] != null) return
-        if (!vigilado(change)) return
-        log.error(
-            "ESCRITURA FUERA DE CAJA: {} {} {} por el usuario {} de la organización {}, sin pasar por /api/caja (la API genérica de " +
-                "wasichai, wasichai#15). Ninguna regla de caja la comprobó: revísela{}",
-            change.kind,
-            change.objectName,
-            change.recordId,
-            change.userId,
-            change.organizationId,
-            deLaOrden(change)
+    override suspend fun insert(
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        userId: UUID,
+        attributes: Map<String, Any?>,
+        sections: Map<String, Map<String, Any?>>,
+        workflow: ObjectWorkflowState
+    ): RecordRow {
+        exigirLaMarca("CREATE", definition, organizationId, userId, null) { deLaOrden(definition, attributes) }
+        return almacen.insert(definition, organizationId, userId, attributes, sections, workflow)
+    }
+
+    override suspend fun update(
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        userId: UUID,
+        id: UUID,
+        attributes: Map<String, Any?>,
+        sections: Map<String, Map<String, Any?>>,
+        withState: Boolean
+    ): RecordRow {
+        exigirLaMarca("UPDATE", definition, organizationId, userId, id)
+        noSeCambia("UPDATE", definition, organizationId, userId, id)
+        return almacen.update(definition, organizationId, userId, id, attributes, sections, withState)
+    }
+
+    override suspend fun transitionState(
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        userId: UUID,
+        id: UUID,
+        from: String?,
+        to: String
+    ): RecordRow? {
+        exigirLaMarca("TRANSITION", definition, organizationId, userId, id)
+        noSeCambia("TRANSITION", definition, organizationId, userId, id)
+        return almacen.transitionState(definition, organizationId, userId, id, from, to)
+    }
+
+    // la única puerta para borrar que hay en src/main, y es para cerrarla: un objeto de caja no se borra, ni con la
+    // marca. lo demás (una caja, una tasa) sigue su camino
+    override suspend fun delete(
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        id: UUID
+    ): Boolean {
+        if (protegido(definition)) {
+            throw rechazo(
+                "DELETE",
+                definition,
+                organizationId,
+                null,
+                id,
+                "un objeto de caja no se borra, por ninguna puerta: un recibo se anula y un cierre se reversa"
+            )
+        }
+        return almacen.delete(definition, organizationId, id)
+    }
+
+    // sin la marca, un objeto de caja no se escribe
+    private suspend fun exigirLaMarca(
+        operacion: String,
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        userId: UUID,
+        id: UUID?,
+        detalle: () -> String = { "" }
+    ) {
+        if (!protegido(definition) || currentCoroutineContext()[EscrituraDeCaja.Clave] != null) return
+        throw rechazo(
+            operacion,
+            definition,
+            organizationId,
+            userId,
+            id,
+            "«${definition.obj.name}» solo lo escribe caja, por su api (/api/caja/...), que corre sus reglas. La API genérica no las corre, " +
+                "y no lo escribe nadie por ella, tampoco un ADMIN (caja-backend#20)",
+            detalle()
         )
     }
 
-    private fun vigilado(change: RecordChange): Boolean = change.objectName in PROTEGIDOS || change.objectName == ORDEN_DE_COBRO
-
-    // lo que se sabe de una orden escrita por fuera: un alta que no pasó por el alta de caja, y su importe si el alta lo
-    // habría rechazado (un borrado no tiene después que mirar). el importe es un DECIMAL de la base: una sola línea
-    private fun deLaOrden(change: RecordChange): String {
-        if (change.objectName != ORDEN_DE_COBRO) return ""
-        val alta = if (change.kind == RecordChangeKind.CREATED) ". Es un alta que no pasó por el alta de caja (POST /api/caja/ordenes-de-cobro)" else ""
-        val despues = change.after ?: return alta
-        val importe = despues["importe"]?.toString()?.toBigDecimalOrNull()
-        val roto =
-            defectoDelImporte(importe)?.let {
-                ". Tiene el importe roto (${importe?.toPlainString()}): $it, y cobrarla daría un recibo que no se puede contar"
-            }
-        return alta + roto.orEmpty()
+    // lo que solo se agrega no se cambia, ni siquiera desde caja
+    private fun noSeCambia(
+        operacion: String,
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        userId: UUID,
+        id: UUID
+    ) {
+        if (definition.obj.name !in SOLO_SE_AGREGAN) return
+        throw rechazo(
+            operacion,
+            definition,
+            organizationId,
+            userId,
+            id,
+            "«${definition.obj.name}» solo se agrega: no se cambia, por ninguna puerta. Un recibo se anula con su acta y un cierre se reversa"
+        )
     }
 
+    private fun rechazo(
+        operacion: String,
+        definition: ObjectDefinition,
+        organizationId: UUID,
+        userId: UUID?,
+        id: UUID?,
+        motivo: String,
+        detalle: String = ""
+    ): ForbiddenException {
+        log.warn(
+            "ESCRITURA FUERA DE CAJA RECHAZADA: {} {} {} por el usuario {} de la organización {}. {}{}",
+            operacion,
+            definition.obj.name,
+            id ?: "(alta)",
+            userId,
+            organizationId,
+            motivo,
+            detalle
+        )
+        return ForbiddenException(motivo)
+    }
+
+    // de un alta de orden por fuera, su importe si el alta de caja lo habría rechazado: el que rompería un recibo. en
+    // una sola línea, como todo lo que va al registro
+    private fun deLaOrden(
+        definition: ObjectDefinition,
+        attributes: Map<String, Any?>
+    ): String {
+        if (definition.obj.name != ORDEN_DE_COBRO) return ""
+        val importe = attributes["importe"]?.toString()?.toBigDecimalOrNull()
+        return defectoDelImporte(importe)?.let { ". Tiene el importe roto (${importe?.toPlainString()}): $it" }.orEmpty()
+    }
+
+    private fun protegido(definition: ObjectDefinition): Boolean = definition.obj.name in PROTEGIDOS
+
     companion object {
-        val PROTEGIDOS =
+        // lo que solo se agrega: anular y reversar son filas nuevas
+        val SOLO_SE_AGREGAN =
             setOf(
                 RECIBO,
                 LINEA_RECIBO,
-                PAGO_EVENTO,
                 ANULACION_RECIBO,
                 REIMPRESION_RECIBO,
-                TURNO,
                 CIERRE_TURNO,
                 CIERRE_TURNO_LINEA,
                 REVERSION_CIERRE
             )
+
+        // todo lo que escribe caja: lo que solo se agrega, el buzón (que se explica), el turno (que se cierra y se
+        // reabre) y la orden de cobro (que se cobra y vuelve a PENDIENTE al anular), cuya única alta es POST
+        // /api/caja/ordenes-de-cobro
+        val PROTEGIDOS = SOLO_SE_AGREGAN + setOf(PAGO_EVENTO, TURNO, ORDEN_DE_COBRO)
     }
 }

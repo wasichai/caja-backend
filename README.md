@@ -185,8 +185,9 @@ campo único con los dos valores.
 Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo
 y a qué fecha está esa cifra. La da de alta el sistema de origen (`POST /api/caja/ordenes-de-cobro`). **No tiene
 `tributo`, `ejercicio` ni `periodo`** (ver «Reglas»); el vínculo con el recibo lo pone la cobranza. **Su puerta es el
-alta de caja**: una orden escrita por la API genérica (`POST /api/objects/orden_de_cobro/records`) no pasa por ninguna
-de sus reglas, así que el cobro vuelve a mirar su importe y el detector la anota (ver «La segunda puerta»).
+alta de caja**: la API genérica (`POST /api/objects/orden_de_cobro/records`) no la escribe, ni la cambia (la guarda,
+ver «La segunda puerta»). Una orden escrita en la base no pasa por ninguna de sus reglas, así que el cobro vuelve a
+mirar su importe.
 
 | Campo                | Tipo      | Qué guarda                                                                                          | Columna de `caja`                     |
 | -------------------- | --------- | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -815,9 +816,9 @@ diferencia. Si el cierre exigiera cero, al cajero al que le faltan diez soles le
 #### Un recibo roto
 
 Un recibo con cifras imposibles (un total negativo, una anulación negativa o mayor que el total, una forma de pago que
-no existe; en la recaudación, también una línea de su cobro en negativo) **no lo escribe caja**: llega por la API
-genérica (un `CAJERO` tiene CREATE sobre `recibo`, también en el turno de otro; wasichai#15), por la base o, antes de
-la defensa del cobro, por una orden con el importe roto. Las reglas puras no lo cuentan (`ReciboDelTurno` y
+no existe; en la recaudación, también una línea de su cobro en negativo) **no lo escribe caja**: llega por la base,
+es de antes de la guarda que cierra la API genérica (caja-backend#20) o, antes de la defensa del cobro, sale de una
+orden con el importe roto. Las reglas puras no lo cuentan (`ReciboDelTurno` y
 `ReciboRecaudado` siguen lanzando ante lo imposible), pero **un recibo así no tumba nada**:
 
 - `RecibosDelTurno` (puro) parte lo leído en los recibos **contables** y los **rotos**, cada uno con su porqué
@@ -829,8 +830,7 @@ la defensa del cobro, por una orden con el importe roto. Las reglas puras no lo 
   los rotos), la respuesta los nombra y el cierre escribe una línea ERROR (`CIERRE CON RECIBOS FUERA DEL ARQUEO`).
   Después de cerrar, el arqueo del turno los sigue nombrando. Bloquear habría dejado a cualquiera con CREATE sobre
   `recibo` cerrar el paso al turno de otro hasta que un `ADMIN` borrara la fila. **El precio**: el acta firmada no los
-  menciona; quedan en la respuesta del cierre, en el registro, en el arqueo y en la línea del detector de cuando se
-  escribieron.
+  menciona; quedan en la respuesta del cierre, en el registro y en el arqueo.
 
 #### La reversión
 
@@ -982,26 +982,30 @@ aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistr
   4. Lo escribe por `RecordService`, **como el usuario**: `estado` y `explicacion`, con la auditoría de core. La
      `observacion` va a otra fila de auditoría del mismo acto: `pago_evento` no tiene ese campo.
 
-#### La segunda puerta: un evento inventado
+#### La segunda puerta: la API genérica
 
-La API genérica de wasichai (`POST /api/objects/pago_evento/records`) aplica los permisos de objeto de core y nada más:
-un `CAJERO`, que tiene CREATE sobre `pago_evento` para cobrar, puede escribir por ella un evento que nunca ocurrió (el
-hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ninguna lo impide del todo:
+La API genérica de wasichai (`POST`/`PUT`/`DELETE /api/objects/{objeto}/records`) aplica los permisos de objeto de core
+y nada más, y caja escribe como el usuario que llama: quien cobra tiene CREATE sobre `recibo`, `linea_recibo` y
+`pago_evento`; quien anula, sobre `anulacion_recibo`; quien explica, UPDATE sobre `pago_evento`. Por esa puerta se
+podía escribir un evento que nunca ocurrió (el hallazgo de la revisión del PR 4b), **un acta de anulación forjada**, que
+el arqueo restaba (el dinero salía del cajón y el cierre cuadraba igual), o **reenviar un pago ya entregado con otro
+`pagoId`** (la revisión de #18; wasichai#15). **La guarda (b) cierra esa puerta para todo objeto de caja**
+(caja-backend#20). La defensa (a) se queda, como segunda línea frente a quien escribe en la base:
 
 - **(a) El cuerpo se vuelve a componer antes de enviar, con el sello de la transacción.** PostgreSQL da a
   `created_at` el valor de `now()`, **el comienzo de la transacción**. Todo lo que escribe una transacción de caja lleva
   el mismo instante: la cobranza escribe el recibo, sus líneas, el `PAGO_REGISTRADO` y las órdenes `PAGADA` (su
-  `updated_at`) en una sola; la anulación, su acta y el `PAGO_ANULADO` en otra. Lo prueba `BuzonApiTest`. La API genérica
-  no abre transacción y no deja escribir `created_at`: lo que entra por ella lleva **otro sello**. `now()` tiene
-  resolución de microsegundos, así que dos escrituras sueltas lanzadas en paralelo (un acta forjada y su `PAGO_ANULADO`)
-  podrían, en teoría, caer en el mismo instante. Es improbable y ruidoso: cada intento fallido muere con su alerta, y el
-  detector anota las dos escrituras. Sobre eso, el publicador comprueba:
+  `updated_at`) en una sola; la anulación, su acta y el `PAGO_ANULADO` en otra. Lo prueba `BuzonApiTest`. Una escritura
+  suelta en la base es otra transacción: lleva **otro sello**, salvo que quien escribe fije `created_at` a mano. `now()`
+  tiene resolución de microsegundos, así que dos escrituras sueltas lanzadas en paralelo (un acta forjada y su
+  `PAGO_ANULADO`) podrían, en teoría, caer en el mismo instante. Es improbable y ruidoso: cada intento fallido muere con
+  su alerta. Sobre eso, el publicador comprueba:
   - **El evento lleva el sello de su origen.** Un `PAGO_REGISTRADO` tiene el `created_at` de su recibo; un
     `PAGO_ANULADO`, el de su `anulacion_recibo`. Si no, es una copia o un evento forjado, y muere. Uno forjado **antes**
     no le quita el lugar al legítimo, que conserva su sello y se entrega.
   - **Solo cuentan las líneas con el sello del recibo, y suman exactamente su total.** Una `linea_recibo` agregada
-    después por la API genérica (un `CAJERO` o un `SUPERVISOR_CAJA` tienen CREATE sobre ella) no cuenta. No mata al
-    evento legítimo, ni hace pasar uno editado para incluirla.
+    después, por fuera de la cobranza, no cuenta. No mata al evento legítimo, ni hace pasar uno editado para
+    incluirla.
   - **El cuerpo es el que se compone de lo guardado.** Se vuelve a componer con **los mismos compositores que la
     cobranza y la anulación** (`cuerpoPagoRegistrado` y `cuerpoPagoAnulado`). El `pagoId` es el `evento_id` de la fila;
     en una anulación, el `pagoOriginalId` es el `evento_id` del `PAGO_REGISTRADO` con el sello del cobro, y el motivo y
@@ -1010,74 +1014,52 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
     tal cual es **el orden de las órdenes**: la petición no se guarda, así que se comparan ordenadas por `ordenId`.
   - **La fecha de cada orden** (`actualizadoA`, que la línea no guarda) sale de la orden **solo si su `updated_at` es el
     sello del cobro**, es decir, si nadie la tocó desde entonces. Si se tocó después (una anulación, otro cobro, o un
-    cambio por la API genérica, que un `CAJERO` puede hacer porque tiene UPDATE sobre `orden_de_cobro`), su valor de hoy
-    ya no es el del cobro. Entonces se toma el del propio cuerpo para esa orden, y cambiar la orden no mata al evento
+    cambio en la base), su valor de hoy ya no es el del cobro. Entonces se toma el del propio cuerpo para esa orden, y cambiar la orden no mata al evento
     legítimo.
   - **El `sistema_destino` de la fila es el de esas líneas, y un `PAGO_REGISTRADO` es de un recibo `NORMAL`.**
 
   Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con su recibo: …» (que
-  nombra las claves que difieren, la copia o el descuadre), y salta la alerta. **Lo que queda abierto**, todo bajo
-  wasichai#15:
-  - **La fecha de una orden tocada después del cobro.** Quien pueda editar el cuerpo de un evento `PENDIENTE` (el UPDATE
-    del supervisor, abajo) y haya tocado antes esa orden puede cambiar su `actualizadoA` en el cuerpo, y nada más: el
-    importe, la referencia y las órdenes siguen atados a las líneas del cobro.
-  - **Un acta forjada, que cuesta dinero.** Un `SUPERVISOR_CAJA` puede crear por la API genérica una `anulacion_recibo`
-    para un recibo, sin las reglas de la anulación (el mismo día, el turno abierto, las órdenes que vuelven a
-    `PENDIENTE`, el `PAGO_ANULADO`). El `PAGO_ANULADO` forjado para ella nace en otra transacción, así que muere y no se
-    envía. **Pero el acta queda, y el arqueo del turno resta su `importe`** (`LibroDelTurno.recibos` →
-    `ReciboDelTurno.anulado` → el neto de `ArqueoDelTurno` es el total menos lo anulado):
-    - el efectivo esperado baja, mientras el sistema de origen sigue teniendo esa deuda como pagada;
-    - **ese dinero puede salir del cajón y el cierre cuadra igual**;
-    - además, el recibo se ve anulado y la anulación legítima ya no se puede registrar (el único de `recibo_anulado`).
+  nombra las claves que difieren, la copia o el descuadre), y salta la alerta.
+- **(b) La guarda antes de escribir** (caja-backend#20). `caja.comun.GuardiaDeEscrituras` envuelve el `RecordStore` de
+  wasichai (`AlmacenDeRegistros`, como `CuotasInmutables` de `srtm`): el bean de wasichai es `@ConditionalOnMissingBean`,
+  y por él pasa **toda** escritura de `RecordService`, sea la API genérica, el admin o la API de caja. `RecordService` ya
+  comprobó los permisos (un `ADMIN` se los salta) y llama al almacén en la corrutina de quien escribe, así que la guarda
+  ve la marca `EscrituraDeCaja`, un elemento del contexto de la corrutina que `Registros` pone alrededor de cada `create`
+  y `replace`. Un cliente HTTP no puede ponerla. Sobre los objetos de caja (`recibo`, `linea_recibo`, `pago_evento`,
+  `anulacion_recibo`, `reimpresion_recibo`, `turno`, `cierre_turno`, `cierre_turno_linea`, `reversion_cierre` y
+  `orden_de_cobro`):
+  - **sin la marca no se escribe nada**: ni un alta, ni un cambio, ni un borrado, **tampoco un `ADMIN`**. Es un **403
+    antes de tocar la base**: no queda fila, ni auditoría, ni listener al que avisar;
+  - **lo que solo se agrega no se cambia ni con la marca**: el recibo, sus líneas, su acta, sus reimpresiones, el
+    cierre, sus líneas y su reversión. Anular es agregar un acta y reversar es agregar una reversión
+    (`InmutabilidadDelReciboTest` lo vigila además en el código);
+  - **nada de caja se borra, nunca**.
 
-    Solo lo ven la línea ERROR del detector y el `audit_log` de core. Cerrarlo exige la guarda de wasichai antes de
-    escribir (**wasichai#15**) o una firma del servidor en las filas que escribe caja (**caja-backend#20**).
-  - **Los cambios de estado de un evento**, por el UPDATE del supervisor (abajo): solo el detector y la auditoría de
-    core.
-  - **Quien escribe en la base directamente, o un `ADMIN`** que reescribiera el recibo y sus líneas: aquí no hay firma
-    que lo distinga.
-  - **El dinero de una orden, por el UPDATE del `CAJERO`** (tiene UPDATE sobre `orden_de_cobro` para marcarla `PAGADA`
-    al cobrar, y ese permiso también vale en `PUT /api/objects/orden_de_cobro/records/{id}`):
-    - **Bajarle el importe y luego cobrarla.** El cobro vuelve a mirar el importe (`motivoNoCobrable`), pero solo ve si
-      el alta lo habría rechazado: un importe menor y bien formado pasa. Las líneas salen de la orden editada, el
-      recibo dice esa cifra, y **el sistema de origen recibe un `PAGO_REGISTRADO` válido por menos de lo que debía**.
-      La defensa (a) no lo ve: compone el cuerpo de las mismas líneas.
-    - **Volver una `PAGADA` a `PENDIENTE`** (y cobrarla otra vez), o **marcar una `PENDIENTE` como `PAGADA` sin
-      recibo**: ninguna regla de caja corre por esa puerta.
-  - **Un recibo forjado en negativo** (o en positivo): un `CAJERO` tiene CREATE sobre `recibo`, también en el turno de
-    otro. Uno negativo ya no tumba nada (ver «Un recibo roto»); uno positivo infla el efectivo esperado de ese turno.
+  Cada rechazo deja **una línea WARN** que empieza con `ESCRITURA FUERA DE CAJA RECHAZADA`, con la operación, el objeto,
+  el id y el usuario: alguien con permiso lo intentó por la segunda puerta. En el alta de una orden, la línea dice
+  además si su importe es uno que el alta de caja rechazaría («Tiene el importe roto (…)»). Lo que no es de caja (una
+  `caja`, un `area`, una `tasa`) se sigue escribiendo por la API genérica. Así quedan cerrados:
+  - **el acta forjada, que costaba dinero**: el arqueo restaba su `importe` y el dinero podía salir del cajón con un
+    cierre que cuadraba igual;
+  - **el `PUT` del supervisor sobre `pago_evento`**: poner `EXPLICADO` sin explicación ni candado, pasar un `PENDIENTE`
+    a `EXPLICADO` para que su turno cierre, volver un `ENTREGADO` a `PENDIENTE`, editar el `cuerpo` y, sobre todo,
+    **cambiar el `evento_id` de un pago ya entregado y su `pagoId` para que se reenviara con otro**, burlando la
+    deduplicación del destino;
+  - **el dinero de una orden, por el UPDATE del `CAJERO`**: bajarle el importe antes de cobrarla, volver una `PAGADA`
+    a `PENDIENTE` o marcar una `PENDIENTE` como `PAGADA` sin recibo; y **su alta por fuera** del alta de caja;
+  - **un recibo, una línea, un evento, un turno o un cierre forjados** (un cierre forjado cerraría un turno ajeno).
 
-  Todo esto solo lo ven la línea ERROR del detector y el `audit_log` de core (caja-backend#20). Mientras tanto, **el
-  sistema de origen tiene que comprobar el importe de cada `PAGO_REGISTRADO` contra su propia deuda** (ver «Siguientes
-  pasos»).
-- **(b) El detector.** `caja.comun.GuardiaDeEscrituras`, un `RecordChangeListener`, escribe una línea ERROR
-  (`ESCRITURA FUERA DE CAJA: …`, con el objeto, el id y el usuario) por toda creación, cambio o borrado que se haga
-  **fuera de la API de caja** sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`, `reimpresion_recibo`,
-  `turno`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre` (un cierre forjado cerraría un turno ajeno), y por
-  `orden_de_cobro`: sus cambios y **también su alta**. La puerta de un sistema de origen es `POST
-  /api/caja/ordenes-de-cobro`; por la API genérica no corre ninguna regla del alta (el importe, el sistema, la clave de
-  origen, nacer `PENDIENTE`), así que se anota toda alta por fuera, no solo la que hoy rompe una regla (comprobarlas en
-  el listener sería copiar el alta, y una orden que las pasa tampoco pasó por ella). Si su importe es uno que el alta
-  rechazaría, la línea lo dice («Tiene el importe roto (…)»): ése es el que rompería un recibo. Las escrituras de caja
-  llevan la marca `EscrituraDeCaja`, un elemento del contexto de la corrutina que `Registros` pone alrededor de cada
-  `create` y `replace` (caja no borra nada: `Registros` no tiene `delete`). **Su límite: no puede vetar**,
-  porque wasichai llama a los listeners después de escribir: lo forjado queda escrito, y la línea es lo que permite
-  verlo. Impedirlo es wasichai#15.
-- **La otra cara de la puerta: el UPDATE del supervisor.** `SUPERVISOR_CAJA` tiene UPDATE sobre `pago_evento` para
-  explicar un pago, y ese permiso también vale en `PUT /api/objects/pago_evento/records/{id}`, que no pasa por las reglas
-  de caja. Por ahí puede:
-  - poner `EXPLICADO` sin explicación, sin el candado y sin que el pago esté `MUERTO`;
-  - pasar un `PENDIENTE` a `EXPLICADO`, para que nunca se entregue y su turno cierre;
-  - volver un `ENTREGADO` a `PENDIENTE`, para que se entregue otra vez (el destino deduplica por `pagoId`);
-  - **cambiar a la vez el `evento_id` de un `PAGO_REGISTRADO` ya `ENTREGADO` y el `pagoId` de su cuerpo, y volverlo a
-    `PENDIENTE`**: la fila conserva su sello legítimo, pasa la defensa (a) (el cuerpo se compone con el `evento_id` de la
-    fila) y **se reenvía con otro `pagoId`**, lo que burla la deduplicación del destino. Es el mismo hueco (caja-backend#20);
-  - editar el `cuerpo` de un `PENDIENTE`.
+  **Lo que queda abierto**, y por eso se queda la defensa (a):
+  - **quien escribe en la base directamente**, con sus credenciales: ahí no hay guarda ni firma que lo distinga. Un
+    acta escrita así seguiría restando en el arqueo;
+  - **el borrado del objeto entero** por la API de metadatos (`DELETE /api/objects/{objeto}`), que es de un `ADMIN`;
+  - **un módulo de wasichai que escriba sin pasar por el `RecordStore`** (`wasichai-automation` lo hace; caja no lo
+    instala) y **otro decorador del `RecordStore`**: `AlmacenDeRegistros` construye el `PhysicalTableRecordStore` y lo
+    dejaría fuera. Hoy no hay ninguno.
 
-  **Un cuerpo editado lo ataja la defensa (a)** al entregarlo: ya no se compone igual, así que muere y avisa (salvo la
-  fecha de una orden tocada después del cobro, arriba). **Un cambio de estado no lo ve ningún control de caja: solo el
-  detector (b) y la auditoría de core** (cada `PUT` queda en `audit_log` con su usuario, su antes y su después).
-  Impedirlo es wasichai#15: un permiso de edición que la API genérica no conceda.
+  Es el rodeo de **wasichai#15** (objetos de solo agregar y una guarda antes de escribir en wasichai mismo): cuando
+  llegue, la guarda puede pasar a usarla. Mientras tanto, **el sistema de origen sigue comprobando el importe de cada
+  `PAGO_REGISTRADO` contra su propia deuda**: es su propia defensa (ver «Siguientes pasos»).
 
 #### Los huecos de wasichai que se rodean aquí
 
@@ -1087,8 +1069,10 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   publicador lee y marca `pago_evento` (y lee el recibo, sus líneas y su anulación) con `DatabaseClient` sobre la tabla
   física resuelta en `custom_objects`, como `EmisionMasivaService` de `srtm`, y audita con `AuditService` y usuario
   `null`. **Todo eso vive en una sola clase, `BuzonStore`**: es el único acceso a tablas físicas de caja (aparte de
-  `Candados` y `CerrojoBuzon`, que solo toman candados). Lo que escribe no pasa por los `RecordChangeListener`.
-- **La API genérica es una segunda puerta** (**wasichai#15**): las dos defensas de arriba.
+  `Candados` y `CerrojoBuzon`, que solo toman candados). Lo que escribe no pasa por los `RecordChangeListener` ni por
+  la guarda: no usa el `RecordStore`.
+- **La API genérica es una segunda puerta** (**wasichai#15**): la guarda (b) la cierra para los objetos de caja, y la
+  defensa (a) queda detrás.
 
 ### La recaudación y la conciliación
 
@@ -1179,9 +1163,9 @@ cada uno de los trece objetos del modelo.
 `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` ni `reversion_cierre`** (`test_apply_roles.py` lo comprueba):
 un recibo no se corrige, su anulación se agrega; un cierre no se corrige, se reversa. **La única excepción es UPDATE
 sobre `pago_evento` para `SUPERVISOR_CAJA`**: explicar un pago `MUERTO` (lo fija `test_apply_roles.py`). El publicador
-marca la entrega sin pasar por los roles (`BuzonStore`). **Ese UPDATE es también una segunda puerta**: la API genérica
-(`PUT /api/objects/pago_evento/records/{id}`) lo acepta sin las reglas de la explicación. Ver «La segunda puerta» y
-wasichai#15. Los privilegios de `caja` se
+marca la entrega sin pasar por los roles (`BuzonStore`). **Ese UPDATE no vale en la API genérica**: `PUT
+/api/objects/pago_evento/records/{id}` da 403 (la guarda, ver «La segunda puerta»), y solo se usa por la explicación.
+Ningún permiso de estos vale por esa puerta sobre un objeto de caja, **ni el de un `ADMIN`**. Los privilegios de `caja` se
 vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo`; reimprimir (`IMPRESION`),
 CREATE sobre `reimpresion_recibo`; cerrar (`REGISTRO` de `cierre_caja`), CREATE sobre `cierre_turno`, y reversar
 (`ELIMINACION` de `cierre_caja`), CREATE sobre `reversion_cierre`, así que la UI los lee de `/api/auth/me/permissions`.
@@ -1229,7 +1213,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
   sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión, salvo
   la explicación de un pago sin entregar, y falla si aparece cualquier puerta para borrar (un `delete`, aunque nadie lo
-  llame). `EntregaTest` fija las reglas del publicador: la clasificación de cada
+  llame), salvo la de la guarda, que la cierra. `GuardiaDeEscriturasTest` fija la guarda con un almacén de prueba: sin
+  la marca nada de caja llega al almacén, con ella caja da de alta lo suyo y cambia solo lo que no se agrega, nada de
+  caja se borra, lo demás y las lecturas pasan, y el `RecordStore` de wasichai tiene los métodos que la guarda conoce
+  (uno nuevo pasaría por la delegación sin mirar la marca). `EntregaTest` fija las reglas del publicador: la clasificación de cada
   respuesta, el recorte de `ultimo_error`, la marca de cada intento, la coherencia del evento con su recibo y la salida
   de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`;
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
@@ -1273,9 +1260,9 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   sistema de origen falso por HTTP (MockWebServer): el pago `EN_TRANSITO` con su hora, el cuerpo con la referencia y sin
   imputación, el reintento sin perder el pago, la muerte con su alerta, el 401 que sigue vivo y el 422 que muere, el
   token que no viaja en el cuerpo ni en `ultimo_error`, **dos publicadores que cuentan un solo intento**, **la llamada
-  fuera de toda transacción** (mirando desde otra conexión mientras el destino contesta), **el evento inventado por la
-  API genérica** (no se envía, muere y salta el detector), **la copia con otro `pagoId`** (también con otra referencia),
-  **el cuerpo editado por el supervisor** (el importe repartido de otro modo, otra referencia), **la anulación con otro
+  fuera de toda transacción** (mirando desde otra conexión mientras el destino contesta), **el evento inventado** (la
+  API genérica da 403; escrito en la base, no se envía y muere), **la copia con otro `pagoId`** (también con otra
+  referencia), **el cuerpo editado en la base** (el importe repartido de otro modo, otra referencia), **la anulación con otro
   `pagoOriginalId`**, la anulación legítima que se entrega, la alerta que no se parte con un salto de línea, **el fallo
   inesperado que cuenta su intento sin atascar a los siguientes**, **la alerta que no se pierde aunque la vuelta se corte
   después** (con un disparador de prueba que hace fallar la marca en la base), **el sello de la transacción** (un cobro
@@ -1286,8 +1273,12 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   el turno que cierra al explicar los dos**, la explicación que solo vale con un
   `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
   comprueba que apagado no arranca; `CerrojoBuzonTest`, que el cerrojo del buzón es exclusivo (un segundo `tomar()` da
-  `null` y, suelto, se toma otra vez); `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y una orden
-  dada de alta por la API genérica (con su importe roto, si lo tiene), y no ve lo que escribe caja. `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
+  `null` y, suelto, se toma otra vez); `GuardiaDeEscriturasApiTest`, la guarda: **el acta forjada que no se escribe y
+  no cambia el arqueo**, **el pago `ENTREGADO` que no se reenvía con otro `pagoId`** (ni un `PENDIENTE` que se explica
+  por fuera), **los diez objetos de caja que no se dan de alta, no se cambian ni se borran por la API genérica, ni como
+  `ADMIN`**, la orden que no entra ni se rebaja por ella (con su importe roto en la línea WARN) y lo que no es de caja,
+  que se sigue escribiendo. Las pruebas que necesitan algo roto o forjado lo escriben **en la base**, por debajo de la
+  guarda (`forjarEnLaBase` y `cambiarEnLaBase` de `CajaApiTest`). `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
   un `Clock` movible y días lejanos propios: **ocho días que cuadran** con la línea y sus dos mitades, el día sin cobros
   que cuadra, el origen que aplicó de menos o rechazó, el pago en tránsito, **el origen apagado y el destino sin
   configurar, sin un solo cero** (recorre el JSON), la fecha obligatoria, **las partes que suman el total**, lo de una
@@ -1314,15 +1305,15 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   (`docs/50-api/contratos-que-consume/rentas.json`) y quien lo lea tienen que cambiar (ver «El evento
   `PAGO_REGISTRADO`»).
 - **El sistema de origen tiene que comprobar el importe** de cada `PAGO_REGISTRADO` contra su propia deuda (la
-  `referenciaExterna` y su importe): un `CAJERO` puede bajar el importe de una orden por la API genérica antes de
-  cobrarla, y el evento llega válido por menos (ver «Lo que queda abierto», caja-backend#20).
+  `referenciaExterna` y su importe): la guarda impide bajarlo por la API genérica, pero no a quien escribe en la base
+  (ver «La segunda puerta»).
 - **Decidir quién reabre el turno cerrado de un `CAJERO`** (ver «La reversión»): dar CREATE sobre `reversion_cierre` al
   `CAJERO`, o una regla `ESPECIAL` para que un supervisor reverse el cierre de otro.
 - **Los huecos de wasichai que se rodean aquí**, de wasichai#13 a wasichai#20:
   - que `RecordService` se una a la transacción de quien llama esté documentado y probado (wasichai#13);
   - unicidad compuesta, y el choque de un único como 409 con su campo (wasichai#14);
-  - objetos de solo agregar y una guarda antes de escribir, también para ADMIN y la API genérica (wasichai#15); con
-    ella se cierra caja-backend#20, el acta y el evento forjados;
+  - objetos de solo agregar y una guarda antes de escribir, también para ADMIN y la API genérica (wasichai#15): hoy la
+    rodea `GuardiaDeEscrituras`, que envuelve el `RecordStore` (caja-backend#20);
   - acciones propias además de las CRUD (wasichai#16): el `ESPECIAL` de anular el recibo ajeno;
   - cuentas de servicio para los sistemas de origen (wasichai#17): hoy `sistema_origen` sale del cuerpo del alta;
   - trabajo de fondo con un principal y un candado de clúster (wasichai#18): el buzón;

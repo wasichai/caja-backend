@@ -53,9 +53,9 @@ import java.time.OffsetDateTime
 // que dejar escrito. lo que impide cerrar es un pago que su sistema de origen no conoce (PENDIENTE o MUERTO).
 //
 // UN RECIBO ROTO NO BLOQUEA EL CIERRE. un recibo con cifras imposibles (un total negativo, una anulación mayor que el
-// total) no lo escribe caja: llega por la API genérica (un CAJERO tiene CREATE sobre recibo, también en el turno de
-// otro; wasichai#15) o por la base. si bloqueara, cualquiera con ese permiso dejaría un turno ajeno sin cerrar hasta
-// que un ADMIN borrara la fila. queda FUERA del acta (sus cifras y recibos_emitidos son las de los recibos contables),
+// total) no lo escribe caja: llega por la base, o es de antes de GuardiaDeEscrituras, que cierra la API genérica
+// (caja-backend#20). si bloqueara, ese recibo dejaría su turno sin cerrar hasta que alguien lo arreglara en la base.
+// queda FUERA del acta (sus cifras y recibos_emitidos son las de los recibos contables),
 // se nombra en la respuesta y en una línea ERROR, y el arqueo del turno lo sigue nombrando después de cerrar
 @Service
 class CerrarTurno(

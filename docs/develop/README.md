@@ -149,13 +149,16 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio;
   `rolPropio(permisos)` da el rol para dárselo a varios con `cuenta(rol)`),
   `rejected(método, ruta, cuerpo, campo)` (un 400 cuyo primer error es ese campo), `orden(...)` (un alta válida con una
-  referencia nueva), `registro(objeto, atributos)` (un registro por la API de core), `cuenta("CAJERO")` (un usuario con
+  referencia nueva), `registro(objeto, atributos)` (un registro por la API de core, de lo que no es de caja: una caja,
+  un área), `cuenta("CAJERO")` (un usuario con
   su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única), `nuevaTasa(codigo, importe, desde, hasta)` (una vigencia de
   una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único), `reciboEscrito(caja, numero, emitidoEn, documento)` (un recibo
-  con su turno escrito como admin, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento) y
+  con su turno escrito en la base, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento),
   `registros(objeto, filtros)` (lo guardado, leído como admin) y `cambiarComoAdmin(objeto, id, cambios)` (cambia campos
-  por la API de core sin pasar por caja: lo que haría el publicador del buzón al entregar un pago, o el admin al dar de
-  baja una caja; lo anota el detector de escrituras, y está bien). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
+  por la API de core: el admin al dar de baja una caja). **Un objeto de caja no se escribe por la API de core, ni como
+  admin** (`GuardiaDeEscrituras`, caja-backend#20): lo roto o forjado se escribe **en la base**, por debajo de la guarda,
+  con `forjarEnLaBase(objeto, atributos)` y `cambiarEnLaBase(objeto, id, cambios)` (lo que haría el publicador del buzón
+  al entregar un pago, o quien toca la base por fuera). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
 - **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, la de diez anulaciones
   simultáneas y la del fallo a mitad (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el
   `RecordChangeListener` de prueba), son el corazón de la cobranza: no se dan por buenas sin correrlas contra un
@@ -167,18 +170,19 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   cierre justo después de escribir su `cierre_turno`, con el candado del turno tomado y sin confirmar: lo que llegue a
   ese turno tiene que esperar. Lo usan la prueba del cierre en curso y la de dos cierres simultáneos.
 - **Los pagos.** El buzón viene apagado, y en el contexto de casi todas las clases sigue así: un turno con cobros de
-  órdenes no cierra (sus `PAGO_REGISTRADO` siguen `PENDIENTE`), y las pruebas los marcan `ENTREGADO` como admin.
+  órdenes no cierra (sus `PAGO_REGISTRADO` siguen `PENDIENTE`), y las pruebas los marcan `ENTREGADO` en la base
+  (`cambiarEnLaBase`).
 - **El buzón.** `BuzonApiTest` lo enciende con un sistema de origen falso por HTTP (`SistemaDeOrigenFalso`, un
   `MockWebServer` de okhttp: contesta a cada `pagoId` lo que la prueba le diga y guarda lo que recibió). Su bucle espera
   una hora y cada prueba da sus vueltas a mano (`publicador.vuelta()`); `BucleDelBuzonApiTest` lo deja correr cada
   0,2 s. Las dos cierran su contexto con la clase (`@DirtiesContext`), y con él su bucle. **Una vuelta lee todo lo
   pendiente de la base compartida** (`por-vuelta` alto): los eventos de otras clases, sin destino configurado, solo
-  suman intentos. Las alertas y el detector se leen en la salida con `OutputCaptureExtension`.
+  suman intentos. Las alertas, y las líneas WARN de la guarda, se leen en la salida con `OutputCaptureExtension`.
 - **La recaudación y la conciliación.** Suman TODO lo de un día de la base compartida, así que `RecaudacionApiTest`
   cobra en días propios, lejos de hoy (entre 30 y 80 años, en un sitio distinto en cada corrida): su `Clock` `@Primary`
   (`RelojMovible`) se pone en ese día y a esa hora de Lima (las 21:30, para el cobro nocturno). El mismo
   `SistemaDeOrigenFalso` hace de origen: `conciliar(fecha, …)` le dice qué contesta a `GET /pagos/conciliacion?fecha=`
-  (404 si no se le dijo nada), y guarda cada consulta. Con el buzón apagado, los pagos se marcan `ENTREGADO` como admin.
+  (404 si no se le dijo nada), y guarda cada consulta. Con el buzón apagado, los pagos se marcan `ENTREGADO` en la base.
   Retiene un cierre en curso como `CierreApiTest`, para la prueba de la no contención.
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta

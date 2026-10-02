@@ -29,7 +29,9 @@ import java.util.UUID
 
 // el publicador del buzón contra un sistema de origen falso por http (CobrarConElOrigenApagadoTest,
 // CadaEventoEnSuTransaccionTest y UnPagoNoMuereSinCredencialTest de caja), los pagos sin entregar, su explicación y la
-// defensa frente a un pago_evento inventado por la API genérica. el buzón está encendido, pero su bucle espera una hora:
+// defensa frente a un pago_evento inventado por fuera de caja. la API genérica ya no escribe ningún objeto de caja
+// (GuardiaDeEscrituras, caja-backend#20): lo forjado se escribe en la base (forjarEnLaBase, cambiarEnLaBase), la
+// puerta que queda abierta. el buzón está encendido, pero su bucle espera una hora:
 // cada prueba da sus vueltas a mano, y el contexto se cierra con la clase (DirtiesContext), así que su bucle no queda
 // vivo para las demás. la base es compartida: una vuelta lee TODO lo pendiente (por-vuelta alto) y los eventos de otras
 // pruebas, sin destino configurado, solo suman intentos
@@ -232,10 +234,10 @@ class BuzonApiTest : CajaApiTest() {
         assertEquals("ENTREGADO", evento(segundo.pagoId)["attributes"]["estado"].asString())
     }
 
-    // de la segunda puerta
+    // de lo que se escribe por fuera de caja
 
     @Test
-    fun `un pago_evento creado por la API generica no se envia, muere y salta el detector`(salida: CapturedOutput) {
+    fun `un pago_evento escrito en la base no se envia y muere, y la API generica ni siquiera lo escribe`(salida: CapturedOutput) {
         val cobro = cobrar(PRUEBAS)
         origen.contestar(cobro.pagoId, 200)
         val legitimo = evento(cobro.pagoId)["attributes"]
@@ -246,34 +248,22 @@ class BuzonApiTest : CajaApiTest() {
                 .replace(cobro.pagoId, inventadoId)
                 .replace("\"total\":\"150.50\"", "\"total\":\"999.99\"")
         assertTrue(cuerpo.contains("999.99"), cuerpo)
-        val cajero = cuenta("CAJERO")
-        val inventado =
-            tree(
-                send(
-                    "POST",
-                    "/api/objects/pago_evento/records",
-                    mapOf(
-                        "attributes" to
-                            mapOf(
-                                "evento_id" to inventadoId,
-                                "tipo" to "PAGO_REGISTRADO",
-                                "sistema_destino" to PRUEBAS,
-                                "recibo" to legitimo["recibo"].asString(),
-                                "turno" to legitimo["turno"].asString(),
-                                "cuerpo" to cuerpo,
-                                "estado" to "PENDIENTE",
-                                "intentos" to 0
-                            )
-                    ),
-                    HttpStatus.CREATED,
-                    cajero.token
-                )
-            )["id"].asString()
-
-        // el detector: la escritura no pasó por la api de caja
-        val detectado = salida.out.lines().firstOrNull { it.contains("ESCRITURA FUERA DE CAJA") && it.contains(inventado) }
-        assertNotNull(detectado, "el detector no vio la escritura")
-        assertTrue(detectado!!.contains(" ERROR ") && detectado.contains("pago_evento"), detectado)
+        // un CAJERO tiene CREATE sobre pago_evento para cobrar, y la API genérica no lo deja usar fuera de la cobranza
+        val atributos =
+            mapOf(
+                "evento_id" to inventadoId,
+                "tipo" to "PAGO_REGISTRADO",
+                "sistema_destino" to PRUEBAS,
+                "recibo" to legitimo["recibo"].asString(),
+                "turno" to legitimo["turno"].asString(),
+                "cuerpo" to cuerpo,
+                "estado" to "PENDIENTE",
+                "intentos" to 0
+            )
+        send("POST", "/api/objects/pago_evento/records", mapOf("attributes" to atributos), HttpStatus.FORBIDDEN, cuenta("CAJERO").token)
+        assertTrue(registros("pago_evento", "evento_id" to inventadoId).isEmpty(), "la API genérica no lo escribió")
+        // quien escribe en la base sí puede
+        forjarEnLaBase("pago_evento", atributos)
 
         vuelta()
 
@@ -284,8 +274,6 @@ class BuzonApiTest : CajaApiTest() {
         assertTrue(alertaDe(salida, inventadoId).contains("DINERO COBRADO SIN REGISTRAR"))
         // el legítimo, en la misma vuelta, sí
         assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString())
-        // y las escrituras de caja no las ve el detector
-        assertFalse(salida.out.lines().any { it.contains("ESCRITURA FUERA DE CAJA") && it.contains(legitimo["recibo"].asString()) })
     }
 
     @Test
@@ -293,12 +281,10 @@ class BuzonApiTest : CajaApiTest() {
         val cobro = cobrar(PRUEBAS)
         origen.contestar(cobro.pagoId, 200)
         val legitimo = evento(cobro.pagoId)["attributes"]
-        val cajero = cuenta("CAJERO")
         val exacta = UUID.randomUUID().toString()
-        forjar(cajero.token, legitimo, exacta, legitimo["cuerpo"].asString().replace(cobro.pagoId, exacta))
+        forjar(legitimo, exacta, legitimo["cuerpo"].asString().replace(cobro.pagoId, exacta))
         val otraReferencia = UUID.randomUUID().toString()
         forjar(
-            cajero.token,
             legitimo,
             otraReferencia,
             legitimo["cuerpo"].asString().replace(cobro.pagoId, otraReferencia).replace(cobro.referencia, "OTRA-DEUDA-${unico()}")
@@ -319,8 +305,7 @@ class BuzonApiTest : CajaApiTest() {
     }
 
     @Test
-    fun `un cuerpo editado por la segunda puerta no se envia, con el importe repartido de otro modo o con otra referencia`(salida: CapturedOutput) {
-        val supervisor = funcionario("SUPERVISOR_CAJA")
+    fun `un cuerpo editado en la base no se envia, con el importe repartido de otro modo o con otra referencia`() {
         val repartido = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
         val referida = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
         val intacto = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
@@ -329,9 +314,9 @@ class BuzonApiTest : CajaApiTest() {
         val cuerpo = evento(repartido.pagoId)["attributes"]["cuerpo"].asString()
         val otroReparto = cuerpo.replace("\"100.00\"", "\"X\"").replace("\"50.50\"", "\"100.00\"").replace("\"X\"", "\"50.50\"")
         assertTrue(otroReparto != cuerpo)
-        editarComo(supervisor, evento(repartido.pagoId)["id"].asString(), "cuerpo" to otroReparto)
+        cambiarEnLaBase("pago_evento", evento(repartido.pagoId)["id"].asString(), "cuerpo" to otroReparto)
         val referido = evento(referida.pagoId)["attributes"]["cuerpo"].asString().replace(referida.referencia, "OTRA-DEUDA-${unico()}")
-        editarComo(supervisor, evento(referida.pagoId)["id"].asString(), "cuerpo" to referido)
+        cambiarEnLaBase("pago_evento", evento(referida.pagoId)["id"].asString(), "cuerpo" to referido)
 
         vuelta()
 
@@ -340,13 +325,6 @@ class BuzonApiTest : CajaApiTest() {
             val muerto = evento(editado.pagoId)["attributes"]
             assertEquals("MUERTO", muerto["estado"].asString())
             assertTrue(muerto["ultimo_error"].asString().startsWith("el evento no coincide con su recibo"), muerto.toString())
-            // y el detector vio la edición
-            assertTrue(
-                salida.out.lines().any {
-                    it.contains("ESCRITURA FUERA DE CAJA") &&
-                        it.contains("UPDATED pago_evento ${evento(editado.pagoId)["id"].asString()}")
-                }
-            )
         }
         // un recibo de dos órdenes que nadie tocó se recompone igual y se entrega
         assertEquals("ENTREGADO", evento(intacto.pagoId)["attributes"]["estado"].asString())
@@ -367,7 +345,7 @@ class BuzonApiTest : CajaApiTest() {
         origen.contestar(editada["attributes"]["evento_id"].asString(), 200)
         val otroOriginal =
             editada["attributes"]["cuerpo"].asString().replace(editado.pagoId, UUID.randomUUID().toString())
-        editarComo(supervisor, editada["id"].asString(), "cuerpo" to otroOriginal)
+        cambiarEnLaBase("pago_evento", editada["id"].asString(), "cuerpo" to otroOriginal)
 
         vuelta()
 
@@ -457,7 +435,7 @@ class BuzonApiTest : CajaApiTest() {
         val cobro = cobrar(PRUEBAS)
         val legitimo = evento(cobro.pagoId)["attributes"]
         val inyectado = UUID.randomUUID().toString()
-        forjar(cuenta("CAJERO").token, legitimo, inyectado, legitimo["cuerpo"].asString(), sistema = "$PRUEBAS\nDINERO FALSO inyectado")
+        forjar(legitimo, inyectado, legitimo["cuerpo"].asString(), sistema = "$PRUEBAS\nDINERO FALSO inyectado")
 
         vuelta()
 
@@ -488,19 +466,18 @@ class BuzonApiTest : CajaApiTest() {
         assertTrue(acta != sello)
 
         // una línea escrita por la API genérica es otra transacción: otro sello
-        val suelta = lineaForjada(funcionario("SUPERVISOR_CAJA"), reciboId, lineas.first()["attributes"]["orden"].asString())
+        val suelta = lineaForjada(reciboId, lineas.first()["attributes"]["orden"].asString())
         assertTrue(registro("linea_recibo", suelta)["createdAt"].asString() != sello)
     }
 
     @Test
     fun `una linea forjada y el cuerpo editado para incluirla no se envian`() {
-        val supervisor = funcionario("SUPERVISOR_CAJA")
         val cobro = cobrar(PRUEBAS)
         origen.contestar(cobro.pagoId, 200)
         // otra deuda del mismo sistema, sin pagar, que el forjador quiere dar por cobrada
         val impaga = post(ORDENES, orden("sistema_origen" to PRUEBAS, "importe" to "10.00"))
         val reciboId = evento(cobro.pagoId)["attributes"]["recibo"].asString()
-        lineaForjada(supervisor, reciboId, impaga["orden_id"].asString(), impaga["referencia_externa"].asString(), "10.00")
+        lineaForjada(reciboId, impaga["orden_id"].asString(), impaga["referencia_externa"].asString(), "10.00")
         val cuerpo = json.readTree(evento(cobro.pagoId)["attributes"]["cuerpo"].asString()) as ObjectNode
         (cuerpo["ordenes"] as ArrayNode)
             .addObject()
@@ -508,7 +485,7 @@ class BuzonApiTest : CajaApiTest() {
             .put("referenciaExterna", impaga["referencia_externa"].asString())
             .put("importe", "10.00")
             .put("actualizadoA", "2026-03-15")
-        editarComo(supervisor, evento(cobro.pagoId)["id"].asString(), "cuerpo" to cuerpo.toString())
+        cambiarEnLaBase("pago_evento", evento(cobro.pagoId)["id"].asString(), "cuerpo" to cuerpo.toString())
 
         vuelta()
 
@@ -528,8 +505,8 @@ class BuzonApiTest : CajaApiTest() {
         origen.contestar(cobro.pagoId, 200)
         val reciboId = evento(cobro.pagoId)["attributes"]["recibo"].asString()
         val ordenPagada = registros("linea_recibo", "recibo" to reciboId).single()["attributes"]["orden"].asString()
-        lineaForjada(funcionario("CAJERO"), reciboId, ordenPagada)
-        editarComo(funcionario("CAJERO"), ordenPagada, "actualizado_a" to "2027-01-01", objeto = "orden_de_cobro")
+        lineaForjada(reciboId, ordenPagada)
+        cambiarEnLaBase("orden_de_cobro", ordenPagada, "actualizado_a" to "2027-01-01")
 
         vuelta()
 
@@ -543,29 +520,19 @@ class BuzonApiTest : CajaApiTest() {
         origen.contestar(cobro.pagoId, 200)
         val legitimo = evento(cobro.pagoId)["attributes"]
         val forjadoId = UUID.randomUUID().toString()
-        val forjado =
-            tree(
-                send(
-                    "POST",
-                    "/api/objects/pago_evento/records",
-                    mapOf(
-                        "attributes" to
-                            mapOf(
-                                "evento_id" to forjadoId,
-                                "tipo" to "PAGO_ANULADO",
-                                "sistema_destino" to PRUEBAS,
-                                "recibo" to legitimo["recibo"].asString(),
-                                "turno" to legitimo["turno"].asString(),
-                                "cuerpo" to """{"pagoId":"$forjadoId","tipo":"PAGO_ANULADO"}""",
-                                "estado" to "PENDIENTE",
-                                "intentos" to 0
-                            )
-                    ),
-                    HttpStatus.CREATED,
-                    funcionario("CAJERO")
-                )
+        forjarEnLaBase(
+            "pago_evento",
+            mapOf(
+                "evento_id" to forjadoId,
+                "tipo" to "PAGO_ANULADO",
+                "sistema_destino" to PRUEBAS,
+                "recibo" to legitimo["recibo"].asString(),
+                "turno" to legitimo["turno"].asString(),
+                "cuerpo" to """{"pagoId":"$forjadoId","tipo":"PAGO_ANULADO"}""",
+                "estado" to "PENDIENTE",
+                "intentos" to 0
             )
-        assertTrue(forjado["id"].asString().isNotEmpty())
+        )
         origen.contestar(forjadoId, 200)
         vuelta()
         assertEquals("MUERTO", evento(forjadoId)["attributes"]["estado"].asString())
@@ -780,76 +747,45 @@ class BuzonApiTest : CajaApiTest() {
         id: String
     ): JsonNode = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))
 
-    // una linea_recibo escrita por la API genérica en un recibo que ya existe: su id
+    // una linea_recibo escrita en la base en un recibo que ya existe: su id
     private fun lineaForjada(
-        token: String,
         reciboId: String,
         ordenId: String,
         referencia: String = "FORJADA-${unico()}",
         monto: String = "0.01"
     ): String =
-        tree(
-            send(
-                "POST",
-                "/api/objects/linea_recibo/records",
-                mapOf(
-                    "attributes" to
-                        mapOf(
-                            "recibo" to reciboId,
-                            "orden" to ordenId,
-                            "sistema_origen" to PRUEBAS,
-                            "concepto" to "UNA LÍNEA FORJADA",
-                            "referencia_externa" to referencia,
-                            "monto" to monto
-                        )
-                ),
-                HttpStatus.CREATED,
-                token
+        forjarEnLaBase(
+            "linea_recibo",
+            mapOf(
+                "recibo" to reciboId,
+                "orden" to ordenId,
+                "sistema_origen" to PRUEBAS,
+                "concepto" to "UNA LÍNEA FORJADA",
+                "referencia_externa" to referencia,
+                "monto" to monto
             )
-        )["id"].asString()
+        )
 
-    // un pago_evento escrito por la API genérica, como un cajero: la segunda puerta. su id de registro
+    // un pago_evento escrito en la base, junto a uno legítimo: su id de registro
     private fun forjar(
-        token: String,
         legitimo: JsonNode,
         eventoId: String,
         cuerpo: String,
         sistema: String = legitimo["sistema_destino"].asString()
     ): String =
-        tree(
-            send(
-                "POST",
-                "/api/objects/pago_evento/records",
-                mapOf(
-                    "attributes" to
-                        mapOf(
-                            "evento_id" to eventoId,
-                            "tipo" to legitimo["tipo"].asString(),
-                            "sistema_destino" to sistema,
-                            "recibo" to legitimo["recibo"].asString(),
-                            "turno" to legitimo["turno"].asString(),
-                            "cuerpo" to cuerpo,
-                            "estado" to "PENDIENTE",
-                            "intentos" to 0
-                        )
-                ),
-                HttpStatus.CREATED,
-                token
+        forjarEnLaBase(
+            "pago_evento",
+            mapOf(
+                "evento_id" to eventoId,
+                "tipo" to legitimo["tipo"].asString(),
+                "sistema_destino" to sistema,
+                "recibo" to legitimo["recibo"].asString(),
+                "turno" to legitimo["turno"].asString(),
+                "cuerpo" to cuerpo,
+                "estado" to "PENDIENTE",
+                "intentos" to 0
             )
-        )["id"].asString()
-
-    // cambia campos de un pago_evento por PUT /api/objects/pago_evento/records/{id}, con el token de quien tiene UPDATE
-    // (el supervisor): la otra cara de la segunda puerta. core reemplaza todo: va lo guardado con los cambios encima
-    private fun editarComo(
-        token: String,
-        id: String,
-        vararg cambios: Pair<String, Any?>,
-        objeto: String = "pago_evento"
-    ) {
-        val guardado = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))["attributes"]
-        val atributos = json.convertValue(guardado, Map::class.java) + cambios
-        send("PUT", "/api/objects/$objeto/records/$id", mapOf("attributes" to atributos), HttpStatus.OK, token)
-    }
+        )
 
     // mientras corre el bloque, toda marca de ese pago_evento (o solo la de ENTREGADO) revienta en la base: un disparador
     // de prueba sobre su tabla física, que se borra al terminar

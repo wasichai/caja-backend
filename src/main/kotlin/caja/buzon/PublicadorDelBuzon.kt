@@ -11,7 +11,7 @@ import kotlin.coroutines.cancellation.CancellationException
 //
 // UNA VUELTA: toma el CerrojoBuzon (si otro publicador lo tiene, no hace nada); con él recorre cada organización y lee
 // hasta caja.buzon.por-vuelta eventos PENDIENTE, por orden de creación (BuzonStore). cada evento:
-//   1. se comprueba contra su recibo (la defensa frente a un pago_evento inventado por la API genérica): si no coincide,
+//   1. se comprueba contra su recibo (la defensa frente a un pago_evento inventado por fuera de caja): si no coincide,
 //      NO se envía, y muere con «el evento no coincide con su recibo»;
 //   2. un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (salida, caja-backend#23): mientras ése siga PENDIENTE,
 //      espera sin intento; si nunca llegó (MUERTO, EXPLICADO), no se envía y muere con su motivo;
@@ -151,7 +151,7 @@ class PublicadorDelBuzon(
 
     // ADR-0026 §4: un pago que no se pudo entregar es dinero cobrado sin registrar, y avisa a una persona con nombre.
     // UNA línea ERROR que empieza con DINERO COBRADO SIN REGISTRAR (la regla de alertas mira ERROR). cada valor va en una
-    // sola línea (enUnaLinea): un sistema_destino escrito por la API genérica con un salto de línea no puede inyectar
+    // sola línea (enUnaLinea): un sistema_destino escrito en la base con un salto de línea no puede inyectar
     // otra línea en el registro. ninguno lleva el token: ultimo_error ya va tachado
     private fun alertar(muerto: Intento) {
         val e = muerto.evento

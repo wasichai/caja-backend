@@ -74,8 +74,8 @@ fun sistemaUnico(ordenes: List<OrdenDeCobro>): String {
     return sistemas.single()
 }
 
-// por qué una orden no se puede cobrar a esa fecha, o null si se puede. primero su importe: una orden escrita por la
-// API genérica de wasichai (wasichai#15) no pasó por el alta, y un importe que el alta habría rechazado (cero,
+// por qué una orden no se puede cobrar a esa fecha, o null si se puede. primero su importe: una orden escrita en la
+// base no pasó por el alta, y un importe que el alta habría rechazado (cero,
 // negativo, con más de 2 decimales o de 13 enteros) daría un recibo en negativo que rompe el arqueo y la recaudación.
 // es un dato roto, no un error del cajero
 fun motivoNoCobrable(
@@ -85,8 +85,8 @@ fun motivoNoCobrable(
     val cabecera = "La orden ${orden.id} (${orden.sistemaOrigen}/${orden.referenciaExterna}) no se puede cobrar: "
     defectoDelImporte(orden.importe)?.let { defecto ->
         return cabecera +
-            "dato roto: su importe (${orden.importe?.toPlainString()}) $defecto. No pasó por el alta de caja (se escribió por la " +
-            "API genérica): eso no se arregla en ventanilla, avise a quien administra la caja y al sistema que la emitió"
+            "dato roto: su importe (${orden.importe?.toPlainString()}) $defecto. No pasó por el alta de caja (se escribió por " +
+            "fuera de caja): eso no se arregla en ventanilla, avise a quien administra la caja y al sistema que la emitió"
     }
     if (orden.cobrableA(fecha)) return null
     return cabecera +

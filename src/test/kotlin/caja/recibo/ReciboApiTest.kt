@@ -256,12 +256,13 @@ class ReciboApiTest : CajaApiTest() {
         val supervisor = funcionario("SUPERVISOR_CAJA")
         duplicado(numero, supervisor)
 
-        // ningún rol de caja puede editar un recibo, y src/main no tiene cómo (InmutabilidadDelReciboTest). para ver que
-        // el resumen muerde hay que cambiar de verdad un dato guardado: solo aquí, como ADMIN por la api de core, que no
-        // pasa por los roles. es lo que pasaría si alguien tocara la base por fuera
+        // nadie puede editar un recibo: ni un rol de caja, ni src/main (InmutabilidadDelReciboTest), ni un ADMIN por la api
+        // de core (GuardiaDeEscrituras). para ver que el resumen muerde hay que cambiar de verdad un dato guardado: solo
+        // aquí, en la base, que es lo que pasaría si alguien la tocara por fuera
         val recibo = registros("recibo", "numero_impreso" to numero).single()
         val atributos = json.convertValue(recibo["attributes"], Map::class.java) + ("pagador_nombre" to "OTRO NOMBRE")
-        send("PUT", "/api/objects/recibo/records/${recibo["id"].asString()}", mapOf("attributes" to atributos), HttpStatus.OK)
+        send("PUT", "/api/objects/recibo/records/${recibo["id"].asString()}", mapOf("attributes" to atributos), HttpStatus.FORBIDDEN)
+        cambiarEnLaBase("recibo", recibo["id"].asString(), "pagador_nombre" to "OTRO NOMBRE")
 
         val problema = tree(send("POST", "$RECIBOS/$numero/duplicados", OBSERVACION, HttpStatus.CONFLICT, supervisor))
         assertTrue(problema["detail"].asString().contains("ya no se dibuja igual"), problema.toString())

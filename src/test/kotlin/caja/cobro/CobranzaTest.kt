@@ -90,7 +90,7 @@ class CobranzaTest {
         assertTrue(motivoNoCobrable(futura, hoy)!!.contains(futura.id!!))
     }
 
-    // una orden escrita por la API genérica no pasó por el alta (wasichai#15): el cobro vuelve a mirar su importe, y un
+    // una orden escrita en la base no pasó por el alta: el cobro vuelve a mirar su importe, y un
     // importe que el alta habría rechazado es un dato roto, un 409 que nombra la orden. nunca un recibo en negativo
     @Test
     fun `una orden con el importe roto no se cobra, y se dice que es un dato roto y cual`() {

@@ -54,7 +54,9 @@ class InmutabilidadDelReciboTest {
     }
 
     // caja no borra nada: ni una puerta para borrar en src/main (un records.delete, un Registros.delete o una ayuda que
-    // los envuelva, como la Listas de srtm), aunque hoy nadie la llame. una puerta latente es la que alguien usa mañana
+    // los envuelva, como la Listas de srtm), aunque hoy nadie la llame. una puerta latente es la que alguien usa mañana.
+    // la excepción es la que cierra: GuardiaDeEscrituras envuelve el delete del RecordStore de wasichai, rechaza el de
+    // todo objeto de caja y deja pasar el de lo demás (una caja, una tasa). GuardiaDeEscriturasTest lo fija
     @Test
     fun `src main no tiene ninguna puerta para borrar`() {
         val borrar = Regex("\\.delete\\(|fun (<[^>]*> )?(delete|borrar|cambiar)\\(")
@@ -67,7 +69,10 @@ class InmutabilidadDelReciboTest {
                         if (borrar.containsMatchIn(linea)) "${fuente.path}:${i + 1}: ${linea.trim()}" else null
                     }
                 }.toList()
-        assertEquals(emptyList<String>(), hallazgos)
+        val (guarda, resto) = hallazgos.partition { it.contains("caja/comun/GuardiaDeEscrituras.kt") }
+        assertEquals(emptyList<String>(), resto)
+        assertEquals(2, guarda.size, "la guarda envuelve el delete de wasichai y nada más: $guarda")
+        assertTrue(guarda.any { it.contains("override suspend fun delete(") } && guarda.any { it.contains("almacen.delete(") }, guarda.toString())
     }
 
     @Test
