@@ -2,7 +2,6 @@ package caja.recaudacion
 
 import caja.cobro.Area
 import caja.cobro.Caja
-import caja.cobro.NORMAL
 import caja.cobro.Tasa
 import caja.cobro.Turno
 import caja.cobro.claveDelTurno
@@ -22,6 +21,7 @@ import caja.turno.ArqueoDelTurno
 import caja.turno.ArqueoRespuesta
 import caja.turno.EstadoDelTurno
 import caja.turno.LibroDelTurno
+import caja.turno.ReciboRotoRespuesta
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.FieldViolation
@@ -42,6 +42,12 @@ import java.time.LocalDate
 // es un día de Lima; recibo.emitido_en es un instante, y con él la frontera de la medianoche dependería de la zona de
 // quien consulta: un cobro de las nueve de la noche saldría del día en que se cobró. y el arqueo del turno usa la fecha
 // del turno: si el reporte usara otra cosa, la suma de los arqueos de un mes podría no ser la recaudación del mes.
+//
+// UN RECIBO ROTO NO TUMBA EL REPORTE. un recibo con cifras imposibles (defectoDeRecaudacion: un total o una anulación
+// en negativo, una anulación mayor que el total, una línea de su cobro negativa) no lo escribe caja: llega por la API
+// genérica (wasichai#15) o por la base. queda fuera de las cifras, entero (el avance y la recaudación por área cuentan
+// los mismos recibos), y se nombra en recibos_con_datos_rotos. sin esto, un solo recibo así daría un 500 en todo rango
+// que incluyera su día.
 //
 // SIN CANDADOS, y ese es el punto: el avance se mira MIENTRAS el cajero cobra, y una lectura que tomara el candado del
 // turno pondría la cola de la ventanilla a esperar por un informe. cada consulta lee en UNA foto de la base
@@ -90,7 +96,12 @@ class ConsultaDeRecaudacion(
             }
             if (errores.isNotEmpty()) throw ValidationException("El avance no es válido", errores)
             val turno = if (cajaLeida != null && elCajero != null) turnoDeHoy(laCaja, cajaLeida, elCajero, hoy) else null
-            val recibos = leidos(rango, cajaLeida?.id, elCajero)
+            val juzgados =
+                juzgados(registros.byRelation(RECIBO, ReciboLeido::class.java, "turno", turnosDelRango(rango, cajaLeida?.id, elCajero).map { it.id!! }))
+            val recibos =
+                juzgados.filter { it.defecto == null }.map {
+                    ReciboRecaudado(origenDelRecibo(it.recibo.tipoPago!!, it.lineas.map { l -> l.sistemaOrigen }), it.recibo.total!!, it.anulado)
+                }
             val avance = Avance.de(recibos.filter { esDelOrigen(it.origen, origen) })
             AvanceRespuesta(
                 desde = rango.desde.toString(),
@@ -103,7 +114,8 @@ class ConsultaDeRecaudacion(
                 cobrado = Importe.de(avance.cobrado, hoy),
                 anulado = Importe.de(avance.anulado, hoy),
                 neto = Importe.de(avance.neto, hoy),
-                turno = turno
+                turno = turno,
+                recibosConDatosRotos = rotos(juzgados)
             )
         }
     }
@@ -129,19 +141,13 @@ class ConsultaDeRecaudacion(
         val rango = rangoPedido(desde, hasta, hoy)
         val codigo = codigoDeArea(area)
         return transaccion.lectura {
-            val recibos = registros.byRelation(RECIBO, ReciboLeido::class.java, "turno", turnosDelRango(rango, null, null).map { it.id!! })
-            val anulados = anulados(recibos).keys
-            val porRecibo = recibos.associateBy { it.id!! }
-            val lineas =
-                registros
-                    .byRelation(LINEA_RECIBO, LineaLeida::class.java, "recibo", recibos.map { it.id!! })
-                    .groupBy { it.recibo!! }
-                    .flatMap { (recibo, suyas) -> delCobro(porRecibo.getValue(recibo).createdAt, suyas) { it.createdAt } }
-            val tasas = registros.byIds(TASA, Tasa::class.java, lineas.mapNotNull { it.tasa })
+            val juzgados = juzgados(registros.byRelation(RECIBO, ReciboLeido::class.java, "turno", turnosDelRango(rango, null, null).map { it.id!! }))
+            val lineas = juzgados.filter { it.defecto == null }.flatMap { j -> j.lineas.map { it to j.tieneActa } }
+            val tasas = registros.byIds(TASA, Tasa::class.java, lineas.mapNotNull { it.first.tasa })
             val areas = registros.byIds(AREA, Area::class.java, tasas.values.mapNotNull { it.area })
             val recaudadas =
                 lineas
-                    .map { linea ->
+                    .map { (linea, anulada) ->
                         val tasa = linea.tasa?.let { tasas[it] }
                         val suArea = tasa?.area?.let { areas[it] }
                         LineaRecaudada(
@@ -150,7 +156,7 @@ class ConsultaDeRecaudacion(
                             partida = tasa?.partidaPresupuestal,
                             concepto = tasa?.codigo ?: linea.sistemaOrigen,
                             monto = linea.monto!!,
-                            anulada = linea.recibo in anulados
+                            anulada = anulada
                         )
                     }.filter { codigo == null || it.area == codigo }
             val distribucion = Distribucion.de(recaudadas)
@@ -171,35 +177,42 @@ class ConsultaDeRecaudacion(
                         )
                     },
                 neto = Importe.de(distribucion.neto, hoy),
-                netoSinPartida = Importe.de(distribucion.netoSinPartida, hoy)
+                netoSinPartida = Importe.de(distribucion.netoSinPartida, hoy),
+                recibosConDatosRotos = rotos(juzgados)
             )
         }
     }
 
-    // los recibos de los turnos del rango (de esa caja y ese cajero, si vienen), cada uno con su origen y lo que devolvió
-    // su anulación: el importe del acta, el mismo que resta el arqueo del turno
-    private suspend fun leidos(
-        rango: Rango,
-        cajaId: String?,
-        cajero: String?
-    ): List<ReciboRecaudado> {
-        val recibos = registros.byRelation(RECIBO, ReciboLeido::class.java, "turno", turnosDelRango(rango, cajaId, cajero).map { it.id!! })
-        val anulado = anulados(recibos)
-        val sistemas =
+    // un recibo del rango con las líneas de su cobro (las de su sello), lo que devolvió su anulación (el importe del
+    // acta, el mismo que resta el arqueo del turno; cero sin acta) y por qué no se puede contar, o null
+    private class Juzgado(
+        val recibo: ReciboLeido,
+        val lineas: List<LineaLeida>,
+        val tieneActa: Boolean,
+        val anulado: BigDecimal,
+        val defecto: String?
+    )
+
+    // cada recibo con su anulación y las líneas de su cobro, juzgado por defectoDeRecaudacion
+    private suspend fun juzgados(recibos: List<ReciboLeido>): List<Juzgado> {
+        val ids = recibos.map { it.id!! }
+        val actas =
             registros
-                .byRelation(LINEA_RECIBO, LineaLeida::class.java, "recibo", recibos.filter { it.tipoPago == NORMAL }.map { it.id!! })
-                .groupBy { it.recibo!! }
+                .byRelation(ANULACION_RECIBO, AnulacionRecibo::class.java, "recibo", ids)
+                .associate { it.recibo!! to it.importe!! }
+        val lineas = registros.byRelation(LINEA_RECIBO, LineaLeida::class.java, "recibo", ids).groupBy { it.recibo!! }
         return recibos.map { recibo ->
-            val delCobro = delCobro(recibo.createdAt, sistemas[recibo.id].orEmpty()) { it.createdAt }
-            ReciboRecaudado(origenDelRecibo(recibo.tipoPago!!, delCobro.map { it.sistemaOrigen }), recibo.total!!, anulado[recibo.id] ?: BigDecimal.ZERO)
+            val suyas = delCobro(recibo.createdAt, lineas[recibo.id].orEmpty()) { it.createdAt }
+            val anulado = actas[recibo.id] ?: BigDecimal.ZERO
+            Juzgado(recibo, suyas, recibo.id in actas, anulado, defectoDeRecaudacion(recibo.total!!, anulado, suyas.map { it.monto }))
         }
     }
 
-    // lo que congeló el acta de cada recibo anulado
-    private suspend fun anulados(recibos: List<ReciboLeido>): Map<String, BigDecimal> =
-        registros
-            .byRelation(ANULACION_RECIBO, AnulacionRecibo::class.java, "recibo", recibos.map { it.id!! })
-            .associate { it.recibo!! to it.importe!! }
+    // los que no se pudieron contar, con su porqué, por número
+    private fun rotos(juzgados: List<Juzgado>): List<ReciboRotoRespuesta> =
+        juzgados
+            .mapNotNull { j -> j.defecto?.let { ReciboRotoRespuesta(j.recibo.numeroImpreso ?: j.recibo.id!!, it) } }
+            .sortedBy { it.numeroImpreso }
 
     // los turnos cuya FECHA cae en el rango, los dos días incluidos
     private suspend fun turnosDelRango(
@@ -235,13 +248,15 @@ class ConsultaDeRecaudacion(
                         "haría pensar que abrió y no cobró"
                 )
         val turnoId = turno.id!!
+        val recibos = libro.recibos(turnoId)
         return TurnoDelAvance(
             turnoId = turnoId,
             caja = caja.codigo!!,
             cajero = turno.cajero!!,
             fecha = turno.fecha.toString(),
             estadoDelTurno = EstadoDelTurno.de(libro.historia(turnoId)),
-            arqueo = ArqueoRespuesta.enVivo(ArqueoDelTurno.de(libro.recibos(turnoId), emptyMap(), hoy))
+            arqueo = ArqueoRespuesta.enVivo(ArqueoDelTurno.de(recibos.contables, emptyMap(), hoy)),
+            recibosConDatosRotos = ReciboRotoRespuesta.de(recibos.rotos)
         )
     }
 }

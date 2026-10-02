@@ -63,16 +63,17 @@ class LibroDelTurno(
         }
     }
 
-    // los recibos del turno, vistos desde el arqueo: cada uno con lo que su anulación congeló, o cero
-    suspend fun recibos(turnoId: String): List<ReciboDelTurno> {
+    // los recibos del turno, vistos desde el arqueo: cada uno con lo que su anulación congeló, o cero, partidos en los
+    // que el arqueo cuenta y los rotos con su porqué (RecibosDelTurno): uno roto no tumba el arqueo con un 500
+    suspend fun recibos(turnoId: String): RecibosDelTurno {
         val recibos = registros.all(RECIBO, Recibo::class.java, filters = mapOf("turno" to turnoId))
         val anulado =
             registros
                 .byRelation(ANULACION_RECIBO, AnulacionRecibo::class.java, "recibo", recibos.map { it.id!! })
                 .associate { it.recibo!! to it.importe!! }
-        return recibos.map {
-            ReciboDelTurno(it.numeroImpreso!!, it.tipoPago!!, it.formaPago!!, it.total!!, anulado[it.id] ?: BigDecimal.ZERO)
-        }
+        return RecibosDelTurno.de(
+            recibos.map { FilaDeRecibo(it.numeroImpreso!!, it.tipoPago!!, it.formaPago!!, it.total!!, anulado[it.id] ?: BigDecimal.ZERO) }
+        )
     }
 
     // los pagos del turno que su sistema de origen todavía no conoce: PENDIENTE o MUERTO. impiden cerrar

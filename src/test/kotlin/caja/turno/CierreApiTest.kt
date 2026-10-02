@@ -273,6 +273,60 @@ class CierreApiTest : CajaApiTest() {
         post(CIERRE, cierreDe(caja, "EFECTIVO" to "150.50"), cajero.token)
     }
 
+    // un recibo roto (un CAJERO tiene CREATE sobre recibo, y la API genérica se lo deja usar con un total negativo, en
+    // su turno o en el de otro: wasichai#15) no tumba el arqueo con un 500 ni bloquea el cierre para siempre. queda
+    // fuera de las cifras y se nombra con su porqué, en el arqueo en vivo y en la respuesta del cierre
+    @Test
+    fun `un recibo roto no tumba el arqueo ni bloquea el cierre, queda fuera de las cifras y se nombra`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val codigo = codigoDeTasa()
+        nuevaTasa(codigo, "12.30", hoy.minusDays(1))
+        cobrarTasa(caja, cajero, codigo, 1, "EFECTIVO")
+        val turnoId = turnoDe(caja, cajero)
+        val roto = "${caja.serie}-9999999"
+        send(
+            "POST",
+            "/api/objects/recibo/records",
+            mapOf(
+                "attributes" to
+                    mapOf(
+                        "serie" to caja.serie,
+                        "numero" to 9_999_999,
+                        "numero_impreso" to roto,
+                        "caja" to caja.id,
+                        "turno" to turnoId,
+                        "cajero" to cajero.email,
+                        "emitido_en" to OffsetDateTime.now(LIMA).toString(),
+                        "forma_pago" to "EFECTIVO",
+                        "tipo_pago" to "TASA",
+                        "total" to "-30.00",
+                        "actualizado_a" to hoy.toString(),
+                        "observacion" to "un recibo forjado en negativo"
+                    )
+            ),
+            HttpStatus.CREATED,
+            cajero.token
+        )
+
+        val enVivo = arqueoDe(turnoId, cajero)
+        assertEquals("12.30", cifra(enVivo["arqueo"]["neto"]))
+        assertEquals(1, enVivo["arqueo"]["recibos_emitidos"].asInt())
+        val rotoEnVivo = enVivo["recibos_con_datos_rotos"].single()
+        assertEquals(roto, rotoEnVivo["numero_impreso"].asString())
+        assertTrue(rotoEnVivo["motivo"].asString().contains("-30.00"), rotoEnVivo.toString())
+        assertEquals(true, enVivo["puede_cerrar"].asBoolean(), "el recibo roto no bloquea el cierre")
+
+        val cierre = post(CIERRE, cierreDe(caja, "EFECTIVO" to "12.30"), cajero.token)
+        assertEquals("12.30", cifra(cierre["arqueo"]["neto"]))
+        assertEquals(true, cierre["arqueo"]["cuadra"].asBoolean())
+        assertEquals(listOf(roto), cierre["recibos_con_datos_rotos"].toList().map { it["numero_impreso"].asString() })
+        // el acta no lo cuenta, y cerrado sigue a la vista en el arqueo
+        val cerrado = arqueoDe(turnoId, cajero)
+        assertEquals("CERRADO", cerrado["estado_del_turno"].asString())
+        assertEquals(listOf(roto), cerrado["recibos_con_datos_rotos"].toList().map { it["numero_impreso"].asString() })
+    }
+
     // de la inmutabilidad
 
     @Test

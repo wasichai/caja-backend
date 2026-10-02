@@ -24,9 +24,68 @@ private fun formaConocida(forma: String) {
     require(forma in FORMAS_DE_PAGO) { "'$forma' no es una forma de pago: una de ${FORMAS_DE_PAGO.joinToString(", ")}" }
 }
 
+// por qué las cifras de un recibo no se pueden contar, o null si se pueden: un total o una anulación en negativo, o una
+// anulación mayor que el total. la cobranza y la anulación no las escriben; llegan por la API genérica de wasichai
+// (wasichai#15) o por la base. la misma regla vale para el arqueo y para la recaudación
+fun defectoDeLasCifras(
+    total: BigDecimal,
+    anulado: BigDecimal
+): String? =
+    when {
+        total.signum() < 0 -> "su total es negativo (${total.toPlainString()}): un recibo no cobra en negativo"
+        anulado.signum() < 0 -> "su anulación devolvió un importe negativo (${anulado.toPlainString()})"
+        anulado > total ->
+            "cobró ${total.toPlainString()} y su anulación devolvió ${anulado.toPlainString()}: el acta congela el total del recibo, no otra cifra"
+        else -> null
+    }
+
+// por qué un recibo no puede entrar en un arqueo, o null si puede: sus cifras, o una forma de pago que no existe
+fun defectoDelRecibo(
+    formaPago: String,
+    total: BigDecimal,
+    anulado: BigDecimal
+): String? =
+    if (formaPago !in FORMAS_DE_PAGO) {
+        "'$formaPago' no es una forma de pago: una de ${FORMAS_DE_PAGO.joinToString(", ")}"
+    } else {
+        defectoDeLasCifras(total, anulado)
+    }
+
+// un recibo que no se puede contar, con su porqué: queda fuera de las cifras y se nombra. nunca tumba el arqueo entero,
+// ni bloquea el cierre, ni el reporte de un año: el dato roto se dice, no se cuenta ni se esconde
+data class ReciboRoto(
+    val numero: String,
+    val motivo: String
+)
+
+// un recibo del turno como se leyó, sin juzgar todavía
+data class FilaDeRecibo(
+    val numero: String,
+    val tipoPago: String,
+    val formaPago: String,
+    val total: BigDecimal,
+    val anulado: BigDecimal
+)
+
+// los recibos leídos de un turno, partidos en los que el arqueo cuenta y los rotos con su porqué, en el orden leído
+data class RecibosDelTurno(
+    val contables: List<ReciboDelTurno>,
+    val rotos: List<ReciboRoto>
+) {
+    companion object {
+        fun de(filas: List<FilaDeRecibo>): RecibosDelTurno {
+            val juzgadas = filas.map { it to defectoDelRecibo(it.formaPago, it.total, it.anulado) }
+            return RecibosDelTurno(
+                juzgadas.filter { it.second == null }.map { (f, _) -> ReciboDelTurno(f.numero, f.tipoPago, f.formaPago, f.total, f.anulado) },
+                juzgadas.mapNotNull { (f, defecto) -> defecto?.let { ReciboRoto(f.numero, it) } }
+            )
+        }
+    }
+}
+
 // un recibo del turno visto desde el arqueo: su número, su tipo de pago (decide si produjo evento), su forma de pago
 // (decide en qué línea cae), su total congelado y lo que su anulación devolvió, que es el importe que el acta congeló y
-// no el total releído. cero si sigue vigente
+// no el total releído. cero si sigue vigente. lo imposible lanza: quien lee de la base pasa por RecibosDelTurno
 data class ReciboDelTurno(
     val numero: String,
     val tipoPago: String,
@@ -35,12 +94,7 @@ data class ReciboDelTurno(
     val anulado: BigDecimal
 ) {
     init {
-        formaConocida(formaPago)
-        require(total.signum() >= 0 && anulado.signum() >= 0) { "El recibo $numero no cobra ni devuelve en negativo" }
-        require(anulado <= total) {
-            "El recibo $numero cobró ${total.toPlainString()} y su anulación devolvió ${anulado.toPlainString()}: el acta congela " +
-                "el total del recibo, no otra cifra"
-        }
+        defectoDelRecibo(formaPago, total, anulado)?.let { throw IllegalArgumentException("El recibo $numero no se puede contar: $it") }
     }
 
     val estaAnulado: Boolean get() = anulado.signum() != 0

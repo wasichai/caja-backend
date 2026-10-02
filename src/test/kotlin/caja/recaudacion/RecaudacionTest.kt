@@ -119,6 +119,20 @@ class RecaudacionTest {
             assertThrows<IllegalArgumentException> { ReciboRecaudado("rentas", dinero("10.00"), dinero("10.01")) }
             assertThrows<IllegalArgumentException> { ReciboRecaudado("rentas", dinero("-1.00"), dinero("0")) }
         }
+
+        // lo imposible no entra en las cifras, pero tampoco tumba el reporte de todo un año: el recibo roto se dice
+        @Test
+        fun `un recibo roto se dice con su porque, y el que esta bien no`() {
+            assertNull(defectoDeRecaudacion(dinero("100.00"), dinero("0.00"), listOf(dinero("60.00"), dinero("40.00"))))
+            assertNull(defectoDeRecaudacion(dinero("12.30"), dinero("12.30"), emptyList()))
+
+            val negativo = defectoDeRecaudacion(dinero("-20.00"), dinero("0.00"), emptyList())
+            assertTrue(negativo != null && negativo.contains("-20.00"), negativo)
+            assertTrue(defectoDeRecaudacion(dinero("10.00"), dinero("10.01"), emptyList()) != null)
+            val linea = defectoDeRecaudacion(dinero("100.00"), dinero("0.00"), listOf(dinero("150.00"), dinero("-50.00")))
+            assertTrue(linea != null && linea.contains("-50.00"), linea)
+            assertTrue(defectoDeRecaudacion(dinero("100.00"), dinero("0.00"), listOf(null)) != null)
+        }
     }
 
     @Nested

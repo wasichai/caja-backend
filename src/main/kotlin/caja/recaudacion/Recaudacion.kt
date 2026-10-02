@@ -3,6 +3,7 @@ package caja.recaudacion
 import caja.cobro.PAGO_DE_TASA
 import caja.recibo.diaPedido
 import caja.recibo.rangoDeDias
+import caja.turno.defectoDeLasCifras
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.ValidationException
 import java.math.BigDecimal
@@ -53,10 +54,28 @@ data class ReciboRecaudado(
     val anulado: BigDecimal
 ) {
     init {
-        require(total.signum() >= 0 && anulado.signum() >= 0) { "La recaudación no se cuenta en negativo" }
-        require(anulado <= total) { "Una anulación devolvió ${anulado.toPlainString()} de un recibo de ${total.toPlainString()}" }
+        defectoDeLasCifras(total, anulado)?.let { throw IllegalArgumentException("La recaudación no cuenta este recibo: $it") }
     }
 }
+
+// por qué un recibo no se puede contar en la recaudación, o null si se puede: sus cifras (la regla del arqueo,
+// defectoDeLasCifras) o una línea de su cobro sin monto o en negativo. un recibo roto queda fuera de las cifras, entero
+// (sus líneas también: el avance y la recaudación por área cuentan los mismos recibos), y se nombra con este porqué.
+// nunca tumba el reporte de todo un rango
+fun defectoDeRecaudacion(
+    total: BigDecimal,
+    anulado: BigDecimal,
+    montosDelCobro: List<BigDecimal?>
+): String? =
+    defectoDeLasCifras(total, anulado) ?: run {
+        val rota = montosDelCobro.indexOfFirst { it == null || it.signum() < 0 }
+        if (rota < 0) {
+            null
+        } else {
+            montosDelCobro[rota]?.let { "una línea de su cobro es negativa (${it.toPlainString()}): una línea no cobra en negativo" }
+                ?: "una línea de su cobro no tiene monto"
+        }
+    }
 
 // lo recaudado por un origen: lo cobrado (anulados incluidos) y lo que de eso se anuló. se resta en vez de excluirse:
 // un avance que solo mostrara el neto no podría explicar por qué ayer decía más que hoy

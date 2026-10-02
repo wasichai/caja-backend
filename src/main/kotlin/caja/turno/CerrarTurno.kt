@@ -19,6 +19,7 @@ import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
 import caja.recibo.sinCamposDesconocidos
+import org.slf4j.LoggerFactory
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
@@ -49,7 +50,13 @@ import java.time.OffsetDateTime
 // (DuplicateKeyException), todo se revierte y se contesta 409, sin releer dentro.
 //
 // EL DESCUADRE SE GUARDA, NO SE RECHAZA. que lo declarado no coincida con el neto no impide cerrar: es justo lo que hay
-// que dejar escrito. lo que impide cerrar es un pago que su sistema de origen no conoce (PENDIENTE o MUERTO)
+// que dejar escrito. lo que impide cerrar es un pago que su sistema de origen no conoce (PENDIENTE o MUERTO).
+//
+// UN RECIBO ROTO NO BLOQUEA EL CIERRE. un recibo con cifras imposibles (un total negativo, una anulación mayor que el
+// total) no lo escribe caja: llega por la API genérica (un CAJERO tiene CREATE sobre recibo, también en el turno de
+// otro; wasichai#15) o por la base. si bloqueara, cualquiera con ese permiso dejaría un turno ajeno sin cerrar hasta
+// que un ADMIN borrara la fila. queda FUERA del acta (sus cifras y recibos_emitidos son las de los recibos contables),
+// se nombra en la respuesta y en una línea ERROR, y el arqueo del turno lo sigue nombrando después de cerrar
 @Service
 class CerrarTurno(
     private val registros: Registros,
@@ -60,6 +67,8 @@ class CerrarTurno(
     private val currentUser: CurrentUser,
     private val reloj: Clock
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
     suspend fun cerrar(body: PeticionDeCierre): CierreRespuesta {
         val usuario = currentUser.require()
         // cerrar es el privilegio REGISTRO de cierre_caja: crear el acta y sus líneas
@@ -120,8 +129,8 @@ class CerrarTurno(
         // 5. el arqueo con lo declarado, a la fecha del turno, y su cuadre: las dos mitades suman el neto. no puede
         // fallar sin un defecto (las dos salen de los mismos recibos); se comprueba porque el precio es cero
         val recibos = libro.recibos(turnoId)
-        val arqueo = ArqueoDelTurno.de(recibos, pedido.declarado, pedido.fecha)
-        val cuadre = Cuadre.de(recibos)
+        val arqueo = ArqueoDelTurno.de(recibos.contables, pedido.declarado, pedido.fecha)
+        val cuadre = Cuadre.de(recibos.contables)
         check(cuadre.sumaElNetoDe(arqueo)) {
             "El arqueo del turno $turnoId dice ${arqueo.neto.toPlainString()} y las dos mitades del cuadre suman " +
                 "${cuadre.total.toPlainString()}: el reparto entre con evento y sin evento deja algún recibo fuera"
@@ -169,6 +178,19 @@ class CerrarTurno(
             )
         }
 
+        // el acta no cuenta los recibos rotos: se dice, aquí y en la respuesta. si la transacción se revierte, la línea
+        // sobra, pero nunca falta
+        if (recibos.rotos.isNotEmpty()) {
+            log.error(
+                "CIERRE CON RECIBOS FUERA DEL ARQUEO: el cierre {} del turno {} no cuenta {} recibo(s) con datos rotos, escritos por fuera " +
+                    "de caja: {}. Revíselos",
+                cierreId,
+                turnoId,
+                recibos.rotos.size,
+                recibos.rotos.joinToString("; ") { "${it.numero}: ${it.motivo}" }.replace(Regex("\\s+"), " ")
+            )
+        }
+
         // 7. el acta, con el turno CERRADO
         return CierreRespuesta(
             cierreId = cierreId,
@@ -183,7 +205,8 @@ class CerrarTurno(
             estadoDelTurno = EstadoDelTurno.CERRADO,
             arqueo = ArqueoRespuesta.declarado(arqueo),
             cobradoConEvento = Importe.de(cuadre.conEvento, pedido.fecha),
-            cobradoSinEvento = Importe.de(cuadre.sinEvento, pedido.fecha)
+            cobradoSinEvento = Importe.de(cuadre.sinEvento, pedido.fecha),
+            recibosConDatosRotos = ReciboRotoRespuesta.de(recibos.rotos)
         )
     }
 

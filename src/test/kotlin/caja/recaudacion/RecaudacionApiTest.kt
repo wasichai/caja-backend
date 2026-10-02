@@ -333,6 +333,32 @@ class RecaudacionApiTest : CajaApiTest() {
         assertEquals(1, porArea["filas"].size(), porArea.toString())
     }
 
+    // un recibo roto en el rango (un total negativo escrito por la API genérica, wasichai#15) no tumba con un 500 el
+    // reporte de todo el rango: queda fuera de las cifras y se nombra con su porqué, en las dos rutas
+    @Test
+    fun `un recibo roto no tumba el avance ni la recaudacion por area, queda fuera y se nombra`() {
+        val dia = diasNuevos(1).single()
+        enElDia(dia)
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val codigo = codigoDeTasa()
+        nuevaTasa(codigo, "12.30", dia.minusDays(1))
+        cobrarTasa(caja, cajero, codigo)
+        reciboEscrito(caja, 9_999_999, dia.atTime(11, 0).atZone(LIMA).toOffsetDateTime(), "12345678", tipoPago = "TASA", total = "-20.00")
+        val roto = "${caja.serie}-9999999"
+
+        val avance = avance("desde=$dia&hasta=$dia")
+        val porArea = porArea("desde=$dia&hasta=$dia")
+
+        assertEquals(listOf("TASA 12.30 0.00 12.30"), filas(avance, "origen"))
+        assertEquals("12.30", cifra(porArea["neto"], hoy))
+        listOf(avance, porArea).forEach { respuesta ->
+            val nombrado = respuesta["recibos_con_datos_rotos"].single()
+            assertEquals(roto, nombrado["numero_impreso"].asString())
+            assertTrue(nombrado["motivo"].asString().contains("-20.00"), nombrado.toString())
+        }
+    }
+
     // del día del turno (CierreDeCajaJdbcTest.DelDiaDelTurno y ElDiaDeLaVentanillaEsElDeLimaTest)
 
     @Test

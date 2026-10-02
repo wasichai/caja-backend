@@ -227,6 +227,17 @@ data class ArqueoRespuesta(
     }
 }
 
+// un recibo que no se pudo contar, con su porqué (ReciboRoto): queda fuera de las cifras y se nombra
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
+data class ReciboRotoRespuesta(
+    val numeroImpreso: String,
+    val motivo: String
+) {
+    companion object {
+        fun de(rotos: List<ReciboRoto>): List<ReciboRotoRespuesta> = rotos.map { ReciboRotoRespuesta(it.numero, it.motivo) }
+    }
+}
+
 // si el turno puede cerrar ahora y, si no, por qué (EstadoDelCierreController de caja): el arqueo en vivo, las dos
 // mitades del cuadre y los pagos que impiden cerrar, uno a uno. puede_cerrar es falso con el turno ya cerrado o con un
 // pago sin entregar
@@ -241,7 +252,9 @@ data class ArqueoDelTurnoRespuesta(
     val loQueImpideCerrar: List<PagoSinEntregar>,
     // con el turno CERRADO, el acta de su cierre vigente: lo que se contó al cerrar, tal como se firmó, para que la
     // pantalla lo muestre después de recargar sin recalcular ni restar nada. con el turno abierto, null
-    val cierreVigente: CierreVigente?
+    val cierreVigente: CierreVigente?,
+    // los recibos del turno que el arqueo no pudo contar (escritos por fuera de caja), con su porqué. no impiden cerrar
+    val recibosConDatosRotos: List<ReciboRotoRespuesta>
 )
 
 // el acta del cierre vigente de un turno, como se guardó: su secuencia, cuándo y quién la firmó, su arqueo declarado
@@ -293,7 +306,9 @@ data class CierreRespuesta(
     val estadoDelTurno: EstadoDelTurno,
     val arqueo: ArqueoRespuesta,
     val cobradoConEvento: Importe,
-    val cobradoSinEvento: Importe
+    val cobradoSinEvento: Importe,
+    // los recibos del turno que el acta no cuenta (rotos, escritos por fuera de caja), con su porqué
+    val recibosConDatosRotos: List<ReciboRotoRespuesta>
 )
 
 // la reversión: el cierre que deja sin efecto sigue donde estaba, y el turno queda ABIERTO

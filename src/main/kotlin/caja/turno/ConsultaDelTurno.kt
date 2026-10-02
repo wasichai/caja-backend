@@ -75,7 +75,7 @@ class ConsultaDelTurno(
             val historia = libro.historia(id)
             val estado = EstadoDelTurno.de(historia)
             val recibos = libro.recibos(id)
-            val cuadre = Cuadre.de(recibos)
+            val cuadre = Cuadre.de(recibos.contables)
             val pagos = libro.pagosSinEntregar(id)
             // cerrado, el acta de su cierre vigente tal como se firmó; abierto (o reversado), ninguna
             val vigente =
@@ -94,11 +94,12 @@ class ConsultaDelTurno(
                 turnoId = id,
                 estadoDelTurno = estado,
                 puedeCerrar = estado == EstadoDelTurno.ABIERTO && pagos.isEmpty(),
-                arqueo = ArqueoRespuesta.enVivo(ArqueoDelTurno.de(recibos, emptyMap(), hoy)),
+                arqueo = ArqueoRespuesta.enVivo(ArqueoDelTurno.de(recibos.contables, emptyMap(), hoy)),
                 cobradoConEvento = Importe.de(cuadre.conEvento, hoy),
                 cobradoSinEvento = Importe.de(cuadre.sinEvento, hoy),
                 loQueImpideCerrar = pagos,
-                cierreVigente = vigente
+                cierreVigente = vigente,
+                recibosConDatosRotos = ReciboRotoRespuesta.de(recibos.rotos)
             )
         }
     }

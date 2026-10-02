@@ -168,6 +168,57 @@ class ArqueoDelTurnoTest {
         }
     }
 
+    // un recibo roto (escrito por la API genérica o en la base, nunca por la cobranza) no tumba el arqueo entero ni
+    // bloquea el cierre: queda fuera de las cifras y se nombra con su porqué. el invariante de ReciboDelTurno no cambia
+    @Nested
+    inner class DeLosRecibosRotos {
+        @Test
+        fun `un recibo roto queda fuera del arqueo y se nombra con su porque, y los demas se cuentan`() {
+            val recibos =
+                RecibosDelTurno.de(
+                    listOf(
+                        fila(1, "EFECTIVO", "100.00"),
+                        fila(2, "EFECTIVO", "-50.00"),
+                        fila(3, "TARJETA", "100.00", "120.00"),
+                        fila(4, "EFECTIVO", "30.00", "-30.00"),
+                        fila(5, "BITCOIN", "10.00")
+                    )
+                )
+
+            assertEquals(listOf("001-0000001"), recibos.contables.map { it.numero })
+            assertEquals(listOf("001-0000002", "001-0000003", "001-0000004", "001-0000005"), recibos.rotos.map { it.numero })
+            assertTrue(recibos.rotos[0].motivo.contains("-50.00"), recibos.rotos[0].motivo)
+            assertTrue(recibos.rotos[1].motivo.contains("congela el total del recibo"), recibos.rotos[1].motivo)
+            assertTrue(recibos.rotos[3].motivo.contains("BITCOIN"), recibos.rotos[3].motivo)
+            val arqueo = ArqueoDelTurno.de(recibos.contables, emptyMap(), HOY)
+            assertEquals("100.00", arqueo.neto.toPlainString())
+            assertEquals(1, arqueo.recibosEmitidos)
+        }
+
+        @Test
+        fun `el defecto de un recibo es el mismo invariante de ReciboDelTurno`() {
+            assertNull(defectoDelRecibo("EFECTIVO", BigDecimal("10.00"), BigDecimal("10.00")))
+            assertNull(defectoDelRecibo("EFECTIVO", BigDecimal("0.00"), BigDecimal("0.00")))
+            val defecto = defectoDelRecibo("EFECTIVO", BigDecimal("-1.00"), BigDecimal.ZERO)!!
+            val error = assertThrows<IllegalArgumentException> { recibo(9, "EFECTIVO", "-1.00") }
+            assertTrue(error.message!!.contains(defecto), error.message)
+        }
+
+        @Test
+        fun `sin recibos rotos no hay nada que nombrar`() {
+            val recibos = RecibosDelTurno.de(listOf(fila(1, "EFECTIVO", "10.00", "10.00")))
+            assertEquals(1, recibos.contables.size)
+            assertTrue(recibos.rotos.isEmpty())
+        }
+
+        private fun fila(
+            numero: Long,
+            forma: String,
+            total: String,
+            anulado: String = "0.00"
+        ) = FilaDeRecibo("001-${"%07d".format(numero)}", NORMAL, forma, BigDecimal(total), BigDecimal(anulado))
+    }
+
     // que produce evento y que no (#118 de caja): el cuadre parte lo recaudado en dos mitades, y las dos suman el neto
     @Nested
     inner class DelCuadre {

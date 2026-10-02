@@ -3,6 +3,7 @@ package caja.recaudacion
 import caja.comun.Importe
 import caja.turno.ArqueoRespuesta
 import caja.turno.EstadoDelTurno
+import caja.turno.ReciboRotoRespuesta
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 import java.math.BigDecimal
@@ -15,6 +16,7 @@ import java.time.Instant
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class ReciboLeido(
     val id: String? = null,
+    val numeroImpreso: String? = null,
     val turno: String? = null,
     val tipoPago: String? = null,
     val total: BigDecimal? = null,
@@ -42,7 +44,9 @@ data class AvanceRespuesta(
     val cobrado: Importe,
     val anulado: Importe,
     val neto: Importe,
-    val turno: TurnoDelAvance?
+    val turno: TurnoDelAvance?,
+    // los recibos del rango que no se pudieron contar (escritos por fuera de caja), con su porqué: fuera de las cifras
+    val recibosConDatosRotos: List<ReciboRotoRespuesta>
 )
 
 // origen: el sistema_origen de las órdenes, o TASA. null solo si el recibo no tiene líneas de su cobro (algo que la
@@ -63,7 +67,8 @@ data class TurnoDelAvance(
     val cajero: String,
     val fecha: String,
     val estadoDelTurno: EstadoDelTurno,
-    val arqueo: ArqueoRespuesta
+    val arqueo: ArqueoRespuesta,
+    val recibosConDatosRotos: List<ReciboRotoRespuesta>
 )
 
 // la recaudación por área y partida. neto_sin_partida es lo cobrado por órdenes, que no tiene partida: se publica
@@ -74,7 +79,8 @@ data class PorAreaRespuesta(
     val aLaFecha: String,
     val filas: List<FilaDePartidaRespuesta>,
     val neto: Importe,
-    val netoSinPartida: Importe
+    val netoSinPartida: Importe,
+    val recibosConDatosRotos: List<ReciboRotoRespuesta>
 )
 
 // area, area_nombre y partida van null en lo que viene de una orden: el dato no existe y no se sustituye. concepto: el
