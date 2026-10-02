@@ -114,6 +114,19 @@ class TasasTest {
     }
 
     @Test
+    fun `una vigencia al reves es un motivo de su concepto y no tumba la cotizacion`() {
+        val alReves = tasa("1.00", julio, enero, codigo = "T-1")
+        val buena = tasa("0.10", enero, null, codigo = "T-2")
+
+        val cotizacion =
+            cotizar(listOf(LineaDeTasaPedida("T-1", 1), LineaDeTasaPedida("T-2", 7)), mapOf("T-1" to listOf(alReves), "T-2" to listOf(buena)), junio)
+
+        assertEquals(listOf(BigDecimal("0.70")), cotizacion.lineas.map { it.monto })
+        val error = cotizacion.impedimentos.single()
+        assertTrue(error is ConflictException && error.message.contains("termina antes de empezar"), error.message)
+    }
+
+    @Test
     fun `la linea del recibo lleva la tasa, su descripcion, la cantidad, el precio y el monto`() {
         val t = tasa("12.30", enero, null, codigo = "T-1").copy(id = "id-de-la-tasa", descripcion = "CONSTANCIA")
 
@@ -167,6 +180,26 @@ class TasasTest {
         assertEquals("conceptos[1].codigo", sinCodigo.violations.single().field)
         val enCero = assertThrows<ValidationException> { conceptosPedidos(listOf(ConceptoPedido("T-1", "0"))) }
         assertEquals("conceptos[0].cantidad", enCero.violations.single().field)
+    }
+
+    @Test
+    fun `el codigo se normaliza con trim y mayusculas, como en caja`() {
+        assertEquals(listOf(LineaDeTasaPedida("T-1", 1)), conceptosPedidos(listOf(ConceptoPedido("  t-1 "))))
+    }
+
+    @Test
+    fun `la peticion junta en un solo 400 todos los campos que fallan`() {
+        val conceptos =
+            assertThrows<ValidationException> {
+                conceptosPedidos(listOf(ConceptoPedido(" ", "0"), ConceptoPedido("T-2").apply { desconocido("precio", "1.00") }, ConceptoPedido("T-3", "x")))
+            }
+        assertEquals(
+            listOf("conceptos[0].codigo", "conceptos[0].cantidad", "conceptos[1].precio", "conceptos[2].cantidad"),
+            conceptos.violations.map { it.field }
+        )
+
+        val cuerpo = assertThrows<ValidationException> { sinPrecioNiCamposDesconocidos(listOf("importe", "tributo")) }
+        assertEquals(listOf("importe", "tributo"), cuerpo.violations.map { it.field })
     }
 
     @Test

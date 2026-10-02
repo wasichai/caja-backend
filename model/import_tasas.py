@@ -12,6 +12,7 @@ Reglas:
 - importe es un decimal de hasta 2 decimales y mayor o igual que 0. Se lee con Decimal, nunca con float.
 - vigenciaDesde es una fecha AAAA-MM-DD; vigenciaHasta va vacía o es una fecha mayor o igual que vigenciaDesde.
 - documentoFuente es obligatorio.
+- codigo se guarda recortado y en mayúsculas (como en caja): es como lo pide la ventanilla.
 - clave_vigencia es <codigo>|<vigenciaDesde>, y la fila se rechaza si core ya tiene esa clave (o el archivo ya la
   cargó): se comprueba antes de escribir, porque core contesta 500 a un duplicado. El unique del modelo queda de red.
 
@@ -76,14 +77,16 @@ def parsear(valores, columnas):
     desde, motivo = _fecha(valores["vigenciaDesde"], "la vigencia desde")
     if motivo:
         return None, None, motivo
+    # como caja: el código se guarda recortado y en mayúsculas, que es como lo pide la ventanilla
+    codigo = valores["codigo"].strip().upper()
     atributos = {
-        "codigo": valores["codigo"],
+        "codigo": codigo,
         "descripcion": valores["descripcion"],
         "partida_presupuestal": valores["partidaPresupuestal"],
         "importe": str(importe),
         "vigencia_desde": desde.isoformat(),
         "documento_fuente": valores["documentoFuente"],
-        "clave_vigencia": f"{valores['codigo']}|{desde.isoformat()}",
+        "clave_vigencia": f"{codigo}|{desde.isoformat()}",
     }
     if valores["vigenciaHasta"]:
         hasta, motivo = _fecha(valores["vigenciaHasta"], "la vigencia hasta")

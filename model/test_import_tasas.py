@@ -78,6 +78,11 @@ class CargaTests(ImportTasasTestCase):
         self.run_main(self.csv(fila(codigoArea="a-10")))
         self.assertEqual(self.tasas()[0]["area"], self.area["id"])
 
+    def test_el_codigo_se_normaliza_con_trim_y_mayusculas(self):
+        # como caja: la ventanilla lo pide en mayúsculas, y un 't-01' cargado así no se encontraría nunca
+        self.run_main(self.csv(fila(codigo=" t-01 ")))
+        self.assertEqual((self.tasas()[0]["codigo"], self.tasas()[0]["clave_vigencia"]), ("T-01", "T-01|2026-01-01"))
+
     def test_la_misma_tasa_en_otra_vigencia_entra(self):
         code, out, err = self.run_main(self.csv(FILA, fila(vigenciaDesde="2027-01-01", vigenciaHasta="", importe="13.00")))
         self.assertEqual(code, 0, err)

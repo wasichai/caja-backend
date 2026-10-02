@@ -6,6 +6,9 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.extension.ExtendWith
+import org.springframework.boot.test.system.CapturedOutput
+import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.JsonNode
 import java.time.LocalDate
@@ -14,6 +17,7 @@ import java.util.UUID
 // POST /api/caja/cobros/tasas: el precio sale de la tarifa vigente a la fecha, nunca de la petición, y el recibo se
 // emite con el mismo mecanismo que el cobro de órdenes (turno, candados, idempotencia, número), sin evento. y
 // GET /api/caja/tasas, la lista que ofrece la ventanilla
+@ExtendWith(OutputCaptureExtension::class)
 class TasasApiTest : CajaApiTest() {
     private val hoy: LocalDate get() = LocalDate.now(LIMA)
 
@@ -155,6 +159,23 @@ class TasasApiTest : CajaApiTest() {
         rejected("POST", TASAS, cobro(caja, concepto(codigo)) + ("forma_pago" to "BITCOIN"), "forma_pago", cajero.token)
         rejected("POST", TASAS, cobro(caja, concepto(codigo)) + ("fecha_de_cobro" to hoy.minusDays(1).toString()), "fecha_de_cobro", cajero.token)
         rejected("POST", TASAS, cobro(caja, concepto(codigo)) + ("tributo" to "PREDIAL"), "tributo", cajero.token)
+        // todos los campos que fallan, en un solo 400
+        val todos =
+            tree(
+                send(
+                    "POST",
+                    TASAS,
+                    cobro(caja, mapOf("codigo" to codigo, "cantidad" to 0, "precio" to "1.00"), mapOf("cantidad" to 2)) + ("importe" to "9.99") -
+                        "forma_pago",
+                    HttpStatus.BAD_REQUEST,
+                    cajero.token
+                )
+            )
+        assertEquals(
+            setOf("importe", "forma_pago", "conceptos[0].cantidad", "conceptos[0].precio", "conceptos[1].codigo"),
+            todos["errors"].toList().map { it["field"].asString() }.toSet(),
+            todos.toString()
+        )
         // otro cajero: 403
         send("POST", TASAS, cobro(caja, concepto(codigo)) + ("cajero" to "otro@caja.test"), HttpStatus.FORBIDDEN, cajero.token)
         // una caja inexistente, 404; una de baja, 409
@@ -200,6 +221,53 @@ class TasasApiTest : CajaApiTest() {
         assertEquals(0, registros("recibo", "caja" to caja.id).size)
         post(TASAS, cobro(caja, concepto(codigo)), funcionario("SUPERVISOR_CAJA"))
         assertEquals(1, registros("recibo", "caja" to caja.id).size)
+    }
+
+    @Test
+    fun `el codigo de la tasa se lee con trim y en mayusculas`() {
+        val caja = nuevaCaja()
+        val codigo = codigoDeTasa()
+        nuevaTasa(codigo, "12.30", hoy.minusDays(1))
+
+        val cobro = post(TASAS, cobro(caja, concepto("  ${codigo.lowercase()} ", 2)), funcionario("CAJERO"))
+
+        assertEquals(codigo, cobro["recibo"]["lineas"].single()["codigo"].asString())
+        assertEquals("24.60", cobro["recibo"]["total"]["importe"].asString())
+    }
+
+    @Test
+    fun `una vigencia al reves no tumba la lista ni la vista previa`(salida: CapturedOutput) {
+        val buena = codigoDeTasa()
+        nuevaTasa(buena, "12.30", hoy.minusDays(1))
+        // un dato mal cargado en el admin: termina antes de empezar (import_tasas.py la habría rechazado)
+        val alReves = codigoDeTasa()
+        nuevaTasa(alReves, "5.00", hoy, hoy.minusDays(10))
+
+        // la lista sale sin esa fila, y queda una línea WARN que la nombra
+        val lista = lista("/api/caja/tasas", funcionario("CAJERO"))
+        assertTrue(lista.any { it["codigo"].asString() == buena })
+        assertTrue(lista.none { it["codigo"].asString() == alReves })
+        assertTrue(salida.out.lines().any { "WARN" in it && alReves in it && "termina antes de empezar" in it }, "falta la línea WARN de $alReves")
+
+        // la vista previa la dice en motivos y cotiza lo demás
+        val vista =
+            tree(
+                send(
+                    "POST",
+                    "$TASAS/vista-previa",
+                    mapOf("conceptos" to listOf(concepto(buena), concepto(alReves))),
+                    HttpStatus.OK,
+                    funcionario("CAJERO")
+                )
+            )
+        assertFalse(vista["cobrable"].asBoolean())
+        assertEquals(listOf(buena), vista["lineas"].toList().map { it["codigo"].asString() })
+        assertTrue(vista["motivos"].single().asString().contains("termina antes de empezar"), vista.toString())
+
+        // y el cobro la rechaza con 409, sin emitir nada
+        val caja = nuevaCaja()
+        send("POST", TASAS, cobro(caja, concepto(alReves)), HttpStatus.CONFLICT, funcionario("CAJERO"))
+        assertEquals(0, registros("recibo", "caja" to caja.id).size)
     }
 
     // GET /api/caja/tasas

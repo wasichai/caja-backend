@@ -7,8 +7,10 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TASA
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
+import wasichai.core.common.ConflictException
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.ValidationException
 import wasichai.core.identity.CurrentUser
@@ -56,15 +58,22 @@ class TasasService(
     }
 
     // las tasas vigentes a esa fecha (hoy en Lima si no viene), por código: la lista que ofrece la ventanilla, con el
-    // precio a esa fecha. la vigencia la decide tarifaVigente, la misma regla del cobro
+    // precio a esa fecha. la vigencia la decide tarifaVigente, la misma regla del cobro. un código con una vigencia al
+    // revés (un dato mal cargado en el admin) no tumba la lista: se omite, como el cobro lo rechazaría, y queda un WARN
     suspend fun vigentes(vigentesA: String?): List<TasaVigente> {
         val fecha = fechaDeVigencia(vigentesA)
         val vigentes =
             registros
                 .all(TASA, Tasa::class.java, sort = "codigo")
                 .groupBy { it.codigo!! }
-                .values
-                .mapNotNull { tarifaVigente(it, fecha) }
+                .mapNotNull { (codigo, tasas) ->
+                    try {
+                        tarifaVigente(tasas, fecha)
+                    } catch (malCargada: ConflictException) {
+                        log.warn("La tasa {} se omite de la lista de tasas vigentes: {}", codigo, malCargada.message)
+                        null
+                    }
+                }
         val areas = registros.byIds(AREA, Area::class.java, vigentes.mapNotNull { it.area })
         return vigentes.map { tasa ->
             TasaVigente(tasa.codigo!!, tasa.descripcion, tasa.area?.let(areas::get)?.codigo, tasa.partidaPresupuestal, Importe.de(tasa.importe!!, fecha))
@@ -131,4 +140,8 @@ class TasasService(
         val pagador: Pagador,
         val conceptos: List<LineaDeTasaPedida>
     )
+
+    private companion object {
+        val log = LoggerFactory.getLogger(TasasService::class.java)
+    }
 }

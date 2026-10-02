@@ -1,11 +1,13 @@
 package caja.cobro
 
 import wasichai.core.common.ConflictException
+import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException
 import wasichai.core.common.ValidationException
 import wasichai.core.common.WasichaiException
 import java.math.BigDecimal
 import java.time.LocalDate
+import java.util.Locale
 
 // las reglas puras de la caja de tasas (CobrarTasa de caja). el precio sale de la tasa vigente a la fecha del cobro,
 // nunca de la petición ni de una constante (regla 5): que viniera de la petición dejaría al cliente poner la tarifa, y
@@ -62,8 +64,9 @@ class Cotizacion(
 )
 
 // cada concepto con la tarifa vigente a la fecha, o lo que impide cobrarlo: sin tarifa vigente, 404 con su código;
-// una tarifa en cero, 409 (es un dato mal cargado, y un recibo por cero no documenta un cobro). el cobro lanza el
-// primer impedimento; la vista previa los dice todos. tasasPorCodigo trae todas las vigencias de cada código pedido
+// una tarifa en cero o una vigencia al revés, 409 (son datos mal cargados, y un recibo por cero no documenta un cobro).
+// el cobro lanza el primer impedimento; la vista previa los dice todos, y un concepto mal cargado no tumba a los demás.
+// tasasPorCodigo trae todas las vigencias de cada código pedido
 fun cotizar(
     pedidas: List<LineaDeTasaPedida>,
     tasasPorCodigo: Map<String, List<Tasa>>,
@@ -72,7 +75,13 @@ fun cotizar(
     val lineas = mutableListOf<TasaCotizada>()
     val impedimentos = mutableListOf<WasichaiException>()
     pedidas.forEach { pedida ->
-        val tasa = tarifaVigente(tasasPorCodigo[pedida.codigo].orEmpty(), fecha)
+        val tasa =
+            try {
+                tarifaVigente(tasasPorCodigo[pedida.codigo].orEmpty(), fecha)
+            } catch (malCargada: ConflictException) {
+                impedimentos += malCargada
+                return@forEach
+            }
         when {
             tasa == null ->
                 impedimentos +=
@@ -105,19 +114,29 @@ fun lineaDeTasa(cotizada: TasaCotizada): LineaRecibo =
 
 // lo que llega en la petición
 
-// al menos un concepto, cada uno con su código y su cantidad (1 si no viene). el código se recorta y se compara tal
-// cual con el de la tabla: la ventanilla lo toma de GET /api/caja/tasas
+// al menos un concepto, cada uno con su código y su cantidad (1 si no viene). el código se recorta y va en mayúsculas,
+// como en caja y como lo guarda import_tasas.py. todo lo que falla en todos los conceptos, en un solo 400
 fun conceptosPedidos(valores: List<ConceptoPedido>?): List<LineaDeTasaPedida> {
     if (valores.isNullOrEmpty()) {
         throw ValidationException("Faltan los conceptos", "conceptos", "al menos uno: un recibo sin líneas no documenta nada")
     }
-    return valores.mapIndexed { i, concepto ->
-        sinPrecioNiCamposDesconocidos(concepto.desconocidos, "conceptos[$i].")
-        val codigo =
-            concepto.codigo?.trim()?.ifEmpty { null }
-                ?: throw ValidationException("Falta un dato", "conceptos[$i].codigo", "el código de la tasa")
-        LineaDeTasaPedida(codigo, cantidadPedida(concepto.cantidad, "conceptos[$i].cantidad"))
-    }
+    val errores = mutableListOf<FieldViolation>()
+    val pedidas =
+        valores.mapIndexed { i, concepto ->
+            val codigo =
+                campo(errores) {
+                    concepto.codigo
+                        ?.trim()
+                        ?.uppercase(Locale.ROOT)
+                        ?.ifEmpty { null }
+                        ?: throw ValidationException("Falta un dato", "conceptos[$i].codigo", "el código de la tasa")
+                }
+            val cantidad = campo(errores) { cantidadPedida(concepto.cantidad, "conceptos[$i].cantidad") }
+            campo(errores) { sinPrecioNiCamposDesconocidos(concepto.desconocidos, "conceptos[$i].") }
+            codigo?.let { c -> cantidad?.let { LineaDeTasaPedida(c, it) } }
+        }
+    if (errores.isNotEmpty()) throw ValidationException("Los conceptos no son válidos", errores)
+    return pedidas.map { it!! }
 }
 
 // cuántas veces: un entero de al menos 1, y 1 si no viene
@@ -132,18 +151,20 @@ fun cantidadPedida(
 }
 
 // el cuerpo de un cobro de tasas no lleva cifras: un importe o un precio es un 400 que lo nombra, y cualquier otra clave
-// desconocida también
+// desconocida también. todas en el mismo 400
 fun sinPrecioNiCamposDesconocidos(
     nombres: Collection<String>,
     prefijo: String = ""
 ) {
-    val nombre = nombres.firstOrNull() ?: return
-    if (nombre in CIFRAS) {
-        throw ValidationException(
-            "El precio no viaja en la petición",
-            "$prefijo$nombre",
-            "el precio sale de la tarifa vigente a la fecha del cobro, nunca de la petición: quite este campo"
-        )
-    }
-    throw ValidationException("Campo desconocido", "$prefijo$nombre", "un cobro de tasas no lleva este campo")
+    if (nombres.isEmpty()) return
+    val violaciones =
+        nombres.map { nombre ->
+            if (nombre in CIFRAS) {
+                FieldViolation("$prefijo$nombre", "el precio sale de la tarifa vigente a la fecha del cobro, nunca de la petición: quite este campo")
+            } else {
+                FieldViolation("$prefijo$nombre", "un cobro de tasas no lleva este campo")
+            }
+        }
+    val titulo = if (nombres.any { it in CIFRAS }) "El precio no viaja en la petición" else "Campo desconocido"
+    throw ValidationException(titulo, violaciones)
 }

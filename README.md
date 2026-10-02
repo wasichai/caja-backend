@@ -108,6 +108,7 @@ ejemplo de `caja`, porque es configuración de una municipalidad y no una cifra 
 - `importe` es un decimal de hasta 2 decimales y mayor o igual que 0, escrito con `0-9`, leído con `Decimal` (nunca
   `float`). Uno demasiado grande para `Decimal` rechaza su fila, no la corrida.
 - `vigenciaHasta` va vacía o es mayor o igual que `vigenciaDesde`; `documentoFuente` es obligatorio.
+- `codigo` se guarda recortado y en mayúsculas, como lo pide la ventanilla.
 - Calcula `clave_vigencia` (`<codigo>|<vigenciaDesde>`) y rechaza la fila si core ya la tiene.
 - **No hay archivo de tarifas en este repositorio**: las cifras del TUPA salen de la normativa verificada a doble firma
   de `normativa`, no se escriben aquí. El CSV se pasa con `--archivo`; las tarifas de las pruebas son inventadas.
@@ -221,7 +222,7 @@ sobre sus líneas ni sobre su evento (V29 de `caja`). Relaciones `recibo_caja` y
 | `pagador_documento`, `pagador_nombre`, `pagador_externo_id` | TEXT, TEXT, INTEGER | El pagador de la primera orden, congelado.  | `recibo.pagador_*`             |
 | `emitido_en`         | DATETIME  | El instante de emisión. Obligatorio.                                                        | `recibo.fecha_registro`        |
 | `forma_pago`         | ENUM      | `forma_pago`. Obligatoria.                                                                  | `recibo.forma_pago`            |
-| `tipo_pago`          | ENUM      | `tipo_pago`: `NORMAL` si cobra órdenes. Obligatorio.                                        | `recibo.tipo_pago`             |
+| `tipo_pago`          | ENUM      | `tipo_pago`: `NORMAL` si cobra órdenes, `TASA` si cobra tasas del TUPA. Obligatorio.        | `recibo.tipo_pago`             |
 | `total`              | DECIMAL   | La suma exacta de sus líneas. Obligatorio.                                                  | `recibo.total`                 |
 | `actualizado_a`      | DATE      | A qué fecha están sus importes (regla 9): la fecha de pago. Obligatoria.                    | `recibo.actualizado_a`         |
 | `clave_idempotencia` | TEXT      | La cabecera `Idempotency-Key` del cobro, si vino. Única.                                    | `recibo.clave_idempotencia`    |
@@ -278,7 +279,8 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 
 - **Claves snake_case**, las de los campos del modelo, en el cuerpo y en la respuesta.
 - **Errores en problem+json** (RFC 7807). Un 400 lleva `errors[]` con el `field` (la clave snake_case que falló) y su
-  `message`; el alta junta en un solo 400 todos los campos que fallan.
+  `message`; el alta y los cobros juntan en un solo 400 todos los campos que fallan (en el de tasas, también los de cada
+  concepto).
 - **Todo importe va con su fecha** (regla 9) y en cadena (regla 1): `"importe": {"importe": "150.50", "actualizado_a":
   "2026-03-15"}`. El alta recibe el importe en cadena, `"150.50"`, nunca como número.
 
@@ -310,7 +312,7 @@ El cobro recibe `caja` (el código), `forma_pago`, `ordenes` (los `orden_id`), `
 `emitido` es `false` en el reenvío de una `Idempotency-Key`: el mismo recibo y el mismo `pago_id`, sin cobrar otra vez.
 
 El cobro de tasas recibe `caja`, `forma_pago`, `conceptos` (`[{"codigo": "T-001", "cantidad": 3}]`, la cantidad es 1 si
-no viene), `observacion` y, opcionales, `cajero`, `fecha_de_cobro` (hoy en Lima, como `fecha_de_pago`),
+no viene; el código se lee recortado y en mayúsculas), `observacion` y, opcionales, `cajero`, `fecha_de_cobro` (hoy en Lima, como `fecha_de_pago`),
 `pagador_documento`, `pagador_nombre` y `pagador_externo_id` (el pagador puede ser anónimo). **No lleva precio ni
 importe**: un `importe` o un `precio` en el cuerpo o en un concepto es un 400 que lo nombra (`importe`,
 `conceptos[0].precio`). Contesta lo mismo que el cobro de órdenes, con `tipo_pago` `TASA`, `pago_id` `null` y
@@ -329,7 +331,7 @@ no es AAAA-MM-DD es 400 en `vigentes_a`.
 
 Las dos vistas previas reciben lo mismo que su cobro (`{"ordenes": [...], "fecha_de_pago"?}` y `{"conceptos": [...],
 "fecha_de_cobro"?}`) y contestan `{"lineas": [...], "total": {"importe", "actualizado_a"} o null si no hay líneas,
-"cobrable": true|false, "motivos": ["..."]}`, con las líneas como las del recibo.
+"cobrable": true|false, "motivos": ["..."]}`, con las líneas como las del recibo: solo las que se pueden cobrar.
 
 ## Reglas
 
@@ -362,17 +364,17 @@ Antes de empezar: el cajero es el correo de la sesión (un `cajero` distinto en 
 Lima (una `fecha_de_pago` distinta es **400**); se exige CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (**403**
 que dice cuál falta). Luego, en este orden:
 
-1. **El turno.** Candado `turno:<clave_turno>`; se busca por `clave_turno` y, si no está, se crea con `abierto_en`
+1. **El turno.** Candado `TURNO_CLAVE` con la clave `<clave_turno>`; se busca por `clave_turno` y, si no está, se crea con `abierto_en`
    según el reloj y la observación del cobro. El primer cobro del día abre el turno, una vez. Una caja inexistente es
    **404**; una de baja, **409**.
-2. **El candado del turno**, `turno:<id del turno>`: el que tomarán la anulación y el cierre, para que un cobro no se
+2. **El candado del turno**, `TURNO` con el id del turno: el que toman la anulación y el cierre, para que un cobro no se
    cuele en un cierre en curso.
 3. **La idempotencia.** Con `Idempotency-Key`, si ya hay un recibo con esa clave se devuelve ése, con el mismo
    `pago_id` y `emitido: false` (**200**). La clave de otro cajero o de otra caja es **409**.
-4. **Las órdenes.** Candado `orden:<id>` de cada una, **ordenadas por id**, y se leen después de tomarlos. Una que no
+4. **Las órdenes.** Candado `ORDEN` con el id de cada una, **ordenadas por id**, y se leen después de tomarlos. Una que no
    existe es **404**; de dos sistemas de origen, **400** en `ordenes` (un recibo se anula entero); una ya pagada,
    anulada o todavía no exigible a la fecha de pago, **409** con su id. La misma orden dos veces en la petición es 400.
-5. **El número.** Candado `serie:<serie de la caja>`; el siguiente es `max(numero) + 1` de la serie y `numero_impreso`
+5. **El número.** Candado `SERIE` con la serie de la caja; el siguiente es `max(numero) + 1` de la serie y `numero_impreso`
    es `"%s-%07d"`. No deja huecos: si algo falla después, nada se confirma.
 6. **El recibo y sus líneas**, una por orden con su concepto, detalle, referencia, sistema y monto (el importe de la
    orden). `total` es la suma exacta; `tipo_pago`, `NORMAL`; `actualizado_a`, la fecha de pago; el pagador, el de la
@@ -408,9 +410,12 @@ cambia desplegando, y esas son las que se acaban cobrando mal. **La tarifa es un
 
 - **La tarifa vigente** (`tarifaVigente`) es la de `vigencia_desde ≤ fecha` y `vigencia_hasta` vacía o `≥ fecha`, ambos
   extremos incluidos. Si dos vigencias del mismo código se solaparan por error, rige la de `vigencia_desde` más reciente.
-  Una vigencia que termina antes de empezar es un dato mal cargado: **409**.
+  Una vigencia que termina antes de empezar es un dato mal cargado: su cobro es **409**, la vista previa lo dice en
+  `motivos` y cotiza los demás conceptos, y `GET /tasas` omite ese código con una línea WARN en el log. Nunca es un
+  409 de toda la lista ni de toda la vista previa.
 - **El monto de la línea** es `precio × cantidad`, en `BigDecimal` y sin redondear (`montoDeLinea`, la regla de
   `recibo_detalle_tasa_ck` de `caja`): `12.30 × 3 = 36.90`. La cantidad es al menos 1, y 1 si no viene.
+- **El código** se lee recortado y en mayúsculas, en la petición y en `import_tasas.py`, como en `caja`.
 - **Sin tarifa vigente** a la fecha, el concepto es **404** con su código; con la tarifa **en cero**, **409** («tarifa en
   cero»: es un dato mal cargado, y un recibo por cero no documenta un cobro). Sin conceptos, **400**.
 - **El mismo mecanismo que la cobranza.** `caja.cobro.Ventanilla` es el acto común de los dos cobros, extraído de la
@@ -431,7 +436,8 @@ La garantía de la UI es que **ningún total sale del cliente**, y el cajero nec
 `POST /api/caja/cobros/vista-previa` y `POST /api/caja/cobros/tasas/vista-previa` aplican **las mismas funciones** que
 su cobro (`impedimentosDelCobro`, `lineaDeOrden`, `cotizar`, `lineaDeTasa`, `totalDe`), sin candados ni escritura. Lo que
 impediría el cobro (una orden que no existe, ya pagada o no exigible, dos sistemas; una tasa sin tarifa vigente o en
-cero) **no es un error**: va en `motivos` y `cobrable` es `false`. Una petición mal hecha (sin órdenes, un campo
+cero, una vigencia al revés) **no es un error**: va en `motivos`, `cobrable` es `false` y **queda fuera de las líneas y
+del total**, en las dos vistas previas por igual: el total es el de lo que sí se puede cobrar. Una petición mal hecha (sin órdenes, un campo
 desconocido, una fecha que no es hoy) sí es 400. `VistaPreviaApiTest` compara el total de la vista previa con el del
 recibo emitido después, para las mismas órdenes y para las mismas tasas.
 
