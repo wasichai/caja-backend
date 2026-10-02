@@ -1,10 +1,14 @@
 package caja.buzon
 
+import caja.cobro.LineaRecibo
+import caja.cobro.Recibo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.LINEA_RECIBO
+import caja.comun.ORDEN_DE_COBRO
 import caja.comun.PAGO_EVENTO
 import caja.comun.RECIBO
 import caja.comun.Transaccion
+import io.r2dbc.spi.Readable
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitSingle
@@ -17,6 +21,7 @@ import wasichai.core.platform.SqlIdentifier
 import wasichai.core.platform.WasichaiSchemas
 import java.math.BigDecimal
 import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 
@@ -70,7 +75,14 @@ class BuzonStore(
                     if (delObjeto.isEmpty() || !porCampo.keys.containsAll(campos)) return@mapNotNull null
                     Tabla(schemas.dataTable(delObjeto.first().tabla), porCampo)
                 }
-            Buzon(organizacion, tablas.getValue(PAGO_EVENTO), tablas.getValue(RECIBO), tablas.getValue(LINEA_RECIBO), tablas.getValue(ANULACION_RECIBO))
+            Buzon(
+                organizacion,
+                tablas.getValue(PAGO_EVENTO),
+                tablas.getValue(RECIBO),
+                tablas.getValue(LINEA_RECIBO),
+                tablas.getValue(ANULACION_RECIBO),
+                tablas.getValue(ORDEN_DE_COBRO)
+            )
         }
     }
 
@@ -105,48 +117,111 @@ class BuzonStore(
             .toList()
     }
 
-    // el recibo del evento, tal como está: su número, su tipo de pago, su total, la orden de cada línea y si tiene su
-    // anulación. null si no existe
+    // el recibo del evento, tal como está, con lo que hace falta para volver a componer el cuerpo de su evento
+    // (incoherencia): el recibo, sus líneas, el actualizado_a de cada orden, su anulación y los eventos de su buzón por
+    // (created_at, id). null si no existe
     suspend fun recibo(
         buzon: Buzon,
         reciboId: String?
     ): ReciboDelEvento? {
         val id = reciboId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return null
         val r = buzon.recibos
-        val cabecera =
-            db
-                .sql(
-                    "SELECT ${r.c("numero_impreso")} AS numero, ${r.c("tipo_pago")} AS tipo, ${r.c("total")} AS total " +
-                        "FROM ${r.nombre} WHERE id = :id AND organization_id = :organizacion"
-                ).bind("id", id)
-                .bind("organizacion", buzon.organizacion)
-                .map { row, _ -> Triple(row.get("numero", String::class.java), row.get("tipo", String::class.java), row.get("total", BigDecimal::class.java)) }
-                .all()
-                .asFlow()
-                .toList()
-                .singleOrNull() ?: return null
+        val recibo =
+            filas(
+                "SELECT ${r.c("serie")} AS serie, ${r.c("numero_impreso")} AS numero_impreso, ${r.c("cajero")} AS cajero, " +
+                    "${r.c("pagador_documento")} AS pagador_documento, ${r.c("pagador_nombre")} AS pagador_nombre, " +
+                    "${r.c("pagador_externo_id")} AS pagador_externo_id, ${r.c("forma_pago")} AS forma_pago, ${r.c("tipo_pago")} AS tipo_pago, " +
+                    "${r.c("total")} AS total, ${r.c("actualizado_a")} AS actualizado_a FROM ${r.nombre} WHERE id = :id AND organization_id = :organizacion",
+                buzon,
+                id
+            ) { row ->
+                Recibo(
+                    id = id.toString(),
+                    serie = row.get("serie", String::class.java),
+                    numeroImpreso = row.get("numero_impreso", String::class.java),
+                    cajero = row.get("cajero", String::class.java),
+                    pagadorDocumento = row.get("pagador_documento", String::class.java),
+                    pagadorNombre = row.get("pagador_nombre", String::class.java),
+                    pagadorExternoId = (row.get("pagador_externo_id") as Number?)?.toLong(),
+                    formaPago = row.get("forma_pago", String::class.java),
+                    tipoPago = row.get("tipo_pago", String::class.java),
+                    total = row.get("total", BigDecimal::class.java),
+                    actualizadoA = row.get("actualizado_a", LocalDate::class.java)
+                )
+            }.singleOrNull() ?: return null
         val l = buzon.lineas
-        val ordenes =
-            db
-                .sql("SELECT ${l.c("orden")} AS orden FROM ${l.nombre} WHERE ${l.c("recibo")} = :id AND organization_id = :organizacion")
-                .bind("id", id)
-                .bind("organizacion", buzon.organizacion)
-                .map { row, _ -> row.get("orden", UUID::class.java)?.toString() ?: "(una línea sin orden)" }
-                .all()
-                .asFlow()
-                .toList()
+        val lineas =
+            filas(
+                "SELECT ${l.c("orden")} AS orden, ${l.c("sistema_origen")} AS sistema, ${l.c("referencia_externa")} AS referencia, " +
+                    "${l.c("monto")} AS monto FROM ${l.nombre} WHERE ${l.c("recibo")} = :id AND organization_id = :organizacion",
+                buzon,
+                id
+            ) { row ->
+                LineaRecibo(
+                    recibo = id.toString(),
+                    orden = row.get("orden", UUID::class.java)?.toString(),
+                    sistemaOrigen = row.get("sistema", String::class.java),
+                    referenciaExterna = row.get("referencia", String::class.java),
+                    monto = row.get("monto", BigDecimal::class.java)
+                )
+            }
+        val o = buzon.ordenes
+        val ordenes = lineas.mapNotNull { it.orden }.map(UUID::fromString)
+        val actualizado =
+            if (ordenes.isEmpty()) {
+                emptyMap()
+            } else {
+                db
+                    .sql("SELECT id, ${o.c("actualizado_a")} AS actualizado_a FROM ${o.nombre} WHERE id = ANY(:ids) AND organization_id = :organizacion")
+                    .bind("ids", ordenes.toTypedArray())
+                    .bind("organizacion", buzon.organizacion)
+                    .map { row, _ -> row.get("id", UUID::class.java)!!.toString() to row.get("actualizado_a", LocalDate::class.java) }
+                    .all()
+                    .asFlow()
+                    .toList()
+                    .mapNotNull { (orden, fecha) -> fecha?.let { orden to it } }
+                    .toMap()
+            }
         val a = buzon.anulaciones
-        val anulaciones =
-            db
-                .sql("SELECT count(*) AS n FROM ${a.nombre} WHERE ${a.c("recibo")} = :id AND organization_id = :organizacion")
-                .bind("id", id)
-                .bind("organizacion", buzon.organizacion)
-                .map { row, _ -> (row.get("n") as Number).toLong() }
-                .one()
-                .awaitSingle()
-        val (numero, tipo, total) = cabecera
-        return ReciboDelEvento(id.toString(), numero, tipo, total, ordenes.sorted(), anulaciones > 0)
+        val anulacion =
+            filas(
+                "SELECT ${a.c("motivo")} AS motivo, ${a.c("fecha")} AS fecha FROM ${a.nombre} " +
+                    "WHERE ${a.c("recibo")} = :id AND organization_id = :organizacion ORDER BY created_at, id",
+                buzon,
+                id
+            ) { row -> AnulacionDelEvento(row.get("motivo", String::class.java), row.get("fecha", LocalDate::class.java)) }.firstOrNull()
+        val e = buzon.eventos
+        val eventos =
+            filas(
+                "SELECT id, ${e.c("evento_id")} AS evento_id, ${e.c("tipo")} AS tipo FROM ${e.nombre} " +
+                    "WHERE ${e.c("recibo")} = :id AND organization_id = :organizacion ORDER BY created_at, id",
+                buzon,
+                id
+            ) { row ->
+                EventoDelRecibo(
+                    row.get("id", UUID::class.java)!!,
+                    row.get("evento_id", UUID::class.java)!!.toString(),
+                    row.get("tipo", String::class.java)
+                )
+            }
+        return ReciboDelEvento(recibo, lineas, actualizado, anulacion, eventos)
     }
+
+    // las filas de una consulta por el id de un recibo, en la organización del buzón
+    private suspend fun <T : Any> filas(
+        sql: String,
+        buzon: Buzon,
+        id: UUID,
+        leer: (Readable) -> T
+    ): List<T> =
+        db
+            .sql(sql)
+            .bind("id", id)
+            .bind("organizacion", buzon.organizacion)
+            .map { row, _ -> leer(row) }
+            .all()
+            .asFlow()
+            .toList()
 
     // el evento llegó: ENTREGADO, con su hora y su intento. false si ya no estaba como se leyó (otro lo marcó)
     suspend fun entregado(
@@ -231,7 +306,8 @@ class BuzonStore(
         val eventos: Tabla,
         val recibos: Tabla,
         val lineas: Tabla,
-        val anulaciones: Tabla
+        val anulaciones: Tabla,
+        val ordenes: Tabla
     )
 
     private class Columna(
@@ -251,9 +327,22 @@ class BuzonStore(
         private val CAMPOS =
             mapOf(
                 PAGO_EVENTO to setOf("evento_id", "tipo", "sistema_destino", "recibo", "turno", "cuerpo", "estado", "intentos", "ultimo_error", "entregado_en"),
-                RECIBO to setOf("numero_impreso", "tipo_pago", "total"),
-                LINEA_RECIBO to setOf("recibo", "orden"),
-                ANULACION_RECIBO to setOf("recibo")
+                RECIBO to
+                    setOf(
+                        "serie",
+                        "numero_impreso",
+                        "cajero",
+                        "pagador_documento",
+                        "pagador_nombre",
+                        "pagador_externo_id",
+                        "forma_pago",
+                        "tipo_pago",
+                        "total",
+                        "actualizado_a"
+                    ),
+                LINEA_RECIBO to setOf("recibo", "orden", "sistema_origen", "referencia_externa", "monto"),
+                ANULACION_RECIBO to setOf("recibo", "motivo", "fecha"),
+                ORDEN_DE_COBRO to setOf("actualizado_a")
             )
     }
 }

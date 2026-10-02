@@ -61,6 +61,9 @@ class ResponsableDeLaConciliacionTest {
                 assertEquals(Duration.ofSeconds(10), propiedades.timeout)
                 assertEquals("http://rentas:8080", propiedades.destinos.getValue("rentas").url)
                 assertEquals("secreto", propiedades.destinos.getValue("rentas").token)
+                // el token no sale en el toString de la configuración (un log de arranque, un volcado de beans)
+                assertFalse(propiedades.toString().contains("secreto"), propiedades.toString())
+                assertTrue(propiedades.toString().contains("http://rentas:8080"), propiedades.toString())
             }
     }
 }

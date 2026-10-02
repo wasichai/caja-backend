@@ -56,23 +56,48 @@ class PublicadorDelBuzon(
 
     private suspend fun deLaOrganizacion(buzon: BuzonStore.Buzon): Vuelta {
         val pendientes = store.pendientes(buzon, propiedades.porVuelta)
-        val muertos = mutableListOf<Intento>()
         var entregados = 0
+        var muertos = 0
         for (evento in pendientes) {
-            val intento = entregarUno(buzon, evento)
+            val intento = intentar(buzon, evento)
             if (!intento.anotado) continue
             when (intento.marca) {
                 Marca.ENTREGADO -> entregados++
-                Marca.MUERTO -> muertos += intento
+                // la alerta sale en cuanto el pago muere, no al final de la vuelta: si algo corta la vuelta después, el
+                // pago ya está MUERTO y nadie más lo va a anunciar
+                Marca.MUERTO -> {
+                    muertos++
+                    alertar(intento)
+                }
                 Marca.PENDIENTE -> Unit
             }
         }
         if (pendientes.isNotEmpty()) {
-            log.info("Buzón de la organización {}: {} leídos, {} entregados, {} muertos", buzon.organizacion, pendientes.size, entregados, muertos.size)
+            log.info("Buzón de la organización {}: {} leídos, {} entregados, {} muertos", buzon.organizacion, pendientes.size, entregados, muertos)
         }
-        if (muertos.isNotEmpty()) alertar(muertos)
-        return Vuelta(pendientes.size, entregados, muertos.size)
+        return Vuelta(pendientes.size, entregados, muertos)
     }
+
+    // un evento, y lo que no se esperaba (EntregarEventos de caja, #109): un fallo que no es del destino (la base al
+    // leer su recibo o al marcarlo) CUENTA COMO UN INTENTO, con su tipo en ultimo_error (el mensaje va al registro, con su
+    // traza), y la vuelta sigue con el siguiente. si no contara, el evento, primero en la cola, se reintentaría en cada
+    // vuelta sin morir ni avisar, y atascaría el buzón de su organización. lo que no se atrapa es un fallo al anotar ESE
+    // intento: entonces no hay dónde contarlo, y la vuelta de la organización se corta (lo ya anotado queda anotado)
+    private suspend fun intentar(
+        buzon: BuzonStore.Buzon,
+        evento: EventoDelBuzon
+    ): Intento =
+        try {
+            entregarUno(buzon, evento)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("El evento {} no se pudo entregar por un fallo inesperado; cuenta como intento", evento.eventoId, e)
+            val error = recortar("Fallo inesperado al entregar: ${e.javaClass.simpleName}. Se reintenta: el detalle está en el registro")
+            val marca = marcaDe(Respuesta.NoContesta(error), evento.intentos, propiedades.intentos)
+            val anotado = store.fallido(buzon, evento, error, muere = marca == Marca.MUERTO)
+            Intento(evento, null, marca, error, anotado)
+        }
 
     // un evento, tal como se leyó: se comprueba, se entrega (si coincide) y se anota. anotado es false si otro publicador
     // ya lo había anotado desde que se leyó: entonces este intento no cuenta
@@ -82,7 +107,7 @@ class PublicadorDelBuzon(
     ): Intento {
         val recibo = store.recibo(buzon, evento.recibo)
         val respuesta =
-            incoherencia(evento.tipo, evento.cuerpo, recibo)
+            incoherencia(evento, recibo)
                 ?.let { Respuesta.Rechazado("$NO_COINCIDE: $it. No se envió: un evento que no escribió la cobranza ni la anulación no sale de la caja") }
                 ?: cliente.publicar(evento.sistemaDestino, evento.cuerpo.orEmpty())
         val marca = marcaDe(respuesta, evento.intentos, propiedades.intentos)
@@ -98,24 +123,28 @@ class PublicadorDelBuzon(
             } else {
                 store.fallido(buzon, evento, error, muere = marca == Marca.MUERTO)
             }
-        return Intento(evento, recibo?.numeroImpreso, marca, error, anotado)
+        return Intento(evento, recibo?.recibo?.numeroImpreso, marca, error, anotado)
     }
 
     // ADR-0026 §4: un pago que no se pudo entregar es dinero cobrado sin registrar, y avisa a una persona con nombre.
-    // una línea ERROR, en una sola línea, que empieza con DINERO COBRADO SIN REGISTRAR (la regla de alertas mira ERROR).
-    // ninguno lleva el token: ultimo_error ya va tachado
-    private fun alertar(muertos: List<Intento>) {
+    // UNA línea ERROR que empieza con DINERO COBRADO SIN REGISTRAR (la regla de alertas mira ERROR). cada valor va en una
+    // sola línea (enUnaLinea): un sistema_destino escrito por la API genérica con un salto de línea no puede inyectar
+    // otra línea en el registro. ninguno lleva el token: ultimo_error ya va tachado
+    private fun alertar(muerto: Intento) {
+        val e = muerto.evento
         log.error(
-            "DINERO COBRADO SIN REGISTRAR: {} pago(s) que su sistema de origen no ha podido registrar. Responsable de la conciliación: {}, " +
-                "canal {}. Ningún turno de estos recibos cierra hasta que se entreguen o se expliquen uno por uno " +
-                "(GET /api/caja/pagos/sin-entregar, POST /api/caja/pagos/{pago_id}/explicacion): {}",
-            muertos.size,
-            responsable.nombre,
-            responsable.canal,
-            muertos.joinToString("; ") {
-                "pago ${it.evento.eventoId} (${it.evento.tipo}, destino ${it.evento.sistemaDestino}, recibo ${it.numero ?: it.evento.recibo}, " +
-                    "turno ${it.evento.turno}, ${it.evento.intentos + 1} intento(s)): ${it.error?.replace(Regex("\\s+"), " ")}"
-            }
+            "DINERO COBRADO SIN REGISTRAR: el pago {} ({}, destino {}, recibo {}, turno {}, {} intento(s)) no lo pudo registrar su " +
+                "sistema de origen: {}. Responsable de la conciliación: {}, canal {}. Su turno no cierra hasta que se entregue o se " +
+                "explique por escrito (GET /api/caja/pagos/sin-entregar, POST /api/caja/pagos/{pago_id}/explicacion)",
+            enUnaLinea(e.eventoId),
+            enUnaLinea(e.tipo),
+            enUnaLinea(e.sistemaDestino),
+            enUnaLinea(muerto.numero ?: e.recibo),
+            enUnaLinea(e.turno),
+            e.intentos + 1,
+            enUnaLinea(muerto.error),
+            enUnaLinea(responsable.nombre),
+            enUnaLinea(responsable.canal)
         )
     }
 

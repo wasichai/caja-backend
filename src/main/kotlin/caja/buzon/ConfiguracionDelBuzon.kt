@@ -35,7 +35,10 @@ data class PropiedadesDelBuzon(
     data class Destino(
         val url: String? = null,
         val token: String? = null
-    )
+    ) {
+        // el token nunca sale en un toString (un registro de arranque, un volcado de la configuración)
+        override fun toString() = "Destino(url=$url, token=${if (token.isNullOrBlank()) "ninguno" else "«…»"})"
+    }
 }
 
 @Configuration(proxyBeanMethods = false)

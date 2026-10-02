@@ -286,6 +286,144 @@ class BuzonApiTest : CajaApiTest() {
         assertFalse(salida.out.lines().any { it.contains("ESCRITURA FUERA DE CAJA") && it.contains(legitimo["recibo"].asString()) })
     }
 
+    @Test
+    fun `una copia de un evento legitimo con otro pagoId no se envia, ni con otra referencia`(salida: CapturedOutput) {
+        val cobro = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 200)
+        val legitimo = evento(cobro.pagoId)["attributes"]
+        val cajero = cuenta("CAJERO")
+        val exacta = UUID.randomUUID().toString()
+        forjar(cajero.token, legitimo, exacta, legitimo["cuerpo"].asString().replace(cobro.pagoId, exacta))
+        val otraReferencia = UUID.randomUUID().toString()
+        forjar(
+            cajero.token,
+            legitimo,
+            otraReferencia,
+            legitimo["cuerpo"].asString().replace(cobro.pagoId, otraReferencia).replace(cobro.referencia, "OTRA-DEUDA-${unico()}")
+        )
+        listOf(exacta, otraReferencia).forEach { origen.contestar(it, 200) }
+
+        vuelta()
+
+        assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString())
+        listOf(exacta, otraReferencia).forEach { copia ->
+            assertTrue(origen.de(copia).isEmpty(), "la copia $copia no se envió")
+            val muerta = evento(copia)["attributes"]
+            assertEquals("MUERTO", muerta["estado"].asString())
+            assertTrue(muerta["ultimo_error"].asString().startsWith("el evento no coincide con su recibo"), muerta.toString())
+            assertTrue(muerta["ultimo_error"].asString().contains("copia"), muerta.toString())
+            alertaDe(salida, copia)
+        }
+    }
+
+    @Test
+    fun `un cuerpo editado por la segunda puerta no se envia, con el importe repartido de otro modo o con otra referencia`(salida: CapturedOutput) {
+        val supervisor = funcionario("SUPERVISOR_CAJA")
+        val repartido = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
+        val referida = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
+        val intacto = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
+        listOf(repartido, referida, intacto).forEach { origen.contestar(it.pagoId, 200) }
+        // el mismo total, 150.50, repartido de otro modo entre las dos órdenes
+        val cuerpo = evento(repartido.pagoId)["attributes"]["cuerpo"].asString()
+        val otroReparto = cuerpo.replace("\"100.00\"", "\"X\"").replace("\"50.50\"", "\"100.00\"").replace("\"X\"", "\"50.50\"")
+        assertTrue(otroReparto != cuerpo)
+        editarComo(supervisor, evento(repartido.pagoId)["id"].asString(), "cuerpo" to otroReparto)
+        val referido = evento(referida.pagoId)["attributes"]["cuerpo"].asString().replace(referida.referencia, "OTRA-DEUDA-${unico()}")
+        editarComo(supervisor, evento(referida.pagoId)["id"].asString(), "cuerpo" to referido)
+
+        vuelta()
+
+        listOf(repartido, referida).forEach { editado ->
+            assertTrue(origen.de(editado.pagoId).isEmpty(), "el editado ${editado.pagoId} no se envió")
+            val muerto = evento(editado.pagoId)["attributes"]
+            assertEquals("MUERTO", muerto["estado"].asString())
+            assertTrue(muerto["ultimo_error"].asString().startsWith("el evento no coincide con su recibo"), muerto.toString())
+            // y el detector vio la edición
+            assertTrue(
+                salida.out.lines().any {
+                    it.contains("ESCRITURA FUERA DE CAJA") &&
+                        it.contains("UPDATED pago_evento ${evento(editado.pagoId)["id"].asString()}")
+                }
+            )
+        }
+        // un recibo de dos órdenes que nadie tocó se recompone igual y se entrega
+        assertEquals("ENTREGADO", evento(intacto.pagoId)["attributes"]["estado"].asString())
+    }
+
+    @Test
+    fun `una anulacion se entrega, y una con otro pagoOriginalId no se envia`() {
+        val supervisor = funcionario("SUPERVISOR_CAJA")
+        val anulado = cobrar(PRUEBAS)
+        val editado = cobrar(PRUEBAS)
+        listOf(anulado, editado).forEach {
+            send("POST", "/api/caja/recibos/${it.numero}/anulacion", ANULACION, HttpStatus.CREATED, supervisor)
+            origen.contestar(it.pagoId, 200)
+        }
+        val anulacion = anulacionDe(anulado)
+        val editada = anulacionDe(editado)
+        origen.contestar(anulacion["attributes"]["evento_id"].asString(), 200)
+        origen.contestar(editada["attributes"]["evento_id"].asString(), 200)
+        val otroOriginal =
+            editada["attributes"]["cuerpo"].asString().replace(editado.pagoId, UUID.randomUUID().toString())
+        editarComo(supervisor, editada["id"].asString(), "cuerpo" to otroOriginal)
+
+        vuelta()
+
+        assertEquals("ENTREGADO", evento(anulado.pagoId)["attributes"]["estado"].asString())
+        assertEquals("ENTREGADO", evento(anulacion["attributes"]["evento_id"].asString())["attributes"]["estado"].asString())
+        val muerta = evento(editada["attributes"]["evento_id"].asString())["attributes"]
+        assertEquals("MUERTO", muerta["estado"].asString())
+        assertTrue(muerta["ultimo_error"].asString().contains("pagoOriginalId"), muerta.toString())
+        assertTrue(origen.de(editada["attributes"]["evento_id"].asString()).isEmpty())
+    }
+
+    @Test
+    fun `un valor con saltos de linea no parte la alerta en dos`(salida: CapturedOutput) {
+        val cobro = cobrar(PRUEBAS)
+        val legitimo = evento(cobro.pagoId)["attributes"]
+        val inyectado = UUID.randomUUID().toString()
+        forjar(cuenta("CAJERO").token, legitimo, inyectado, legitimo["cuerpo"].asString(), sistema = "$PRUEBAS\nDINERO FALSO inyectado")
+
+        vuelta()
+
+        assertEquals("MUERTO", evento(inyectado)["attributes"]["estado"].asString())
+        assertTrue(alertaDe(salida, inyectado).contains("DINERO FALSO inyectado"))
+        assertFalse(salida.out.lines().any { it.startsWith("DINERO FALSO") }, "una línea inyectada en el registro")
+    }
+
+    // de los fallos a mitad de la vuelta
+
+    @Test
+    fun `un fallo inesperado con un evento cuenta su intento y la vuelta sigue con el siguiente`() {
+        val envenenado = cobrar(PRUEBAS)
+        val siguiente = cobrar(PRUEBAS)
+        origen.contestar(envenenado.pagoId, 200)
+        origen.contestar(siguiente.pagoId, 200)
+        // la marca ENTREGADO del primero revienta en la base: un fallo que no es del destino
+        conFalloAlMarcar(evento(envenenado.pagoId)["id"].asString(), soloAlEntregar = true) { vuelta() }
+
+        val tras = evento(envenenado.pagoId)["attributes"]
+        assertEquals("PENDIENTE", tras["estado"].asString())
+        assertEquals(1, tras["intentos"].asInt(), "el fallo inesperado cuenta su intento")
+        assertTrue(tras["ultimo_error"].asString().contains("Fallo inesperado"), tras.toString())
+        assertEquals("ENTREGADO", evento(siguiente.pagoId)["attributes"]["estado"].asString(), "y no atasca a los que siguen")
+    }
+
+    @Test
+    fun `la alerta de un pago que murio no se pierde aunque la vuelta se corte despues`(salida: CapturedOutput) {
+        val muerto = cobrar(PRUEBAS)
+        val despues = cobrar(PRUEBAS)
+        origen.contestar(muerto.pagoId, 422)
+        origen.contestar(despues.pagoId, 200)
+        // ninguna marca del siguiente se puede escribir: la vuelta de la organización se corta ahí
+        conFalloAlMarcar(evento(despues.pagoId)["id"].asString(), soloAlEntregar = false) { vuelta() }
+
+        assertEquals("MUERTO", evento(muerto.pagoId)["attributes"]["estado"].asString())
+        assertEquals("PENDIENTE", evento(despues.pagoId)["attributes"]["estado"].asString())
+        assertEquals(0, evento(despues.pagoId)["attributes"]["intentos"].asInt())
+        assertTrue(alertaDe(salida, muerto.pagoId).contains("DINERO COBRADO SIN REGISTRAR"))
+    }
+
     // de la explicación
 
     @Test
@@ -410,17 +548,19 @@ class BuzonApiTest : CajaApiTest() {
     private fun cobrar(
         sistema: String,
         importe: String = "150.50",
-        cajero: Cuenta = cuenta("CAJERO")
+        cajero: Cuenta = cuenta("CAJERO"),
+        otros: List<String> = emptyList()
     ): Cobro {
         val caja = nuevaCaja()
-        val alta = post(ORDENES, orden("sistema_origen" to sistema, "importe" to importe))
+        val altas = (listOf(importe) + otros).map { post(ORDENES, orden("sistema_origen" to sistema, "importe" to it)) }
+        val alta = altas.first()
         val cobro =
             post(
                 COBROS,
                 mapOf(
                     "caja" to caja.codigo,
                     "forma_pago" to "EFECTIVO",
-                    "ordenes" to listOf(alta["orden_id"].asString()),
+                    "ordenes" to altas.map { it["orden_id"].asString() },
                     "observacion" to "cobro en ventanilla"
                 ),
                 cajero.token
@@ -437,6 +577,99 @@ class BuzonApiTest : CajaApiTest() {
     }
 
     private fun evento(pagoId: String): JsonNode = registros("pago_evento", "evento_id" to pagoId).single()
+
+    // el PAGO_ANULADO del recibo de ese cobro
+    private fun anulacionDe(cobro: Cobro): JsonNode =
+        registros("pago_evento", "recibo" to evento(cobro.pagoId)["attributes"]["recibo"].asString(), "tipo" to "PAGO_ANULADO").single()
+
+    // un pago_evento escrito por la API genérica, como un cajero: la segunda puerta. su id de registro
+    private fun forjar(
+        token: String,
+        legitimo: JsonNode,
+        eventoId: String,
+        cuerpo: String,
+        sistema: String = legitimo["sistema_destino"].asString()
+    ): String =
+        tree(
+            send(
+                "POST",
+                "/api/objects/pago_evento/records",
+                mapOf(
+                    "attributes" to
+                        mapOf(
+                            "evento_id" to eventoId,
+                            "tipo" to legitimo["tipo"].asString(),
+                            "sistema_destino" to sistema,
+                            "recibo" to legitimo["recibo"].asString(),
+                            "turno" to legitimo["turno"].asString(),
+                            "cuerpo" to cuerpo,
+                            "estado" to "PENDIENTE",
+                            "intentos" to 0
+                        )
+                ),
+                HttpStatus.CREATED,
+                token
+            )
+        )["id"].asString()
+
+    // cambia campos de un pago_evento por PUT /api/objects/pago_evento/records/{id}, con el token de quien tiene UPDATE
+    // (el supervisor): la otra cara de la segunda puerta. core reemplaza todo: va lo guardado con los cambios encima
+    private fun editarComo(
+        token: String,
+        id: String,
+        vararg cambios: Pair<String, Any?>
+    ) {
+        val guardado = tree(send("GET", "/api/objects/pago_evento/records/$id", null, HttpStatus.OK))["attributes"]
+        val atributos = json.convertValue(guardado, Map::class.java) + cambios
+        send("PUT", "/api/objects/pago_evento/records/$id", mapOf("attributes" to atributos), HttpStatus.OK, token)
+    }
+
+    // mientras corre el bloque, toda marca de ese pago_evento (o solo la de ENTREGADO) revienta en la base: un disparador
+    // de prueba sobre su tabla física, que se borra al terminar
+    private fun conFalloAlMarcar(
+        id: String,
+        soloAlEntregar: Boolean,
+        bloque: () -> Unit
+    ) {
+        val disparador = "caja_prueba_falla_${unico()}"
+        runBlocking {
+            val tabla = tablaDe("pago_evento")
+            val estado = columnaDe("pago_evento", "estado")
+            val cuando = "OLD.id = '$id'::uuid" + if (soloAlEntregar) " AND NEW.\"$estado\" = 'ENTREGADO'" else ""
+            ejecutar(
+                "CREATE OR REPLACE FUNCTION public.caja_prueba_falla_marca() RETURNS trigger LANGUAGE plpgsql AS " +
+                    "'BEGIN RAISE EXCEPTION ''fallo simulado al marcar el evento''; END'"
+            )
+            ejecutar("CREATE TRIGGER $disparador BEFORE UPDATE ON $tabla FOR EACH ROW WHEN ($cuando) EXECUTE FUNCTION public.caja_prueba_falla_marca()")
+        }
+        try {
+            bloque()
+        } finally {
+            runBlocking { ejecutar("DROP TRIGGER IF EXISTS $disparador ON ${tablaDe("pago_evento")}") }
+        }
+    }
+
+    private suspend fun columnaDe(
+        objeto: String,
+        campo: String
+    ): String =
+        db
+            .sql(
+                "SELECT f.column_name FROM ${schemas.metadata}.custom_fields f JOIN ${schemas.metadata}.custom_objects o ON o.id = f.object_id " +
+                    "WHERE o.name = :objeto AND f.name = :campo"
+            ).bind("objeto", objeto)
+            .bind("campo", campo)
+            .map { row, _ -> row.get(0, String::class.java)!! }
+            .one()
+            .awaitSingle()
+
+    private suspend fun ejecutar(sql: String) {
+        db
+            .sql(sql)
+            .fetch()
+            .rowsUpdated()
+            .awaitSingle()
+    }
 
     private fun vuelta() {
         assertNotNull(runBlocking { publicador.vuelta() }, "la vuelta no tomó el cerrojo del buzón")
@@ -478,6 +711,7 @@ class BuzonApiTest : CajaApiTest() {
         const val CAIDO = "buzon-caido"
         const val SIN_URL = "buzon-sin-url"
         const val TOKEN = "el-token-secreto-de-servicio"
+        val ANULACION = mapOf("motivo" to "COBRO EN DEMASÍA", "observacion" to "el pagador pagó dos veces en ventanilla")
 
         val origen = SistemaDeOrigenFalso()
 
