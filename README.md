@@ -9,7 +9,9 @@ recibo, las órdenes PAGADA y el evento del pago en el buzón), con el original 
 tasas** (derechos del TUPA cobrados con el precio de la tarifa vigente, nunca el de la petición), la lista de las tasas
 vigentes y la **vista previa del total** de los dos cobros. Y **el recibo después de emitido**: la consulta de recibos
 (listado y ficha), el duplicado en PDF, registrado y marcado, y la anulación del mismo día, que se agrega sin tocar el
-recibo. El cierre y el publicador del buzón llegan en los PR siguientes.
+recibo. Y **el turno**: el turno del día de quien pregunta, su arqueo en vivo por forma de pago, el cierre que lo
+congela y la reversión que lo reabre, con el candado del turno que impide que un cobro o una anulación se cuelen en un
+cierre en curso. El publicador del buzón llega en el PR siguiente.
 
 | | |
 |---|---|
@@ -67,8 +69,8 @@ set -a; source develop/.env; set +a      # WASICHAI_CORE, WASICHAI_EMAIL y WASIC
 cd model
 python3 apply.py --validate-only          # revisa el modelo contra las reglas de core, sin tocar nada
 python3 apply.py --dry-run                # imprime lo que enviaría
-python3 apply.py                          # crea 10 objetos y 15 relaciones ("done: 25 created")
-python3 apply.py                          # la segunda vez no crea nada ("done: 0 created, 0 updated, 25 skipped")
+python3 apply.py                          # crea 13 objetos y 18 relaciones ("done: 31 created")
+python3 apply.py                          # la segunda vez no crea nada ("done: 0 created, 0 updated, 31 skipped")
 python3 apply_roles.py                    # crea los 4 roles de caja ("done: 4 created"); ver «Roles»
 ```
 
@@ -116,12 +118,13 @@ ejemplo de `caja`, porque es configuración de una municipalidad y no una cifra 
 
 ## Modelo
 
-Diez objetos, que se crean en este orden (el destino de una relación va antes que su origen: `recibo` antes que
+Trece objetos, que se crean en este orden (el destino de una relación va antes que su origen: `recibo` antes que
 `orden_de_cobro`, que lo nombra): `area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo`,
-`pago_evento`, `anulacion_recibo` y `reimpresion_recibo`, y quince relaciones. Vienen de las tablas `area`, `caja` y
-`tasa` de `backend/kamayuk-caja-esquema/.../V1__baseline.sql` de `caja`, de `cierre_caja`, `recibo` y `recibo_detalle`
-de V3 y V29, de `orden_de_cobro` y `pago_evento` de `V2__ordenes_de_cobro_y_outbox.sql` y de `recibo_movimiento` de
-V30, partida en dos. wasichai pone el `id`, y la columna
+`pago_evento`, `anulacion_recibo`, `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre`, y
+dieciocho relaciones. Vienen de las tablas `area`, `caja` y `tasa` de `backend/kamayuk-caja-esquema/.../V1__baseline.sql`
+de `caja`, de `cierre_caja`, `recibo` y `recibo_detalle` de V3 y V29, de `orden_de_cobro` y `pago_evento` de
+`V2__ordenes_de_cobro_y_outbox.sql`, de `recibo_movimiento` de V30, partida en dos, y de `cierre_turno` y
+`cierre_turno_detalle` de V32 (líneas 266-296 del baseline), con la reversión como objeto propio. wasichai pone el `id`, y la columna
 `municipalidad_id` de `caja` es la organización de wasichai, así que ninguna de las dos es un campo.
 
 Los enumerados: `estado_orden` (`PENDIENTE`, `PAGADA`, `ANULADA`), `forma_pago` (`EFECTIVO`, `CHEQUE`, `DEPOSITO`,
@@ -199,8 +202,9 @@ el `created_at` de wasichai.
 ### `turno`
 
 La apertura de una caja por un cajero en un día (`cierre_caja` de `caja`, con el nombre que tiene mientras está viva).
-**No tiene endpoint propio**: el primer cobro del día lo abre, de forma implícita e idempotente. Relación `turno_caja`
-(campo `caja`, obligatoria).
+**No se abre por un endpoint propio**: el primer cobro del día lo abre, de forma implícita e idempotente, y
+`GET /api/caja/turnos/del-dia` lo publica sin abrirlo. No tiene estado: si está abierto o cerrado se deriva de sus
+cierres y reversiones (ver «El turno»). Relación `turno_caja` (campo `caja`, obligatoria).
 
 | Campo         | Tipo      | Qué guarda                                                                                  | Columna de `caja`             |
 | ------------- | --------- | ------------------------------------------------------------------------------------------- | ----------------------------- |
@@ -295,6 +299,50 @@ el recibo**: si la fila está, el recibo está. Lo entregará un proceso aparte.
 | `intentos`        | INTEGER   | Desde 0. Obligatorio.                                                                            |
 | `ultimo_error`, `entregado_en`, `explicacion` | TEXT, DATETIME, LONG_TEXT | Los escribirá el publicador.                 |
 
+### `cierre_turno`
+
+El acta del cierre de un turno con su arqueo **congelado** (`cierre_turno` de `caja`, V32, RF-087). **Solo se agrega**:
+un cierre no se modifica ni se borra, se reversa con una `reversion_cierre`. Crearlo es el privilegio `REGISTRO` de
+`cierre_caja`. Relación `cierre_turno_turno` (campo `turno`, obligatoria). Todos los campos son obligatorios.
+
+| Campo                                                   | Tipo     | Qué guarda                                                                 |
+| ------------------------------------------------------- | -------- | -------------------------------------------------------------------------- |
+| `secuencia`                                             | INTEGER  | Su lugar en la historia del turno, desde 1, **común con la reversión**: los movimientos que había más uno. |
+| `fecha`                                                 | DATE     | El día del turno que se cierra, en Lima: la fecha a la que se leyó el arqueo. |
+| `registrado_en`                                         | DATETIME | El instante en que se firmó.                                               |
+| `total_cobrado`, `total_anulado`, `neto`                | DECIMAL  | Lo cobrado, lo que sacaron sus anulaciones y la diferencia.                |
+| `total_declarado`, `diferencia`                         | DECIMAL  | Lo contado en el cajón y lo declarado menos el neto (negativa si falta dinero). |
+| `recibos_emitidos`, `recibos_anulados`                  | INTEGER  | Cuántos recibos emitió el turno y cuántos de ellos se anularon.            |
+| `cobrado_con_evento`, `cobrado_sin_evento`              | DECIMAL  | Las dos mitades del cuadre (órdenes y tasas): suman el neto.               |
+| `usuario`, `observacion`                                | TEXT, LONG_TEXT | Quien cerró y por qué (regla 10).                                   |
+| `clave_secuencia`                                       | TEXT     | `<turno>\|<secuencia>`. **Único**: la red bajo el candado del turno (reemplaza `cierre_turno_secuencia_uq`). |
+
+### `cierre_turno_linea`
+
+El arqueo del cierre forma de pago por forma de pago (`cierre_turno_detalle` de `caja`). Relación
+`cierre_turno_linea_cierre_turno` (campo `cierre_turno`, obligatoria). Todos los campos son obligatorios.
+
+| Campo                                   | Tipo    | Qué guarda                                                                           |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `forma_pago`                            | ENUM    | `forma_pago`.                                                                        |
+| `cobrado`, `anulado`, `neto`, `declarado` | DECIMAL | Lo cobrado y lo anulado con esa forma, el neto y lo declarado (cero si no se declaró). |
+| `clave`                                 | TEXT    | `<cierre>\|<forma_pago>`. **Única**: una línea por forma de pago y cierre.          |
+
+### `reversion_cierre`
+
+Deja sin efecto el cierre vigente de un turno y **lo reabre** (`cierre_turno` de `caja`, tipo `REVERSION`). El cierre
+reversado no se toca. Crearla es el privilegio `ELIMINACION` de `cierre_caja`. Relación `reversion_cierre_turno` (campo
+`turno`, obligatoria). Todos los campos son obligatorios.
+
+| Campo                      | Tipo      | Qué guarda                                                                               |
+| -------------------------- | --------- | ---------------------------------------------------------------------------------------- |
+| `cierre_revertido`         | TEXT      | El id del `cierre_turno` que deja sin efecto. **Único**: un cierre se reversa una vez (reemplaza `cierre_turno_reversion_uq`). |
+| `secuencia`                | INTEGER   | Su lugar en la historia del turno, común con el cierre.                                  |
+| `motivo`                   | TEXT      | El sustento de reabrir una caja ya arqueada: hasta 80 y no en blanco.                    |
+| `fecha`, `registrado_en`   | DATE, DATETIME | El día del turno que se reabre y el instante en que se reversó.                     |
+| `usuario`, `observacion`   | TEXT, LONG_TEXT | Quien reversó y por qué se registra (regla 10); la observación es otra cosa que el motivo. |
+| `clave_secuencia`          | TEXT      | `<turno>\|<secuencia>`. **Único**.                                                      |
+
 ## API
 
 Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 401). Los permisos los aplica
@@ -315,6 +363,10 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `GET /api/caja/recibos/{numero_impreso}` | La ficha: el recibo con sus líneas, `estado`, `duplicados` y `anulacion`. **404** si no existe, **400** si el número está mal formado. | READ sobre `recibo`, `linea_recibo`, `caja`, `tasa`, `anulacion_recibo` y `reimpresion_recibo` |
 | `POST /api/caja/recibos/{numero_impreso}/duplicados` | El duplicado en PDF, marcado y numerado, y lo registra (ver «El duplicado»): **201** `application/pdf`; **409** si ya no se dibuja igual. | CREATE sobre `reimpresion_recibo` (403 antes de empezar) |
 | `POST /api/caja/recibos/{numero_impreso}/anulacion` | Anula el recibo del día (ver «La anulación»): **201** con el acta. | CREATE sobre `anulacion_recibo` (403 antes de empezar); el recibo de otro cajero, además, el rol `SUPERVISOR_CAJA`; al escribir, core exige UPDATE sobre `orden_de_cobro` y CREATE sobre `pago_evento` |
+| `GET /api/caja/turnos/del-dia`     | Los turnos de hoy de quien pregunta y su situación (ver «El turno»). **No abre ningún turno**; cualquier parámetro es 400. | READ sobre `turno`, `caja`, `cierre_turno` y `reversion_cierre` |
+| `GET /api/caja/turnos/{turno_id}/arqueo` | El arqueo en vivo, las dos mitades del cuadre y lo que impide cerrar: **200**; **404** si el turno no existe, **400** si el id no es un uuid. | READ sobre `turno`, `recibo`, `anulacion_recibo`, `pago_evento`, `cierre_turno` y `reversion_cierre` |
+| `POST /api/caja/turnos/cierre`     | Cierra el turno con su arqueo (ver «El cierre»): **201** con el acta. | CREATE sobre `cierre_turno` y `cierre_turno_linea` (403 antes de empezar) |
+| `POST /api/caja/turnos/reversion`  | Reversa el cierre vigente y reabre el turno (ver «La reversión»): **201**. | CREATE sobre `reversion_cierre` (403 antes de empezar): `SUPERVISOR_CAJA` |
 
 - **Claves snake_case**, las de los campos del modelo, en el cuerpo y en la respuesta.
 - **Errores en problem+json** (RFC 7807). Un 400 lleva `errors[]` con el `field` (la clave snake_case que falló) y su
@@ -337,6 +389,7 @@ El cobro recibe `caja` (el código), `forma_pago`, `ordenes` (los `orden_id`), `
 {
   "recibo": {
     "numero_impreso": "001-0000001", "serie": "001", "numero": 1, "cajero": "ana@muni.gob.pe",
+    "pagador_documento": "12345678", "pagador_nombre": "FLORES OTINIANO JUNIOR", "pagador_externo_id": 1234,
     "forma_pago": "EFECTIVO", "tipo_pago": "NORMAL", "emitido_en": "2026-10-02T10:15:30.123-05:00",
     "total": {"importe": "150.50", "actualizado_a": "2026-10-02"},
     "lineas": [{"orden_id": "…", "sistema_origen": "rentas", "concepto": "IMPUESTO PREDIAL 2026 - CUOTA 1",
@@ -349,6 +402,9 @@ El cobro recibe `caja` (el código), `forma_pago`, `ordenes` (los `orden_id`), `
 
 `estado_del_pago` es `EN_TRANSITO` mientras el evento está `PENDIENTE` (cobrado, sin imputar todavía en el origen).
 `emitido` es `false` en el reenvío de una `Idempotency-Key`: el mismo recibo y el mismo `pago_id`, sin cobrar otra vez.
+El recibo lleva además `pagador_documento`, `pagador_nombre` y `pagador_externo_id` **tal como quedaron guardados** (el
+documento recortado y en mayúsculas), en el cobro de órdenes, en el de tasas, en el reenvío y en la ficha: la ventanilla
+muestra lo que dice el recibo, no lo que tecleó el cajero.
 
 El cobro de tasas recibe `caja`, `forma_pago`, `conceptos` (`[{"codigo": "T-001", "cantidad": 3}]`, la cantidad es 1 si
 no viene; el código se lee recortado y en mayúsculas), `observacion` y, opcionales, `cajero`, `fecha_de_cobro` (hoy en Lima, como `fecha_de_pago`),
@@ -386,7 +442,7 @@ El listado (`GET /api/caja/recibos`) contesta una página de filas:
 ```
 
 La ficha (`GET /api/caja/recibos/{numero_impreso}`) lleva `numero_impreso`, `serie`, `numero`, `caja` (el código),
-`cajero`, `emitido_en`, `pagador_documento`, `pagador_nombre`, `forma_pago`, `tipo_pago`, `total`, `observacion`,
+`cajero`, `emitido_en`, `pagador_documento`, `pagador_nombre`, `pagador_externo_id`, `forma_pago`, `tipo_pago`, `total`, `observacion`,
 `lineas` (como las del cobro), `estado`, `duplicados` y `anulacion`: `{"fecha", "motivo", "autorizado_por",
 "documento_autorizacion", "usuario"}` o `null`. El número se escribe como en el papel (`001-0000123`; `001-123` también
 vale); lo que no tiene esa forma es 400 en `numero_impreso`.
@@ -402,6 +458,37 @@ filename="recibo-001-0000123-duplicado-2.pdf"`). La anulación recibe `{"motivo"
 ```
 
 `pago_anulado_id` es el `pagoId` del `PAGO_ANULADO`, o `null` en un recibo de tasas.
+
+El turno del día (`GET /api/caja/turnos/del-dia`) contesta, también sin ningún turno (`"situacion": "SIN_ABRIR", "turnos": []`):
+
+```json
+{"cajero": "ana@muni.gob.pe", "fecha": "2026-10-02", "situacion": "ABIERTO",
+ "turnos": [{"turno_id": "…", "caja": "C-01", "caja_nombre": "VENTANILLA 1", "cajero": "ana@muni.gob.pe",
+             "fecha": "2026-10-02", "abierto_en": "2026-10-02T08:01:12.345-05:00", "estado_del_turno": "ABIERTO"}]}
+```
+
+El arqueo en vivo (`GET /api/caja/turnos/{turno_id}/arqueo`) lleva cada cifra como `Importe` a hoy, y **`declarado`,
+`diferencia`, `total_declarado` y `cuadra` en `null`**: un GET no lleva el recuento del cajón, y un cero se leería como
+«se contó cero».
+
+```json
+{"turno_id": "…", "estado_del_turno": "ABIERTO", "puede_cerrar": false,
+ "arqueo": {"lineas": [{"forma_pago": "EFECTIVO", "cobrado": {"importe": "187.40", "actualizado_a": "2026-10-02"},
+                        "anulado": {…}, "neto": {…}, "declarado": null, "diferencia": null}],
+            "recibos_emitidos": 4, "recibos_anulados": 1, "total_cobrado": {…}, "total_anulado": {…}, "neto": {…},
+            "total_declarado": null, "diferencia": null, "cuadra": null},
+ "cobrado_con_evento": {"importe": "150.50", "actualizado_a": "2026-10-02"},
+ "cobrado_sin_evento": {"importe": "37.60", "actualizado_a": "2026-10-02"},
+ "lo_que_impide_cerrar": [{"pago_id": "…", "tipo": "PAGO_REGISTRADO", "estado": "PENDIENTE"}]}
+```
+
+El cierre recibe `{"caja", "cajero"?, "fecha"?, "declarado": {"EFECTIVO": "187.40", …}, "observacion"}` y contesta
+**201** con `cierre_id`, `turno_id`, `caja`, `cajero`, `fecha`, `secuencia`, `registrado_en`, `usuario`, `observacion`,
+`"estado_del_turno": "CERRADO"`, el `arqueo` (como el de en vivo, con `declarado`, `diferencia`, `total_declarado` y
+`cuadra` llenos) y las dos mitades del cuadre. La reversión recibe `{"caja", "cajero"?, "fecha"?, "motivo",
+"observacion"}` y contesta **201** con `reversion_id`, `turno_id`, `caja`, `cajero`, `fecha`, `secuencia`,
+`cierre_revertido`, `motivo`, `registrado_en`, `usuario`, `observacion` y `"estado_del_turno": "ABIERTO"`. El 409 de
+los pagos sin entregar lleva, además del `detail`, `"pagos_sin_entregar": [{"pago_id", "tipo", "estado"}]`.
 
 ## Reglas
 
@@ -432,25 +519,32 @@ línea y la orden PAGADA ya están escritos, y tras el 500 no queda ninguno y el
 
 Antes de empezar: el cajero es el correo de la sesión (un `cajero` distinto en el cuerpo es **403**) y el día es hoy en
 Lima (una `fecha_de_pago` distinta es **400**); se exige CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (**403**
-que dice cuál falta). Luego, en este orden:
+que dice cuál falta). **El reenvío de una `Idempotency-Key` ya emitida se contesta antes de la transacción**, con una
+lectura por la clave (un recibo confirmado no cambia): antes de abrir o crear el turno y de mirar si la caja sigue
+activa. Así un reenvío al día siguiente no abre un turno vacío, y uno posterior a dar de baja la caja devuelve el
+recibo original. Luego, en este orden:
 
 1. **El turno.** Candado `TURNO_CLAVE` con la clave `<clave_turno>`; se busca por `clave_turno` y, si no está, se crea con `abierto_en`
    según el reloj y la observación del cobro. El primer cobro del día abre el turno, una vez. Una caja inexistente es
    **404**; una de baja, **409**.
 2. **El candado del turno**, `TURNO` con el id del turno: el que toman la anulación y el cierre, para que un cobro no se
    cuele en un cierre en curso.
-3. **La idempotencia.** Con `Idempotency-Key`, si ya hay un recibo con esa clave se devuelve ése, con el mismo
-   `pago_id` y `emitido: false` (**200**). La clave de otro cajero o de otra caja es **409**.
-4. **Las órdenes.** Candado `ORDEN` con el id de cada una, **ordenadas por id**, y se leen después de tomarlos. Una que no
+3. **La idempotencia**, otra vez, bajo el candado: dos primeras peticiones con la misma clave se ordenan. Si ya hay un
+   recibo con esa clave se devuelve ése, con el mismo `pago_id` y `emitido: false` (**200**). La clave de otro cajero o
+   de otra caja es **409**; la de un recibo **ya anulado** también: **409** «el recibo de ese cobro está anulado», en vez
+   de devolverlo como un cobro exitoso.
+4. **El turno cerrado no cobra: 409 «Turno cerrado».** Se mira bajo el candado del turno, el mismo que toma el cierre:
+   un cobro que esperaba a un cierre en curso lo encuentra cerrado. Para seguir cobrando ese día hay que reversarlo.
+5. **Las órdenes.** Candado `ORDEN` con el id de cada una, **ordenadas por id**, y se leen después de tomarlos. Una que no
    existe es **404**; de dos sistemas de origen, **400** en `ordenes` (un recibo se anula entero); una ya pagada,
    anulada o todavía no exigible a la fecha de pago, **409** con su id. La misma orden dos veces en la petición es 400.
-5. **El número.** Candado `SERIE` con la serie de la caja; el siguiente es `max(numero) + 1` de la serie y `numero_impreso`
+6. **El número.** Candado `SERIE` con la serie de la caja; el siguiente es `max(numero) + 1` de la serie y `numero_impreso`
    es `"%s-%07d"`. No deja huecos: si algo falla después, nada se confirma.
-6. **El recibo y sus líneas**, una por orden con su concepto, detalle, referencia, sistema y monto (el importe de la
+7. **El recibo y sus líneas**, una por orden con su concepto, detalle, referencia, sistema y monto (el importe de la
    orden). `total` es la suma exacta; `tipo_pago`, `NORMAL`; `actualizado_a`, la fecha de pago; el pagador, el de la
    primera orden.
-7. **Las órdenes pasan a `PAGADA`** con su `recibo` (`Registros.replace`, bajo el candado de cada orden).
-8. **El evento.** El `pago_evento` `PAGO_REGISTRADO`, `PENDIENTE`, con 0 intentos, `sistema_destino` el de las órdenes y
+8. **Las órdenes pasan a `PAGADA`** con su `recibo` (`Registros.replace`, bajo el candado de cada orden).
+9. **El evento.** El `pago_evento` `PAGO_REGISTRADO`, `PENDIENTE`, con 0 intentos, `sistema_destino` el de las órdenes y
    el cuerpo de `rentas.json` congelado.
 
 **Los candados** (`caja.comun.Candados`) son consultivos de transacción, en la forma de dos enteros
@@ -458,8 +552,8 @@ que dice cuál falta). Luego, en este orden:
 `TURNO_CLAVE`, `TURNO`, `ORDEN`, `SERIE` y `RECIBO`; la clave va sin prefijo, la clase la separa). wasichai no bloquea filas ni tiene unicidad compuesta. Se sueltan en el
 commit o el rollback, nunca antes, y `Candados.bloquear` **falla fuera de una transacción** (en autocommit no protegería
 nada). Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie → recibo**, para que dos
-operaciones no se esperen en cruz (la anulación toma el del turno de su recibo y luego los de sus órdenes; la
-reimpresión, solo el del recibo); cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
+operaciones no se esperen en cruz (la anulación toma el del turno de su recibo y luego los de sus órdenes; el cierre y
+la reversión, solo el del turno; la reimpresión, solo el del recibo); cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
 `numero_impreso`, `clave_idempotencia` y `evento_id` son la red: si uno salta (`DuplicateKeyException`), la transacción
 entera se revierte y el cobro contesta 409 («vuelva a intentarlo»), sin reintentar dentro (postgres no deja leer nada en
 una transacción abortada); cualquier otra violación de integridad se propaga como lo que es (500). `hashtext` da 32
@@ -561,8 +655,8 @@ de 5 a 500; una clave desconocida). Luego, en **una transacción**:
 1. **El candado del turno del recibo** (`TURNO`, el mismo de la cobranza) y el turno releído bajo él. Un recibo que no
    existe es **404**.
 2. **Solo el mismo día**: la fecha del turno contra el que se cobró tiene que ser hoy en Lima. Si no, **422** «fuera del
-   día de pago»: ese dinero ya cuadró en el arqueo de su día, y lo que corresponde es una devolución. Aquí, bajo el mismo
-   candado, el PR del cierre rechazará el turno ya cerrado.
+   día de pago»: ese dinero ya cuadró en el arqueo de su día, y lo que corresponde es una devolución. Y **con el turno
+   cerrado, 409 «Turno cerrado»**, bajo el mismo candado: su arqueo ya congeló el recibo como cobrado.
 3. **Una sola vez**: si ya tiene su anulación, **409**. El `unique` de `recibo_anulado` es la red: dos anulaciones a la
    vez dan una y un 409, sin releer dentro.
 4. **El recibo de otro cajero** exige el rol `SUPERVISOR_CAJA` (o ADMIN): **403** que lo nombra. Es el privilegio
@@ -578,6 +672,100 @@ de 5 a 500; una clave desconocida). Luego, en **una transacción**:
 
 El cuerpo de `PAGO_ANULADO` sigue `ComponedorDeEventosJson.pagoAnulado` de `caja`: `pagoId`, `tipo`, `pagoOriginalId`,
 `recibo` (`numero`, `serie`, `fechaDePago`, `cajero`, `formaDePago`), `motivo`, `fecha` y `total` en cadena.
+
+### El turno
+
+El turno es la apertura de una caja por un cajero en un día: lo abre el primer cobro y es único por (caja, cajero,
+fecha). **No tiene estado**: está `ABIERTO` o `CERRADO` según el **último** de sus movimientos por `secuencia` (un
+`cierre_turno` lo cierra, una `reversion_cierre` lo reabre; sin movimientos, abierto), y de ahí sale el cierre vigente.
+Las reglas son **funciones puras** en `caja.turno` (`ArqueoDelTurno` y `CierreDeTurno`): sin Spring, sin reloj y sin
+base, la fecha entra como argumento (regla 6). `PurezaDelTurnoTest` lee sus fuentes y falla si importan Spring, el reloj,
+la base, un `suspend`, un `Double` o un redondeo. `caja.turno.LibroDelTurno` lee lo que la base sabe de un turno (su
+historia, sus recibos con lo que devolvió su anulación y sus pagos sin entregar) como el usuario que llama.
+
+#### El turno del día
+
+`GET /api/caja/turnos/del-dia` (`TurnoController` y `ConsultaDelTurno` de `caja`, #97) da los turnos de **hoy en Lima**
+de **quien pregunta**, en todas sus ventanillas, por código de caja, con su caja, su hora de apertura y su estado. El
+cajero sale de la sesión y el día del reloj: **cualquier parámetro es 400** que lo nombra (un `?cajero=` lo convertiría
+en «el turno de quien yo diga»). La `situacion` distingue `SIN_ABRIR` (ningún turno: es un dato, no un error),
+`ABIERTO` (exactamente uno), `CERRADO` (todos cerrados: al que cerró no le falta abrir, le falta reversar) y
+`VARIOS_ABIERTOS` (abierto en dos ventanillas: no se elige uno). **Preguntar no abre un turno.**
+
+#### El arqueo
+
+`ArqueoDelTurno.de(recibos, declarado, fecha)` recibe los recibos del turno (`numero`, `tipo_pago`, `forma_pago`,
+`total` y lo que devolvió su anulación, el importe congelado del acta), lo declarado por forma de pago (lo que falta
+cuenta como cero) y la fecha. Da **una línea por forma de pago en el orden del enumerado**, sin las vacías salvo que
+tengan declarado (veinte soles en cheque declarados que el sistema no registró son un descuadre que hay que ver), con
+`neto = cobrado − anulado` y `diferencia = declarado − neto`, que puede ser negativa; y `recibos_emitidos`,
+`recibos_anulados`, los totales (la suma de las líneas, nunca una cifra aparte) y `cuadra()`. Lo imposible lanza: lo
+anulado mayor que lo cobrado, un declarado negativo, una forma de pago que no existe.
+
+**Sin redondeo, y no es un olvido (D-03d sigue abierta).** No hay ninguna división: cada recibo tiene una sola forma de
+pago y su total va entero a una línea, así que la suma de las partes es el total exacto. Todo es `BigDecimal`, sin
+`setScale` ni `RoundingMode`.
+
+**El cuadre** parte el neto en `cobrado_con_evento` (los recibos `NORMAL`, que avisan a su sistema de origen) y
+`cobrado_sin_evento` (las tasas), cada recibo con su neto. **Las dos mitades suman el neto**, y el cierre lo exige.
+
+`GET /api/caja/turnos/{turno_id}/arqueo` (`EstadoDelCierreController` de `caja`) es el arqueo **en vivo**, a hoy, sin
+lo declarado: `declarado`, `diferencia`, `total_declarado` y `cuadra` van en `null`, nunca en cero. Lleva las dos
+mitades, `estado_del_turno`, `puede_cerrar` (abierto y sin pagos que lo impidan) y `lo_que_impide_cerrar`: cada
+`pago_evento` del turno `PENDIENTE` o `MUERTO`, con su `pago_id`, su `tipo` y su `estado`. Lee en una sola foto
+(`Transaccion.lectura`).
+
+#### El cierre
+
+`POST /api/caja/turnos/cierre` (`caja.turno.CerrarTurno`, de `CerrarTurno` de `caja`). Antes de empezar: CREATE sobre
+`cierre_turno` y `cierre_turno_linea` (**403**); el cajero es el de la sesión (otro en el cuerpo es **403**: nadie cierra
+el turno de otro, tampoco un supervisor); la petición (**400**, todos los campos juntos): `caja`, `fecha` (hoy **o un
+día pasado**: el turno que se quedó abierto ayer tiene que poder cerrarse; mañana es 400), `declarado` (cada cifra en
+cadena, un decimal sin signo de hasta 2 decimales y 13 enteros, por una forma de pago conocida: si no, 400 en
+`declarado` que dice cuál), `observacion` y una clave desconocida. Luego, en **una transacción**:
+
+1. **El turno de la caja, del cajero de la sesión y de esa fecha** (por `clave_turno`): **404** si no hay, o si la caja
+   no existe. Una caja de baja también cierra.
+2. **El candado del turno** (`TURNO`), y todo lo que sigue se lee después de tomarlo.
+3. **Ya cerrado: 409** («ya está cerrado»): dos arqueos vigentes sobre el mismo dinero.
+4. **Un pago `PENDIENTE` o `MUERTO` en el turno: 409 «hay pagos sin entregar»**, con la lista en el `detail` y en
+   `pagos_sin_entregar`. Un turno cerrado con uno de ellos dejaría el acta firmada, el cajón cuadrado y la deuda viva.
+5. **El arqueo** con lo declarado, a la fecha del turno, y **el cuadre, que tiene que sumar el neto** (si no, es un
+   defecto: 500).
+6. **El acta**: el `cierre_turno` con sus cifras congeladas y `secuencia` = movimientos + 1, y una `cierre_turno_linea`
+   por forma de pago.
+7. **201** con el acta, su arqueo declarado y `estado_del_turno: CERRADO`.
+
+**El descuadre se guarda, no se rechaza**: si lo declarado no coincide con el neto, el cierre se firma igual, con su
+diferencia. Si el cierre exigiera cero, al cajero al que le faltan diez soles le bastaría declarar lo que dice el sistema.
+
+#### La reversión
+
+`POST /api/caja/turnos/reversion` exige CREATE sobre `reversion_cierre` (el privilegio `ELIMINACION` de `cierre_caja`:
+`SUPERVISOR_CAJA`), el cajero de la sesión (la reversión del cierre de otro es **403**, igual que en `caja`), `motivo`
+(obligatorio, no en blanco, hasta 80) y `observacion`. Con el candado del turno, exige un cierre vigente (si no, **409**
+«Nada que reversar») y agrega la `reversion_cierre` con `cierre_revertido` y la secuencia siguiente: **el turno queda
+abierto** y se sigue cobrando en él. El cierre reversado no se toca; el cierre siguiente vuelve a congelar sus totales,
+que ya incluyen lo cobrado después. Es la única forma de volver a cobrar ese día.
+
+**Solo se agregan filas (regla 4).** Nadie tiene UPDATE ni DELETE sobre `cierre_turno`, `cierre_turno_linea` ni
+`reversion_cierre` (`test_apply_roles.py`), `src/main` no tiene ningún `replace`, `update` ni `delete` sobre ellos
+(`InmutabilidadDelReciboTest`) y ninguna ruta de caja los modifica. Los `unique` de `clave_secuencia`, de la `clave` de
+cada línea y de `cierre_revertido` son la red: un cierre se reversa una sola vez.
+
+#### El candado del turno
+
+**Nada se cuela en un cierre en curso.** El cierre y la reversión toman **solo** el candado `TURNO` del turno, el mismo
+que toman el cobro de órdenes, el de tasas y la anulación, y releen todo después de tomarlo. Mientras el cierre lo
+tenga, un cobro o una anulación de ese turno **esperan**, y al soltarlo encuentran el turno cerrado: **409 «Turno
+cerrado»**, comprobado bajo el candado (en `Ventanilla` después de la idempotencia, en `AnularRecibo` después del mismo
+día). La caja vecina es otro turno y no espera. El orden de los candados no cambia: **turno-clave → turno → órdenes por
+id → serie → recibo**, y el cierre, que solo toma el del turno, no puede esperar en cruz con nadie. La secuencia es común
+al cierre y a la reversión: wasichai no tiene unicidad compuesta entre objetos, así que **la serializa el candado del
+turno**; dos cierres a la vez dan uno, y el segundo encuentra el turno cerrado.
+
+El **original** del recibo (`GET …/pdf`) también exige el turno abierto: con el turno cerrado es 409 y remite al
+duplicado.
 
 ### El evento `PAGO_REGISTRADO`
 
@@ -597,14 +785,18 @@ cada objeto del modelo. Los PR siguientes lo amplían con sus objetos.
 | Rol               | Puede                                                    |
 | ----------------- | -------------------------------------------------------- |
 | `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes |
-| `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime |
-| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero) y sobre `reimpresion_recibo` (reimprime) |
+| `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime. READ y CREATE sobre `cierre_turno` y `cierre_turno_linea`: cierra su turno. READ sobre `reversion_cierre`: no reversa |
+| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero), sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |
 
-**Nadie tiene UPDATE ni DELETE sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo` ni
-`reimpresion_recibo`** (`test_apply_roles.py` lo comprueba): un recibo no se corrige; su anulación se agrega. Los
-privilegios de `caja` se vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo` y
-reimprimir (`IMPRESION`), CREATE sobre `reimpresion_recibo`, así que la UI los lee de `/api/auth/me/permissions`.
+**Nadie tiene UPDATE ni DELETE sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`,
+`reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` ni `reversion_cierre`** (`test_apply_roles.py` lo comprueba):
+un recibo no se corrige, su anulación se agrega; un cierre no se corrige, se reversa. Los privilegios de `caja` se
+vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo`; reimprimir (`IMPRESION`),
+CREATE sobre `reimpresion_recibo`; cerrar (`REGISTRO` de `cierre_caja`), CREATE sobre `cierre_turno`, y reversar
+(`ELIMINACION` de `cierre_caja`), CREATE sobre `reversion_cierre`, así que la UI los lee de `/api/auth/me/permissions`.
+Cobrar y anular leen además la historia del turno: un rol propio que cobre necesita READ sobre `cierre_turno` y
+`reversion_cierre`.
 `ESPECIAL` (anular el recibo de otro cajero) no cabe en CRUD: es el rol `SUPERVISOR_CAJA` (ver «La anulación»).
 
 `model/apply_roles.py` los crea o sincroniza por la API de core (`POST /api/roles` y `PUT /api/roles/{name}/permissions`).
@@ -616,7 +808,7 @@ core lo deja pasar todo. Los usuarios y sus roles se asignan en el admin de core
 ## Emisión del recibo
 
 `GET /api/caja/recibos/{numero_impreso}/pdf` da **el original**: solo al cajero que lo emitió, el mismo día, con su
-turno abierto (hoy todo turno del día lo está; el cierre añadirá esa condición) y mientras no esté anulado. Cualquier
+turno abierto (con el turno cerrado, 409) y mientras no esté anulado. Cualquier
 otro recibe 409, que remite al duplicado (`POST .../duplicados`), que dice «DUPLICADO N.° n» y, si se anuló, que está
 anulado. Lo dibuja `caja.emision.PdfRenderer`, copiado de `srtm-backend` sin su cabecera
 institucional: la plantilla `templates/emision/recibo.html` (Thymeleaf, standalone) a PDF con openhtmltopdf, A4, con
@@ -645,7 +837,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `RecibosTest`, las del recibo después de emitido (el resumen estable que cambia con una cifra, los largos de motivo,
   autorizado y memorando, el número del papel, los filtros, el mismo día, el recibo ajeno y el cuerpo de
   `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
-  sobre el recibo, sus líneas, su anulación, sus reimpresiones o su evento.
+  sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión.
+  `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado);
+  `CierreDeTurnoTest`, la máquina de estados del turno y la situación del cajero; `TurnosTest`, lo que llega en las
+  peticiones del turno; `PurezaDelTurnoTest`, que el arqueo y el cierre no dependen de Spring, del reloj ni de la base.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
   `CAJERO`) y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
@@ -663,6 +858,14 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   igual, el 403 de un `CAJERO`); `AnulacionApiTest`, la anulación (la orden vuelve a `PENDIENTE` y el recibo sigue
   igual, `PAGO_ANULADO` con su `pagoOriginalId`, el recibo de ayer con un `Clock` de prueba, dos veces, **diez
   simultáneas dan una**, el recibo de tasas, sin evento, los 400, el recibo ajeno y el 403 del `CAJERO`).
+  `TurnoApiTest` cubre el turno del día (entero y con su hora, sin turno, cerrado, dos abiertos, sin parámetros, y que
+  preguntar no abre), el arqueo en vivo sin declarado, el cajero y el día del cierre (el turno de otro, el de ayer,
+  mañana, reversar sin `SUPERVISOR_CAJA`) y el reenvío (al día siguiente no abre un turno; tras la baja de la caja o el
+  cierre devuelve el recibo), con un `Clock` de prueba movible. `CierreApiTest` cubre **el día completo**, que cuadra
+  céntimo a céntimo con órdenes, tasas y una anulación; el turno cerrado (no se cobra, no se anula, reversar reabre); el
+  pago `PENDIENTE` que impide cerrar; la inmutabilidad; **dos cierres simultáneos dan uno**, y **el cierre en curso**: un
+  `RecordChangeListener` de prueba retiene el cierre con el candado tomado, y un cobro de tasa, uno de orden y una
+  anulación esperan y reciben 409, mientras la caja vecina cobra sin esperar.
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
   Comprueba que la salud responde `UP`, que los módulos instalados (views, forms, pages) responden y los que se dejan
   fuera (workflow, documents, gis, automatización) dan 404, que una ruta bajo `/api/caja/**` sin token da 401 y que la
@@ -673,5 +876,5 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 
 ## Siguientes pasos (fuera de este alcance)
 
-- **Negocio:** el cierre del turno (y con él, la regla del turno cerrado en la anulación y en el original); el
-  publicador del buzón.
+- **Negocio:** el publicador del buzón, los pagos sin entregar y su explicación (el `MUERTO` que impide cerrar lo cubre
+  ese PR); la conciliación.

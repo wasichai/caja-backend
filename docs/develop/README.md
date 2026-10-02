@@ -86,7 +86,8 @@ curl http://localhost:8091/actuator/health       # {"status":"UP",...}
 
 ## 5. Modelo y datos
 
-El modelo (`area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo` y `pago_evento`, con sus once
+El modelo (`area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo`, `pago_evento`,
+`anulacion_recibo`, `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre`, con sus dieciocho
 relaciones) está en
 `model/model.json`, los roles de caja en `model/roles.json`, y cuatro scripts de Python (solo librería estándar, 3.11 o más) lo cargan en un core que ya esté corriendo. El detalle de cada
 campo está en la sección «Modelo» del [README principal](../../README.md#modelo).
@@ -97,7 +98,7 @@ set -a; source develop/.env; set +a     # WASICHAI_CORE (http://localhost:8091),
 
 cd model
 python3 apply.py --validate-only        # el modelo cumple las reglas de core (no necesita core)
-python3 apply.py                        # crea 8 objetos y 11 relaciones; la segunda vez no crea nada
+python3 apply.py                        # crea 13 objetos y 18 relaciones; la segunda vez no crea nada
 python3 apply_roles.py                  # crea o sincroniza SISTEMA_ORIGEN, CAJERO, SUPERVISOR_CAJA y TESORERIA
 python3 import_cajas.py --dry-run       # 5 cajas y 3 áreas del ejemplo, sin escribir
 python3 import_cajas.py                 # data/ejemplos/cajas.csv
@@ -130,8 +131,8 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 ```
 
 **Qué son los tests de integración.** `CajaSmokeTest`, `OrdenesApiTest`, `CajasApiTest`, `CobroApiTest`,
-`CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TasasApiTest`, `VistaPreviaApiTest`, `ReciboApiTest` y
-`AnulacionApiTest`, con `@Tag("integration")`
+`CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TransaccionTest`, `TasasApiTest`, `VistaPreviaApiTest`,
+`ReciboApiTest`, `AnulacionApiTest`, `TurnoApiTest` y `CierreApiTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -147,13 +148,21 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
   su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única), `nuevaTasa(codigo, importe, desde, hasta)` (una vigencia de
   una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único), `reciboEscrito(caja, numero, emitidoEn, documento)` (un recibo
   con su turno escrito como admin, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento) y
-  `registros(objeto, filtros)` (lo guardado, leído como admin). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
+  `registros(objeto, filtros)` (lo guardado, leído como admin) y `cambiarComoAdmin(objeto, id, cambios)` (cambia campos
+  por la API de core sin pasar por caja: lo que hará el publicador del buzón al entregar un pago, o el admin al dar de
+  baja una caja). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
 - **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, la de diez anulaciones
   simultáneas y la del fallo a mitad (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el
   `RecordChangeListener` de prueba), son el corazón de la cobranza: no se dan por buenas sin correrlas contra un
   PostgreSQL de verdad.
-- **El reloj.** `AnulacionApiTest` tiene su propio contexto con un `Clock` `@Primary` que se adelanta (`RelojMovible`):
-  el recibo de hoy, anulado mañana, es el recibo de ayer.
+- **El reloj.** `AnulacionApiTest` y `TurnoApiTest` tienen su propio contexto con un `Clock` `@Primary` que se adelanta
+  (`RelojMovible`): el recibo de hoy, anulado mañana, es el recibo de ayer, y el turno de hoy, cerrado mañana, es el de
+  ayer.
+- **El cierre en curso.** `CierreApiTest` tiene su propio contexto con un `RecordChangeListener` que, armado, retiene el
+  cierre justo después de escribir su `cierre_turno`, con el candado del turno tomado y sin confirmar: lo que llegue a
+  ese turno tiene que esperar. Lo usan la prueba del cierre en curso y la de dos cierres simultáneos.
+- **Los pagos.** Hasta el publicador del buzón, un turno con cobros de órdenes no cierra (sus `PAGO_REGISTRADO` siguen
+  `PENDIENTE`): las pruebas los marcan `ENTREGADO` como admin.
 
 **Por qué no corren en local con un Docker remoto.** Testcontainers crea el contenedor en el daemon al que apunta
 `DOCKER_HOST`, pero lo busca en `localhost:<puerto publicado>`. Con un Docker remoto (otro servidor, o su socket
