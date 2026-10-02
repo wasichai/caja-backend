@@ -54,7 +54,8 @@ class CobroService(
     }
 
     // lo que costaría cobrar esas órdenes hoy, sin candados ni escritura: las mismas reglas que el cobro
-    // (impedimentosDelCobro, lineaDeOrden, totalDe), y lo que lo impediría va en motivos
+    // (impedimentosDelCobro, lineaDeOrden, totalDe), y lo que lo impediría va en motivos. la regla de la de tasas: una
+    // orden que no se puede cobrar (pagada, anulada o todavía no exigible) no entra en las líneas ni en el total
     suspend fun vistaPrevia(body: VistaPreviaDeOrdenes): VistaPrevia {
         val usuario = currentUser.require()
         permisos.exigir(usuario, "La vista previa", "lee las órdenes que se cobrarían", Actions.READ to ORDEN_DE_COBRO)
@@ -67,7 +68,8 @@ class CobroService(
 
         val porId = ids!!.map(UUID::toString)
         val leidas = registros.byIds(ORDEN_DE_COBRO, OrdenDeCobro::class.java, porId)
-        return vistaPrevia(porId.mapNotNull(leidas::get).map(::lineaDeOrden), hoy, impedimentosDelCobro(porId, leidas, hoy))
+        val cobrables = porId.mapNotNull(leidas::get).filter { it.cobrableA(hoy) }
+        return vistaPrevia(cobrables.map(::lineaDeOrden), hoy, impedimentosDelCobro(porId, leidas, hoy))
     }
 
     // dentro de la transacción, entre el candado del turno y el de la serie: las órdenes, cada una bajo su candado, en

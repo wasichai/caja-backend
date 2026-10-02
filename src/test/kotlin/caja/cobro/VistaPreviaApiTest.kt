@@ -59,8 +59,9 @@ class VistaPreviaApiTest : CajaApiTest() {
         )
         val futura = post(ORDENES, orden("fecha_exigibilidad" to hoy.plusDays(1).toString()))["orden_id"].asString()
         val falta = UUID.randomUUID().toString()
+        val buena = post(ORDENES, orden("importe" to "20.00"))["orden_id"].asString()
 
-        val vista = vistaPrevia(VISTA_ORDENES, mapOf("ordenes" to listOf(pagada, futura, falta)), funcionario("CAJERO"))
+        val vista = vistaPrevia(VISTA_ORDENES, mapOf("ordenes" to listOf(buena, pagada, futura, falta)), funcionario("CAJERO"))
 
         assertFalse(vista["cobrable"].asBoolean())
         val motivos = vista["motivos"].toList().map { it.asString() }
@@ -68,8 +69,10 @@ class VistaPreviaApiTest : CajaApiTest() {
         assertTrue(motivos[0].contains(falta), motivos.toString())
         assertTrue(motivos[1].contains(pagada) && motivos[1].contains("ya se cobró"), motivos.toString())
         assertTrue(motivos[2].contains(futura), motivos.toString())
-        // las que existen salen con su monto
-        assertEquals(listOf(pagada, futura), vista["lineas"].toList().map { it["orden_id"].asString() })
+        // la misma regla que la de tasas: lo que no se puede cobrar (pagada, no exigible) queda fuera de las líneas y
+        // del total, y se dice en motivos
+        assertEquals(listOf(buena), vista["lineas"].toList().map { it["orden_id"].asString() })
+        assertEquals("20.00", vista["total"]["importe"].asString())
 
         val mercados = post(ORDENES, orden("sistema_origen" to "mercados"))["orden_id"].asString()
         val rentas = post(ORDENES, orden())["orden_id"].asString()
