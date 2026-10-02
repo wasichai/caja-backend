@@ -102,6 +102,43 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
         assertTrue(lineaDe(salida, orden).contains("UPDATED"))
     }
 
+    // el alta de caja (POST /api/caja/ordenes-de-cobro) es la única puerta de una orden: la API genérica se salta
+    // todas sus reglas (el importe, el sistema, la clave de origen, nacer PENDIENTE), así que toda alta por ella se
+    // anota. con un importe que el alta rechazaría, la línea dice cuál y por qué: ese es el que rompe un recibo
+    @Test
+    fun `una orden dada de alta por la API generica se detecta, y con el importe roto la linea lo dice`(salida: CapturedOutput) {
+        val origen = funcionario("SISTEMA_ORIGEN")
+        val buena = ordenPorFuera("10.00", origen)
+        val rota = ordenPorFuera("-50.00", origen)
+
+        val deLaBuena = lineaDe(salida, buena)
+        assertTrue(deLaBuena.contains(" ERROR ") && deLaBuena.contains("CREATED") && deLaBuena.contains("orden_de_cobro"), deLaBuena)
+        assertTrue(deLaBuena.contains("alta"), deLaBuena)
+        assertTrue(!deLaBuena.contains("importe roto"), deLaBuena)
+        val deLaRota = lineaDe(salida, rota)
+        assertTrue(deLaRota.contains("importe roto") && deLaRota.contains("-50.00") && deLaRota.contains("debe ser mayor que 0"), deLaRota)
+    }
+
+    private fun ordenPorFuera(
+        importe: String,
+        token: String
+    ): String {
+        val referencia = "FUERA-${unico()}"
+        return crear(
+            "orden_de_cobro",
+            token,
+            "sistema_origen" to "rentas",
+            "referencia_externa" to referencia,
+            "clave_origen" to "rentas|$referencia",
+            "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
+            "importe" to importe,
+            "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),
+            "actualizado_a" to LocalDate.now(LIMA).toString(),
+            "estado" to "PENDIENTE",
+            "observacion" to "escrita por la API genérica"
+        )
+    }
+
     private fun cobrarTasa(cajero: Cuenta): String {
         val tasa = codigoDeTasa()
         nuevaTasa(tasa, "12.30", LocalDate.now(LIMA).minusDays(1))
