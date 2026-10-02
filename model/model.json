@@ -521,6 +521,105 @@
           "description": "Solo si está EXPLICADO: quien se hizo cargo dice por qué."
         }
       ]
+    },
+    {
+      "name": "anulacion_recibo",
+      "label": "Anulación de recibo",
+      "pluralLabel": "Anulaciones de recibo",
+      "description": "La anulación de un recibo el mismo día del pago: se agrega, y el recibo no se toca (recibo_movimiento de caja, tipo ANULACION). Las órdenes del recibo vuelven a PENDIENTE y, si el recibo avisó su pago, sale un PAGO_ANULADO en la misma transacción. Crearla es el privilegio ELIMINACION de caja; nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "recibo_anulado",
+          "label": "Recibo anulado",
+          "type": "TEXT",
+          "required": true,
+          "unique": true,
+          "description": "El id del recibo, otra vez: su unicidad es la red de que un recibo se anula una sola vez (reemplaza recibo_movimiento_anulacion_uq, un índice único parcial que wasichai no tiene)."
+        },
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día de la anulación, en Lima: el del turno del recibo."
+        },
+        {
+          "name": "motivo",
+          "label": "Motivo",
+          "type": "TEXT",
+          "required": true,
+          "description": "El sustento del acto, hasta 80 caracteres y no en blanco: se imprime en el duplicado."
+        },
+        {
+          "name": "autorizado_por",
+          "label": "Autorizado por",
+          "type": "TEXT",
+          "description": "Quien lo autorizó, si consta: hasta 80 caracteres."
+        },
+        {
+          "name": "documento_autorizacion",
+          "label": "Documento de autorización",
+          "type": "TEXT",
+          "description": "El memorando o la resolución que lo sustenta, si consta: hasta 40 caracteres."
+        },
+        {
+          "name": "importe",
+          "label": "Importe",
+          "type": "DECIMAL",
+          "required": true,
+          "description": "El total del recibo, congelado: lo que se devuelve del cajón en el arqueo de ese turno."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien anuló: el correo de la sesión."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se registra, escrito por quien anula (regla 10). Es otra cosa que el motivo."
+        }
+      ]
+    },
+    {
+      "name": "reimpresion_recibo",
+      "label": "Reimpresión de recibo",
+      "pluralLabel": "Reimpresiones de recibo",
+      "description": "Un duplicado de un recibo ya emitido (recibo_movimiento de caja, tipo DUPLICADO): cada reimpresión deja su fila, y de contarlas sale el «DUPLICADO N.°» del papel. Crearla es el privilegio IMPRESION de caja; nadie la edita ni la borra.",
+      "fields": [
+        {
+          "name": "fecha",
+          "label": "Fecha",
+          "type": "DATE",
+          "required": true,
+          "description": "El día de la reimpresión, en Lima."
+        },
+        {
+          "name": "resumen",
+          "label": "Resumen",
+          "type": "TEXT",
+          "required": true,
+          "description": "El SHA-256 en hexadecimal (64 caracteres) de la representación canónica de lo congelado en el recibo y sus líneas, no de los bytes del pdf. Si cambia entre dos reimpresiones, el duplicado se niega: ya no saldría igual."
+        },
+        {
+          "name": "usuario",
+          "label": "Usuario",
+          "type": "TEXT",
+          "required": true,
+          "description": "Quien pidió el duplicado: el correo de la sesión."
+        },
+        {
+          "name": "observacion",
+          "label": "Observación",
+          "type": "LONG_TEXT",
+          "required": true,
+          "description": "Por qué se reimprime, escrito por quien lo pide (regla 10)."
+        }
+      ]
     }
   ],
   "relationships": [
@@ -621,6 +720,42 @@
       "source": "pago_evento",
       "target": "turno",
       "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "anulacion_recibo_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Anulación",
+      "source": "anulacion_recibo",
+      "target": "recibo",
+      "fieldName": "recibo",
+      "required": true
+    },
+    {
+      "name": "anulacion_recibo_caja",
+      "label": "Caja",
+      "inverseLabel": "Anulaciones de recibo",
+      "source": "anulacion_recibo",
+      "target": "caja",
+      "fieldName": "caja",
+      "required": true
+    },
+    {
+      "name": "anulacion_recibo_turno",
+      "label": "Turno",
+      "inverseLabel": "Anulaciones de recibo",
+      "source": "anulacion_recibo",
+      "target": "turno",
+      "fieldName": "turno",
+      "required": true
+    },
+    {
+      "name": "reimpresion_recibo_recibo",
+      "label": "Recibo",
+      "inverseLabel": "Reimpresiones",
+      "source": "reimpresion_recibo",
+      "target": "recibo",
+      "fieldName": "recibo",
       "required": true
     }
   ]

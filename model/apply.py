@@ -4,8 +4,8 @@
 Reads a JSON metadata model (objects, fields, relationships, enums), checks it
 against Core's rules (--validate-only stops there) and creates it in Core via
 the REST API, in file order (so relationship targets already exist), marking
-each required relationship's field required. Today that is 8 objects and 11
-relationships: "done: 19 created" on an empty Core, "19 skipped" on a second run.
+each required relationship's field required. Today that is 10 objects and 15
+relationships: "done: 25 created" on an empty Core, "25 skipped" on a second run.
 
 On a Core that already has the model it syncs instead: it adds the fields and
 the ENUM options model.json has and Core lacks, drops the ENUM options it no

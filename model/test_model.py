@@ -27,10 +27,12 @@ class ShippedModelTests(unittest.TestCase):
     def test_objects_in_topological_order(self):
         # a relationship's target comes before its source: recibo before orden_de_cobro, which names it
         names = [o["name"] for o in self.model["objects"]]
-        self.assertEqual(names, ["area", "caja", "tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento"])
+        self.assertEqual(names, ["area", "caja", "tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento",
+                                 "anulacion_recibo", "reimpresion_recibo"])
         self.assertEqual([r["name"] for r in self.model["relationships"]], [
             "caja_area", "tasa_area", "turno_caja", "recibo_caja", "recibo_turno", "orden_recibo", "linea_recibo_recibo",
-            "linea_recibo_orden", "linea_recibo_tasa", "pago_evento_recibo", "pago_evento_turno"])
+            "linea_recibo_orden", "linea_recibo_tasa", "pago_evento_recibo", "pago_evento_turno", "anulacion_recibo_recibo",
+            "anulacion_recibo_caja", "anulacion_recibo_turno", "reimpresion_recibo_recibo"])
 
     def fields(self, name):
         obj = next(o for o in self.model["objects"] if o["name"] == name)
@@ -133,6 +135,27 @@ class ShippedModelTests(unittest.TestCase):
         rels = self.relationships()
         self.assertEqual((rels[("pago_evento", "recibo")], rels[("pago_evento", "turno")]), (("recibo", True), ("turno", True)))
 
+    def test_anulacion_recibo_is_appended_once_per_recibo(self):
+        # recibo_movimiento of caja, split in two: annulling adds this row, the recibo is never touched. recibo_anulado
+        # (the recibo id) stands for recibo_movimiento_anulacion_uq: a recibo is annulled once
+        fields = self.fields("anulacion_recibo")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "recibo_anulado": "TEXT", "fecha": "DATE", "motivo": "TEXT", "autorizado_por": "TEXT",
+            "documento_autorizacion": "TEXT", "importe": "DECIMAL", "usuario": "TEXT", "observacion": "LONG_TEXT"})
+        self.assertEqual({n for n, f in fields.items() if not f.get("required")}, {"autorizado_por", "documento_autorizacion"})
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["recibo_anulado"])
+        rels = self.relationships()
+        self.assertEqual((rels[("anulacion_recibo", "recibo")], rels[("anulacion_recibo", "caja")], rels[("anulacion_recibo", "turno")]),
+                         (("recibo", True), ("caja", True), ("turno", True)))
+
+    def test_reimpresion_recibo_keeps_the_sha256_of_what_it_drew(self):
+        fields = self.fields("reimpresion_recibo")
+        self.assertEqual({n: f["type"] for n, f in fields.items()}, {
+            "fecha": "DATE", "resumen": "TEXT", "usuario": "TEXT", "observacion": "LONG_TEXT"})
+        self.assertTrue(all(f["required"] for f in fields.values()))
+        self.assertFalse(any(f.get("unique") for f in fields.values()))
+        self.assertEqual(self.relationships()[("reimpresion_recibo", "recibo")], ("recibo", True))
+
     def test_the_cobranza_enums(self):
         enums = self.model["enums"]
         self.assertEqual(enums["forma_pago"], ["EFECTIVO", "CHEQUE", "DEPOSITO", "TARJETA", "TRANSFERENCIA"])
@@ -141,7 +164,7 @@ class ShippedModelTests(unittest.TestCase):
         self.assertEqual(enums["estado_evento"], ["PENDIENTE", "ENTREGADO", "MUERTO", "EXPLICADO"])
 
     def test_no_object_of_the_cobranza_knows_a_tributo(self):
-        for obj in ("orden_de_cobro", "recibo", "linea_recibo", "pago_evento"):
+        for obj in ("orden_de_cobro", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo", "reimpresion_recibo"):
             for name in self.fields(obj):
                 self.assertFalse(name.startswith(("tributo", "ejercicio", "periodo", "predio", "vehiculo", "insoluto",
                                                   "reajuste", "interes", "gasto")), f"{obj}.{name}")

@@ -11,7 +11,7 @@
     {
       "name": "CAJERO",
       "label": "Cajero",
-      "description": "Atiende una ventanilla: lee las cajas, sus áreas, las tasas y las órdenes, y cobra. Cobrar abre su turno, emite el recibo con sus líneas, encola el evento del pago y marca las órdenes PAGADA. Nunca edita ni borra un recibo, una línea ni un evento.",
+      "description": "Atiende una ventanilla: lee las cajas, sus áreas, las tasas y las órdenes, y cobra. Cobrar abre su turno, emite el recibo con sus líneas, encola el evento del pago y marca las órdenes PAGADA. Ve las anulaciones y los duplicados, y no crea ninguno. Nunca edita ni borra un recibo, una línea ni un evento.",
       "permisos": {
         "area": ["READ"],
         "caja": ["READ"],
@@ -20,13 +20,15 @@
         "turno": ["READ", "CREATE"],
         "recibo": ["READ", "CREATE"],
         "linea_recibo": ["READ", "CREATE"],
-        "pago_evento": ["READ", "CREATE"]
+        "pago_evento": ["READ", "CREATE"],
+        "anulacion_recibo": ["READ"],
+        "reimpresion_recibo": ["READ"]
       }
     },
     {
       "name": "SUPERVISOR_CAJA",
       "label": "Supervisor de caja",
-      "description": "Supervisa las ventanillas. Hoy puede lo mismo que el cajero; lo que lo distingue llega con la anulación y el cierre.",
+      "description": "Supervisa las ventanillas: cobra como el cajero y, además, anula recibos del día (también los de otro cajero) y reimprime duplicados. Nunca edita ni borra un recibo, su anulación ni sus reimpresiones.",
       "permisos": {
         "area": ["READ"],
         "caja": ["READ"],
@@ -35,7 +37,9 @@
         "turno": ["READ", "CREATE"],
         "recibo": ["READ", "CREATE"],
         "linea_recibo": ["READ", "CREATE"],
-        "pago_evento": ["READ", "CREATE"]
+        "pago_evento": ["READ", "CREATE"],
+        "anulacion_recibo": ["READ", "CREATE"],
+        "reimpresion_recibo": ["READ", "CREATE"]
       }
     },
     {
@@ -50,7 +54,9 @@
         "recibo": ["READ"],
         "orden_de_cobro": ["READ"],
         "linea_recibo": ["READ"],
-        "pago_evento": ["READ"]
+        "pago_evento": ["READ"],
+        "anulacion_recibo": ["READ"],
+        "reimpresion_recibo": ["READ"]
       }
     }
   ]
