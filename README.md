@@ -184,7 +184,9 @@ campo único con los dos valores.
 
 Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo
 y a qué fecha está esa cifra. La da de alta el sistema de origen (`POST /api/caja/ordenes-de-cobro`). **No tiene
-`tributo`, `ejercicio` ni `periodo`** (ver «Reglas»); el vínculo con el recibo llega con la cobranza.
+`tributo`, `ejercicio` ni `periodo`** (ver «Reglas»); el vínculo con el recibo lo pone la cobranza. **Su puerta es el
+alta de caja**: una orden escrita por la API genérica (`POST /api/objects/orden_de_cobro/records`) no pasa por ninguna
+de sus reglas, así que el cobro vuelve a mirar su importe y el detector la anota (ver «La segunda puerta»).
 
 | Campo                | Tipo      | Qué guarda                                                                                          | Columna de `caja`                     |
 | -------------------- | --------- | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -201,7 +203,6 @@ y a qué fecha está esa cifra. La da de alta el sistema de origen (`POST /api/c
 | `pagador_externo_id` | INTEGER   | El id que le da el sistema de origen (en rentas, el contribuyente), mayor que 0.                    | `orden_de_cobro.pagador_externo_id`   |
 | `estado`             | ENUM      | `estado_orden`: `PENDIENTE` (al nacer), `PAGADA` o `ANULADA`. Obligatorio.                          | `orden_de_cobro.estado`               |
 | `observacion`        | LONG_TEXT | Por qué se dio de alta (regla 10): de 5 a 500 caracteres. Obligatoria.                              | `orden_de_cobro.observacion`          |
-
 | `recibo`             | relación  | El recibo que la cobró (`orden_recibo`, opcional). Una orden `PAGADA` lo nombra.                    | `orden_de_cobro.recibo_id` (`orden_recibo_ck`) |
 
 Los largos son de las columnas de `caja`: wasichai guarda TEXT sin largo, así que los comprueba el alta. `creada_en` es
@@ -370,7 +371,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `POST /api/caja/cobros/tasas`      | Cobra conceptos del TUPA y emite el recibo (ver «La caja de tasas»): **201**, o **200** en el reenvío de una `Idempotency-Key`. | CREATE sobre `recibo` (403 antes de empezar); al escribir, core exige además READ sobre `tasa` y CREATE sobre `turno` y `linea_recibo` |
 | `POST /api/caja/cobros/tasas/vista-previa` | Lo que costaría cobrar unos conceptos hoy, sin escribir nada: **200**. | READ sobre `tasa` |
 | `GET /api/caja/tasas`              | Las tasas vigentes a `?vigentes_a=AAAA-MM-DD` (por defecto hoy en Lima), por código: la lista que ofrece la ventanilla. | READ sobre `tasa` y sobre `area` |
-| `GET /api/caja/recibos/{numero_impreso}/pdf` | **El original** del recibo, en `application/pdf`. Solo para el cajero que lo emitió, el mismo día, con su turno abierto y sin anular; si no, 409, que remite al duplicado. | READ sobre `recibo`, `caja`, `linea_recibo` y `anulacion_recibo` |
+| `GET /api/caja/recibos/{numero_impreso}/pdf` | **El original** del recibo, en `application/pdf`. Solo para el cajero que lo emitió, el mismo día, con su turno abierto, sin reimpresiones y sin anular; si no, 409, que remite al duplicado. | READ sobre `recibo`, `caja`, `linea_recibo`, `anulacion_recibo` y `reimpresion_recibo` |
 | `GET /api/caja/recibos`            | El listado paginado (ver «La consulta de recibos»): `?documento=&caja=&cajero=&desde=&hasta=&estado=&page=&size=`, del más reciente al más antiguo. | READ sobre `recibo`, `anulacion_recibo` y `reimpresion_recibo` (y `caja` si se filtra por ella) |
 | `GET /api/caja/recibos/{numero_impreso}` | La ficha: el recibo con sus líneas, `estado`, `duplicados` y `anulacion`. **404** si no existe, **400** si el número está mal formado. | READ sobre `recibo`, `linea_recibo`, `caja`, `tasa`, `anulacion_recibo` y `reimpresion_recibo` |
 | `POST /api/caja/recibos/{numero_impreso}/duplicados` | El duplicado en PDF, marcado y numerado, y lo registra (ver «El duplicado»): **201** `application/pdf`; **409** si ya no se dibuja igual. | CREATE sobre `reimpresion_recibo` (403 antes de empezar) |
@@ -499,6 +500,10 @@ El arqueo en vivo (`GET /api/caja/turnos/{turno_id}/arqueo`) lleva cada cifra co
  "lo_que_impide_cerrar": [{"pago_id": "…", "tipo": "PAGO_REGISTRADO", "estado": "PENDIENTE"}]}
 ```
 
+El arqueo en vivo, el cierre, el avance (y su `turno`) y la recaudación por área llevan además
+`"recibos_con_datos_rotos": [{"numero_impreso", "motivo"}]`: los recibos que no se pudieron contar porque sus cifras son
+imposibles, fuera de las cifras y con su porqué (ver «Un recibo roto»). Casi siempre va vacía.
+
 Con el turno **cerrado**, el arqueo lleva además `cierre_vigente`: el acta del último cierre vigente **tal como se
 guardó**, sin recalcular nada con los recibos de hoy. Así la pantalla de cierre muestra lo que se contó al cerrar
 después de recargar. Con el turno abierto (o reversado), `"cierre_vigente": null`. Sus cifras van a la fecha del turno:
@@ -602,6 +607,9 @@ recibo original. Luego, en este orden:
 5. **Las órdenes.** Candado `ORDEN` con el id de cada una, **ordenadas por id**, y se leen después de tomarlos. Una que no
    existe es **404**; de dos sistemas de origen, **400** en `ordenes` (un recibo se anula entero); una ya pagada,
    anulada o todavía no exigible a la fecha de pago, **409** con su id. La misma orden dos veces en la petición es 400.
+   **Una orden con el importe roto es 409 «dato roto»**, con su id: cero, negativo, con más de 2 decimales o de 13
+   enteros, lo que el alta habría rechazado (`defectoDelImporte`, la misma regla). Solo llega así por la API genérica,
+   y cobrarla daría un recibo en negativo que rompe el arqueo y la recaudación.
 6. **El número.** Candado `SERIE` con la serie de la caja; el siguiente es `max(numero) + 1` de la serie y `numero_impreso`
    es `"%s-%07d"`. No deja huecos: si algo falla después, nada se confirma.
 7. **El recibo y sus líneas**, una por orden con su concepto, detalle, referencia, sistema y monto (el importe de la
@@ -664,8 +672,8 @@ cambia desplegando, y esas son las que se acaban cobrando mal. **La tarifa es un
 La garantía de la UI es que **ningún total sale del cliente**, y el cajero necesita saber cuánto cobrar antes de emitir.
 `POST /api/caja/cobros/vista-previa` y `POST /api/caja/cobros/tasas/vista-previa` aplican **las mismas funciones** que
 su cobro (`impedimentosDelCobro`, `lineaDeOrden`, `cotizar`, `lineaDeTasa`, `totalDe`), sin candados ni escritura. Lo que
-impediría el cobro (una orden que no existe, ya pagada o no exigible, dos sistemas; una tasa sin tarifa vigente o en
-cero, una vigencia al revés) **no es un error**: va en `motivos`, `cobrable` es `false` y **queda fuera de las líneas y
+impediría el cobro (una orden que no existe, ya pagada o no exigible, con el importe roto, dos sistemas; una tasa sin
+tarifa vigente o en cero, una vigencia al revés) **no es un error**: va en `motivos`, `cobrable` es `false` y **queda fuera de las líneas y
 del total**, en las dos vistas previas por igual: el total es el de lo que sí se puede cobrar. Una petición mal hecha (sin órdenes, un campo
 desconocido, una fecha que no es hoy) sí es 400. `VistaPreviaApiTest` compara el total de la vista previa con el del
 recibo emitido después, para las mismas órdenes y para las mismas tasas.
@@ -804,6 +812,26 @@ cadena, un decimal sin signo de hasta 2 decimales y 13 enteros, por una forma de
 **El descuadre se guarda, no se rechaza**: si lo declarado no coincide con el neto, el cierre se firma igual, con su
 diferencia. Si el cierre exigiera cero, al cajero al que le faltan diez soles le bastaría declarar lo que dice el sistema.
 
+#### Un recibo roto
+
+Un recibo con cifras imposibles (un total negativo, una anulación negativa o mayor que el total, una forma de pago que
+no existe; en la recaudación, también una línea de su cobro en negativo) **no lo escribe caja**: llega por la API
+genérica (un `CAJERO` tiene CREATE sobre `recibo`, también en el turno de otro; wasichai#15), por la base o, antes de
+la defensa del cobro, por una orden con el importe roto. Las reglas puras no lo cuentan (`ReciboDelTurno` y
+`ReciboRecaudado` siguen lanzando ante lo imposible), pero **un recibo así no tumba nada**:
+
+- `RecibosDelTurno` (puro) parte lo leído en los recibos **contables** y los **rotos**, cada uno con su porqué
+  (`defectoDelRecibo`). En la recaudación, `defectoDeRecaudacion` hace lo mismo con el recibo entero (sus líneas
+  también: el avance y la recaudación por área cuentan los mismos recibos).
+- El arqueo en vivo, el avance y la recaudación por área los dejan **fuera de sus cifras** y los nombran en
+  `recibos_con_datos_rotos`. Antes, uno solo daba un 500 en el arqueo y en todo rango que incluyera su día.
+- **El cierre no se bloquea**: el acta se firma con los recibos contables (sus cifras y `recibos_emitidos` no cuentan
+  los rotos), la respuesta los nombra y el cierre escribe una línea ERROR (`CIERRE CON RECIBOS FUERA DEL ARQUEO`).
+  Después de cerrar, el arqueo del turno los sigue nombrando. Bloquear habría dejado a cualquiera con CREATE sobre
+  `recibo` cerrar el paso al turno de otro hasta que un `ADMIN` borrara la fila. **El precio**: el acta firmada no los
+  menciona; quedan en la respuesta del cierre, en el registro, en el arqueo y en la línea del detector de cuando se
+  escribieron.
+
 #### La reversión
 
 `POST /api/caja/turnos/reversion` exige CREATE sobre `reversion_cierre` (el privilegio `ELIMINACION` de `cierre_caja`:
@@ -812,6 +840,15 @@ diferencia. Si el cierre exigiera cero, al cajero al que le faltan diez soles le
 «Nada que reversar») y agrega la `reversion_cierre` con `cierre_revertido` y la secuencia siguiente: **el turno queda
 abierto** y se sigue cobrando en él. El cierre reversado no se toca; el cierre siguiente vuelve a congelar sus totales,
 que ya incluyen lo cobrado después. Es la única forma de volver a cobrar ese día.
+
+**Pregunta abierta del dueño del producto: hoy nadie puede reabrir el turno cerrado de un `CAJERO`.** El `CAJERO` no
+tiene CREATE sobre `reversion_cierre`, y un supervisor solo reversa el cierre de su propio turno (el cajero es el de la
+sesión, como en `caja`). Un cajero que cerró por error no puede volver a cobrar ese día en esa caja. Hay dos salidas, y
+elegir una es una decisión de negocio, no de código:
+
+1. **Dar CREATE sobre `reversion_cierre` al `CAJERO`**: reabre su propio turno, con su motivo y su observación.
+2. **Que un supervisor reverse el cierre de otro**, como una regla `ESPECIAL` (igual que anular el recibo de otro
+   cajero): el rol `SUPERVISOR_CAJA` y la caja y el cajero en la petición.
 
 **Solo se agregan filas (regla 4).** Nadie tiene UPDATE ni DELETE sobre `cierre_turno`, `cierre_turno_linea` ni
 `reversion_cierre` (`test_apply_roles.py`), `src/main` no tiene ningún `replace`, `update` ni `delete` sobre ellos
@@ -830,7 +867,8 @@ al cierre y a la reversión: wasichai no tiene unicidad compuesta entre objetos,
 turno**; dos cierres a la vez dan uno, y el segundo encuentra el turno cerrado.
 
 El **original** del recibo (`GET …/pdf`) también exige el turno abierto: con el turno cerrado es 409 y remite al
-duplicado.
+duplicado. Y exige que no tenga reimpresiones: con un duplicado ya entregado, un original sin marca sería otro papel
+del mismo número que no dice que hay otro (409, que remite a otro duplicado).
 
 ### El evento `PAGO_REGISTRADO`
 
@@ -982,12 +1020,31 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
     core.
   - **Quien escribe en la base directamente, o un `ADMIN`** que reescribiera el recibo y sus líneas: aquí no hay firma
     que lo distinga.
+  - **El dinero de una orden, por el UPDATE del `CAJERO`** (tiene UPDATE sobre `orden_de_cobro` para marcarla `PAGADA`
+    al cobrar, y ese permiso también vale en `PUT /api/objects/orden_de_cobro/records/{id}`):
+    - **Bajarle el importe y luego cobrarla.** El cobro vuelve a mirar el importe (`motivoNoCobrable`), pero solo ve si
+      el alta lo habría rechazado: un importe menor y bien formado pasa. Las líneas salen de la orden editada, el
+      recibo dice esa cifra, y **el sistema de origen recibe un `PAGO_REGISTRADO` válido por menos de lo que debía**.
+      La defensa (a) no lo ve: compone el cuerpo de las mismas líneas.
+    - **Volver una `PAGADA` a `PENDIENTE`** (y cobrarla otra vez), o **marcar una `PENDIENTE` como `PAGADA` sin
+      recibo**: ninguna regla de caja corre por esa puerta.
+  - **Un recibo forjado en negativo** (o en positivo): un `CAJERO` tiene CREATE sobre `recibo`, también en el turno de
+    otro. Uno negativo ya no tumba nada (ver «Un recibo roto»); uno positivo infla el efectivo esperado de ese turno.
+
+  Todo esto solo lo ven la línea ERROR del detector y el `audit_log` de core (caja-backend#20). Mientras tanto, **el
+  sistema de origen tiene que comprobar el importe de cada `PAGO_REGISTRADO` contra su propia deuda** (ver «Siguientes
+  pasos»).
 - **(b) El detector.** `caja.comun.GuardiaDeEscrituras`, un `RecordChangeListener`, escribe una línea ERROR
   (`ESCRITURA FUERA DE CAJA: …`, con el objeto, el id y el usuario) por toda creación, cambio o borrado que se haga
   **fuera de la API de caja** sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`, `reimpresion_recibo`,
   `turno`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre` (un cierre forjado cerraría un turno ajeno), y por
-  los cambios de `orden_de_cobro`. Las escrituras de caja llevan la marca `EscrituraDeCaja`, un elemento del contexto de
-  la corrutina que `Registros` pone alrededor de cada `create`, `replace` y `delete`. **Su límite: no puede vetar**,
+  `orden_de_cobro`: sus cambios y **también su alta**. La puerta de un sistema de origen es `POST
+  /api/caja/ordenes-de-cobro`; por la API genérica no corre ninguna regla del alta (el importe, el sistema, la clave de
+  origen, nacer `PENDIENTE`), así que se anota toda alta por fuera, no solo la que hoy rompe una regla (comprobarlas en
+  el listener sería copiar el alta, y una orden que las pasa tampoco pasó por ella). Si su importe es uno que el alta
+  rechazaría, la línea lo dice («Tiene el importe roto (…)»): ése es el que rompería un recibo. Las escrituras de caja
+  llevan la marca `EscrituraDeCaja`, un elemento del contexto de la corrutina que `Registros` pone alrededor de cada
+  `create` y `replace` (caja no borra nada: `Registros` no tiene `delete`). **Su límite: no puede vetar**,
   porque wasichai llama a los listeners después de escribir: lo forjado queda escrito, y la línea es lo que permite
   verlo. Impedirlo es wasichai#15.
 - **La otra cara de la puerta: el UPDATE del supervisor.** `SUPERVISOR_CAJA` tiene UPDATE sobre `pago_evento` para
@@ -1049,6 +1106,8 @@ número. Lo mismo la conciliación: cuenta los eventos de los turnos de esa `fec
 - **Solo cuentan las líneas del cobro**: las que llevan el sello de la transacción de su recibo (ver «La segunda
   puerta»). Una `linea_recibo` agregada después por la API genérica no cambia el origen del recibo ni infla la
   distribución. El total del avance es el del recibo, no la suma de sus líneas.
+- **Un recibo roto no tumba el reporte**: queda fuera de las cifras y se nombra en `recibos_con_datos_rotos` (ver «Un
+  recibo roto»).
 - **Una caja o un cajero que no existen son 400** en `caja` o en `cajero`, no un avance en cero: una errata se leería
   como «no cobró nada». Un cajero existe para el avance si abrió algún turno, cualquier día.
 - **Cada fila se lee una sola vez.** Core ordena por una sola columna (por defecto `created_at`) y pagina con
@@ -1091,11 +1150,11 @@ Las cifras de la conciliación van a la `fecha` conciliada; `a_la_fecha` dice cu
 ## Roles
 
 `model/roles.json` declara los roles de caja y, por rol, las acciones (`READ`, `CREATE`, `UPDATE` o `DELETE`) sobre
-cada objeto del modelo. Los PR siguientes lo amplían con sus objetos.
+cada uno de los trece objetos del modelo.
 
 | Rol               | Puede                                                    |
 | ----------------- | -------------------------------------------------------- |
-| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes |
+| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes. **Hueco declarado**: el `sistema_origen` sale del cuerpo, no del usuario, así que cualquier usuario `SISTEMA_ORIGEN` puede dar de alta órdenes a nombre de otro sistema; ligarlo a la cuenta espera las cuentas de servicio (wasichai#17) |
 | `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime. READ y CREATE sobre `cierre_turno` y `cierre_turno_linea`: cierra su turno. READ sobre `reversion_cierre`: no reversa |
 | `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero), sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno), y **UPDATE sobre `pago_evento`** (explica un pago sin entregar) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |
@@ -1123,7 +1182,7 @@ core lo deja pasar todo. Los usuarios y sus roles se asignan en el admin de core
 ## Emisión del recibo
 
 `GET /api/caja/recibos/{numero_impreso}/pdf` da **el original**: solo al cajero que lo emitió, el mismo día, con su
-turno abierto (con el turno cerrado, 409) y mientras no esté anulado. Cualquier
+turno abierto (con el turno cerrado, 409), sin reimpresiones y mientras no esté anulado. Cualquier
 otro recibe 409, que remite al duplicado (`POST .../duplicados`), que dice «DUPLICADO N.° n» y, si se anuló, que está
 anulado. Lo dibuja `caja.emision.PdfRenderer`, copiado de `srtm-backend` sin su cabecera
 institucional: la plantilla `templates/emision/recibo.html` (Thymeleaf, standalone) a PDF con openhtmltopdf, A4, con
@@ -1145,22 +1204,24 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 
 - **Unitarias**: `ReglasTest` y `ObservacionTest` fijan las reglas del alta; `FronteraDeLaOrdenTest` lee
   `model/model.json` y falla si la orden de cobro gana `tributo`, `ejercicio` o `periodo`. `CobranzaTest` fija las de
-  la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, las claves del cuerpo de
-  `PAGO_REGISTRADO` y lo que llega en la petición); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
+  la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, el importe roto que no se cobra, las claves del
+  cuerpo de `PAGO_REGISTRADO` y lo que llega en la petición); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
   la tarifa vigente, `12.30 × 3 = 36.90` y `0.10 × 7 = 0.70`, la vigencia al revés, la cantidad y el precio en la
   petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF (el original y el duplicado, con y sin anulación);
   `RecibosTest`, las del recibo después de emitido (el resumen estable que cambia con una cifra, los largos de motivo,
   autorizado y memorando, el número del papel, los filtros, el mismo día, el recibo ajeno y el cuerpo de
   `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
   sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión, salvo
-  la explicación de un pago sin entregar. `EntregaTest` fija las reglas del publicador: la clasificación de cada
+  la explicación de un pago sin entregar, y falla si aparece cualquier puerta para borrar (un `delete`, aunque nadie lo
+  llame). `EntregaTest` fija las reglas del publicador: la clasificación de cada
   respuesta, el recorte de `ultimo_error`, la marca de cada intento y la coherencia del evento con su recibo;
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
-  `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado);
+  `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado), con los
+  recibos rotos que quedan fuera y se nombran;
   `CierreDeTurnoTest`, la máquina de estados del turno y la situación del cajero; `TurnosTest`, lo que llega en las
   peticiones del turno; `PurezaDelTurnoTest`, que el arqueo y el cierre no dependen de Spring, del reloj ni de la base.
   `RecaudacionTest` fija las agregaciones de la recaudación (el origen, el sello de las líneas, lo anulado que se resta,
-  las partes que suman el total, el hueco de la partida, el rango y el área de la petición); `ConciliacionTest`, la
+  las partes que suman el total, el hueco de la partida, el recibo roto, el rango y el área de la petición); `ConciliacionTest`, la
   línea de la conciliación (la diferencia, cuándo cuadra, lo que dice el origen y por qué no se sabe, sin ceros, y la
   fecha obligatoria); `PurezaDeLaRecaudacionTest`, que no dependen de Spring, del reloj, de la base ni de la red.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
@@ -1168,13 +1229,15 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `CAJERO`) y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
   caso feliz, el doble cobro, la idempotencia, los 400, 403, 404 y 409, **diez cobros simultáneos de la misma orden**
   (un recibo y nueve 409) y **veinte simultáneos en la misma caja** (del 1 al 20, sin huecos ni repetidos), los
-  permisos y el PDF, y **dos cobros simultáneos con la misma `Idempotency-Key`** (un solo recibo).
+  permisos y el PDF (con una reimpresión ya no sale el original), y **dos cobros simultáneos con la misma
+  `Idempotency-Key`** (un solo recibo).
   `CobroEnUnaTransaccionApiTest` es la prueba de la transacción, y `CandadosTest` la del candado (y de que la misma
   clave en dos clases son dos candados). `TasasApiTest` cubre la caja de tasas (el precio de la tabla con dos
   vigencias, el 400 de un precio en el cuerpo, 404 sin tarifa vigente, 409 con tarifa en cero, la idempotencia, el
   pagador anónimo, los 400, la numeración compartida con el cobro de órdenes, ningún `pago_evento`, el 403 de
   `TESORERIA`) y la lista de tasas vigentes; `VistaPreviaApiTest`, las dos vistas previas, sus motivos y sus permisos,
-  y que su total es el del recibo emitido después. `ReciboApiTest` cubre la consulta (página vacía, los seis filtros, el
+  que su total es el del recibo emitido después, y **la orden con el importe roto escrita por la API genérica**, que no
+  se cobra (409 «dato roto») y que la vista previa dice en motivos sin un 500. `ReciboApiTest` cubre la consulta (página vacía, los seis filtros, el
   rango de días de Lima con el `hasta` entero, el estado derivado, los duplicados contados, el desempate estable, el 403
   sin READ y los 400) y el duplicado (marcado y registrado, dos registros, el de un anulado, el 409 si ya no se dibuja
   igual, el 403 de un `CAJERO`); `AnulacionApiTest`, la anulación (la orden vuelve a `PENDIENTE` y el recibo sigue
@@ -1203,19 +1266,21 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   cuerpo editado para incluirla**, la línea forjada o la orden tocada que no matan al evento legítimo, **el
   `PAGO_ANULADO` forjado antes que no impide entregar el legítimo**, la explicación que solo vale con un
   `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
-  comprueba que apagado no arranca; `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y no ve lo que
-  escribe caja. `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
+  comprueba que apagado no arranca; `CerrojoBuzonTest`, que el cerrojo del buzón es exclusivo (un segundo `tomar()` da
+  `null` y, suelto, se toma otra vez); `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y una orden
+  dada de alta por la API genérica (con su importe roto, si lo tiene), y no ve lo que escribe caja. `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
   un `Clock` movible y días lejanos propios: **ocho días que cuadran** con la línea y sus dos mitades, el día sin cobros
   que cuadra, el origen que aplicó de menos o rechazó, el pago en tránsito, **el origen apagado y el destino sin
   configurar, sin un solo cero** (recorre el JSON), la fecha obligatoria, **las partes que suman el total**, lo de una
   orden sin partida, el filtro por área, la anulación que se resta, la línea forjada que no cuenta, **el cobro nocturno
   que va a su día de Lima** y **la cifra del día que cuadra con el arqueo de su turno**, el 404 y los 400, **el avance
-  que no espera al candado de un cierre en curso** y los permisos. `CierreApiTest` comprueba además el `cierre_vigente`
-  del arqueo.
+  que no espera al candado de un cierre en curso**, **el recibo roto que queda fuera de las dos rutas y se nombra** y
+  los permisos. `CierreApiTest` comprueba además el `cierre_vigente` del arqueo y **el recibo roto que no tumba el
+  arqueo ni bloquea el cierre**.
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
   Comprueba que la salud responde `UP`, que los módulos instalados (views, forms, pages) responden y los que se dejan
   fuera (workflow, documents, gis, automatización) dan 404, que una ruta bajo `/api/caja/**` sin token da 401 y que la
-  forma del modelo que usará caja funciona de punta a punta: ENUM, TEXT único, DECIMAL y una relación MANY_TO_ONE
+  forma del modelo de caja funciona de punta a punta: ENUM, TEXT único, DECIMAL y una relación MANY_TO_ONE
   obligatoria.
 - Con un Docker remoto no corren en local tal cual (Testcontainers no llega a sus puertos): ver
   [docs/develop/README.md](docs/develop/README.md#6-tests).
@@ -1229,12 +1294,22 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 - **`rentas.json` declara `ordenId` entero, y ahora es un UUID** en cadena: el contrato de `caja`
   (`docs/50-api/contratos-que-consume/rentas.json`) y quien lo lea tienen que cambiar (ver «El evento
   `PAGO_REGISTRADO`»).
-- **Los huecos de wasichai que se rodean aquí**, de wasichai#13 a wasichai#19:
+- **El sistema de origen tiene que comprobar el importe** de cada `PAGO_REGISTRADO` contra su propia deuda (la
+  `referenciaExterna` y su importe): un `CAJERO` puede bajar el importe de una orden por la API genérica antes de
+  cobrarla, y el evento llega válido por menos (ver «Lo que queda abierto», caja-backend#20).
+- **No entregar un `PAGO_ANULADO` antes que su `PAGO_REGISTRADO`** (caja-backend#23): hoy el publicador lee por
+  `created_at`, y si el pago falla y queda `PENDIENTE` (o muere), la anulación que va detrás puede llegar primero al
+  origen, que anula un `pagoId` que no conoce.
+- **Decidir quién reabre el turno cerrado de un `CAJERO`** (ver «La reversión»): dar CREATE sobre `reversion_cierre` al
+  `CAJERO`, o una regla `ESPECIAL` para que un supervisor reverse el cierre de otro.
+- **Los huecos de wasichai que se rodean aquí**, de wasichai#13 a wasichai#20:
   - que `RecordService` se una a la transacción de quien llama esté documentado y probado (wasichai#13);
   - unicidad compuesta, y el choque de un único como 409 con su campo (wasichai#14);
   - objetos de solo agregar y una guarda antes de escribir, también para ADMIN y la API genérica (wasichai#15); con
     ella se cierra caja-backend#20, el acta y el evento forjados;
   - acciones propias además de las CRUD (wasichai#16): el `ESPECIAL` de anular el recibo ajeno;
-  - cuentas de servicio para los sistemas de origen (wasichai#17);
+  - cuentas de servicio para los sistemas de origen (wasichai#17): hoy `sistema_origen` sale del cuerpo del alta;
   - trabajo de fondo con un principal y un candado de clúster (wasichai#18): el buzón;
-  - el motivo de un cambio en la auditoría (wasichai#19).
+  - el motivo de un cambio en la auditoría (wasichai#19);
+  - un desempate único al paginar (`ORDER BY …, id`), para que las filas con el mismo `created_at` no se repitan ni se
+    pierdan entre páginas (wasichai#20): hoy `Registros.all` pagina por `id` (ver «Cada fila se lee una sola vez»).

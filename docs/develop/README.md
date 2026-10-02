@@ -137,7 +137,7 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 `CobroEnUnaTransaccionApiTest`, `CandadosTest`, `TransaccionTest`, `TasasApiTest`, `VistaPreviaApiTest`,
 `ReciboApiTest`, `AnulacionApiTest`, `OriginalEnUnaFotoApiTest`, `TurnoApiTest`, `CierreApiTest`,
 `CierreEnUnaTransaccionApiTest`, `BuzonApiTest`, `BucleDelBuzonApiTest`, `BuzonApagadoApiTest`,
-`GuardiaDeEscriturasApiTest` y `RecaudacionApiTest`, con `@Tag("integration")`
+`CerrojoBuzonTest`, `GuardiaDeEscriturasApiTest` y `RecaudacionApiTest`, con `@Tag("integration")`
 (lo heredan de `WasichaiIntegrationTest`): `build` los excluye e `integrationTest` los corre. Levantan la app entera
 (`CajaApplication`, en un puerto aleatorio) contra un PostgreSQL plano (`postgres:18`, la propiedad
 `wasichai.test.db.image` de `build.gradle.kts`) y la llaman por HTTP.
@@ -212,8 +212,9 @@ PostgreSQL responden en `localhost` y la suite falla al arrancar, aunque `docker
 
 ## 7. Con el front (`../caja-ui`)
 
-El front todavía no existe. Cuando llegue, no llamará al backend directamente: su servidor de Vite hará proxy de `/api`
-a `http://localhost:8091`, así que no hará falta configurar CORS.
+El front es [`../caja-ui`](https://github.com/wasichai/caja-ui). No llama al backend directamente: su servidor de Vite
+(puerto 5181) hace proxy de `/api` a `http://localhost:8091` (`WASICHAI_API_URL` lo cambia), así que no hace falta
+configurar CORS.
 
 ```bash
 # terminal 1
