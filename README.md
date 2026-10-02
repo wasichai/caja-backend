@@ -881,23 +881,45 @@ La API genérica de wasichai (`POST /api/objects/pago_evento/records`) aplica lo
 un `CAJERO`, que tiene CREATE sobre `pago_evento` para cobrar, puede escribir por ella un evento que nunca ocurrió (el
 hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ninguna lo impide del todo:
 
-- **(a) El cuerpo se vuelve a componer antes de enviar.** El publicador lee el recibo guardado, sus líneas, la fecha de
-  cada orden, su anulación y los eventos de su buzón, y **vuelve a componer el cuerpo esperado con los mismos
-  compositores que la cobranza y la anulación** (`cuerpoPagoRegistrado` y `cuerpoPagoAnulado`). El `pagoId` es el
-  `evento_id` de la fila y, en una anulación, el `pagoOriginalId` es el `evento_id` del `PAGO_REGISTRADO` del recibo. El
-  cuerpo guardado tiene que ser **igual, campo a campo**: el sistema, el recibo, el pagador, el total y cada orden con
-  su referencia, su importe y su fecha; en una anulación, también el motivo y la fecha. Lo único que no se compara tal
-  cual es **el orden de las órdenes**: la petición no se guarda, así que se comparan ordenadas por `ordenId`. Además:
-  - **El evento tiene que ser el primero de su tipo en su recibo**, por (`created_at`, `id`). La cobranza y la
-    anulación escriben uno solo, en la misma transacción que el recibo o su acta: uno posterior es una copia, aunque
-    lleve otro `pagoId`.
-  - **El `sistema_destino` de la fila es el de las líneas del recibo.**
-  - **Un `PAGO_REGISTRADO` es de un recibo `NORMAL`.**
+- **(a) El cuerpo se vuelve a componer antes de enviar, con el sello de la transacción.** PostgreSQL da a
+  `created_at` el valor de `now()`, **el comienzo de la transacción**. Todo lo que escribe una transacción de caja lleva
+  el mismo instante: la cobranza escribe el recibo, sus líneas, el `PAGO_REGISTRADO` y las órdenes `PAGADA` (su
+  `updated_at`) en una sola; la anulación, su acta y el `PAGO_ANULADO` en otra. Lo prueba `BuzonApiTest`. La API genérica
+  no abre transacción y no deja escribir `created_at`: lo que entra por ella lleva **siempre otro sello**. Sobre eso, el
+  publicador comprueba:
+  - **El evento lleva el sello de su origen.** Un `PAGO_REGISTRADO` tiene el `created_at` de su recibo; un
+    `PAGO_ANULADO`, el de su `anulacion_recibo`. Si no, es una copia o un evento forjado, y muere. Uno forjado **antes**
+    no le quita el lugar al legítimo, que conserva su sello y se entrega.
+  - **Solo cuentan las líneas con el sello del recibo, y suman exactamente su total.** Una `linea_recibo` agregada
+    después por la API genérica (un `CAJERO` o un `SUPERVISOR_CAJA` tienen CREATE sobre ella) no cuenta. No mata al
+    evento legítimo, ni hace pasar uno editado para incluirla.
+  - **El cuerpo es el que se compone de lo guardado.** Se vuelve a componer con **los mismos compositores que la
+    cobranza y la anulación** (`cuerpoPagoRegistrado` y `cuerpoPagoAnulado`). El `pagoId` es el `evento_id` de la fila;
+    en una anulación, el `pagoOriginalId` es el `evento_id` del `PAGO_REGISTRADO` con el sello del cobro, y el motivo y
+    la fecha salen del acta. El cuerpo guardado tiene que ser **igual, campo a campo**: el sistema, el recibo, el
+    pagador, el total y cada orden con su referencia y su importe (de su línea) y su fecha. Lo único que no se compara
+    tal cual es **el orden de las órdenes**: la petición no se guarda, así que se comparan ordenadas por `ordenId`.
+  - **La fecha de cada orden** (`actualizadoA`, que la línea no guarda) sale de la orden **solo si su `updated_at` es el
+    sello del cobro**, es decir, si nadie la tocó desde entonces. Si se tocó después (una anulación, otro cobro, o un
+    cambio por la API genérica, que un `CAJERO` puede hacer porque tiene UPDATE sobre `orden_de_cobro`), su valor de hoy
+    ya no es el del cobro. Entonces se toma el del propio cuerpo para esa orden, y cambiar la orden no mata al evento
+    legítimo.
+  - **El `sistema_destino` de la fila es el de esas líneas, y un `PAGO_REGISTRADO` es de un recibo `NORMAL`.**
 
   Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con su recibo: …» (que
-  nombra las claves que difieren, o la copia), y salta la alerta. **Su límite**: compara con lo que hay en la base. Quien
-  pudiera reescribir a la vez el recibo, sus líneas y el evento (ningún rol de caja puede: solo un ADMIN, o la base)
-  haría un evento que coincide.
+  nombra las claves que difieren, la copia o el descuadre), y salta la alerta. **Lo que queda abierto**, todo bajo
+  wasichai#15:
+  - **La fecha de una orden tocada después del cobro.** Quien pueda editar el cuerpo de un evento `PENDIENTE` (el UPDATE
+    del supervisor, abajo) y haya tocado antes esa orden puede cambiar su `actualizadoA` en el cuerpo, y nada más: el
+    importe, la referencia y las órdenes siguen atados a las líneas del cobro.
+  - **Un acta forjada.** Un `SUPERVISOR_CAJA` puede crear por la API genérica una `anulacion_recibo` para un recibo. El
+    `PAGO_ANULADO` forjado para ella nace en otra transacción, así que muere y no se envía: la API genérica no escribe
+    dos registros en una transacción. Pero el acta queda. El recibo se ve anulado, y la anulación legítima ya no se
+    puede registrar (el único de `recibo_anulado`). Eso solo lo ven el detector y la auditoría de core.
+  - **Los cambios de estado de un evento**, por el UPDATE del supervisor (abajo): solo el detector y la auditoría de
+    core.
+  - **Quien escribe en la base directamente, o un `ADMIN`** que reescribiera el recibo y sus líneas: aquí no hay firma
+    que lo distinga.
 - **(b) El detector.** `caja.comun.GuardiaDeEscrituras`, un `RecordChangeListener`, escribe una línea ERROR
   (`ESCRITURA FUERA DE CAJA: …`, con el objeto, el id y el usuario) por toda creación, cambio o borrado que se haga
   **fuera de la API de caja** sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`, `reimpresion_recibo`,
@@ -914,10 +936,10 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   - volver un `ENTREGADO` a `PENDIENTE`, para que se entregue otra vez (el destino deduplica por `pagoId`);
   - editar el `cuerpo` de un `PENDIENTE`.
 
-  **Un cuerpo editado lo ataja la defensa (a)** al entregarlo: ya no se compone igual, así que muere y avisa. **Un
-  cambio de estado no lo ve ningún control de caja: solo el detector (b) y la auditoría de core** (cada `PUT` queda en
-  `audit_log` con su usuario, su antes y su después). Impedirlo es wasichai#15: un permiso de edición que la API genérica
-  no conceda.
+  **Un cuerpo editado lo ataja la defensa (a)** al entregarlo: ya no se compone igual, así que muere y avisa (salvo la
+  fecha de una orden tocada después del cobro, arriba). **Un cambio de estado no lo ve ningún control de caja: solo el
+  detector (b) y la auditoría de core** (cada `PUT` queda en `audit_log` con su usuario, su antes y su después).
+  Impedirlo es wasichai#15: un permiso de edición que la API genérica no conceda.
 
 #### Los huecos de wasichai que se rodean aquí
 
@@ -1036,7 +1058,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   **el cuerpo editado por el supervisor** (el importe repartido de otro modo, otra referencia), **la anulación con otro
   `pagoOriginalId`**, la anulación legítima que se entrega, la alerta que no se parte con un salto de línea, **el fallo
   inesperado que cuenta su intento sin atascar a los siguientes**, **la alerta que no se pierde aunque la vuelta se corte
-  después** (con un disparador de prueba que hace fallar la marca en la base), la explicación que solo vale con un
+  después** (con un disparador de prueba que hace fallar la marca en la base), **el sello de la transacción** (un cobro
+  y una anulación escriben todo con el mismo `created_at`, y una escritura suelta lleva otro), **la línea forjada con el
+  cuerpo editado para incluirla**, la línea forjada o la orden tocada que no matan al evento legítimo, **el
+  `PAGO_ANULADO` forjado antes que no impide entregar el legítimo**, la explicación que solo vale con un
   `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
   comprueba que apagado no arranca; `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y no ve lo que
   escribe caja.
