@@ -843,15 +843,19 @@ vuelve a esperar. En cada vuelta:
 destino viaja en él **tachado**: el token configurado y todo lo que parece una credencial (`Authorization`, `Bearer …`,
 `token=`…) se reemplazan por `«…»`, porque un proxy puede devolver el eco de la petición.
 
-Una organización cuyo buzón revienta no tumba a las demás: se registra y la vuelta sigue. Lo ya marcado queda marcado,
-y lo que no se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo
-deduplica.
+**Un fallo inesperado con un evento** (la base al leer su recibo o al marcarlo; `EntregarEventos` de `caja`, #109)
+**cuenta como un intento**, con su tipo en `ultimo_error` y su traza en el registro, y la vuelta sigue con el siguiente:
+un evento envenenado, primero en la cola, no atasca el buzón de su organización para siempre. Si ni siquiera se puede
+anotar ese intento, la vuelta de esa organización se corta; las demás siguen. Lo ya marcado queda marcado, y lo que no
+se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo deduplica.
 
 #### La alerta
 
-Cuando un pago muere, la vuelta escribe **una línea ERROR que empieza con `DINERO COBRADO SIN REGISTRAR`**, que nombra al
-responsable de la conciliación y su canal y lista cada pago (su `pagoId`, tipo, destino, número de recibo, turno,
-intentos y último error). Es dinero que entró por ventanilla y que su sistema de origen no sabe que entró. **Es un
+Cuando un pago muere, el publicador escribe **en ese mismo momento**, no al final de la vuelta, **una línea ERROR que
+empieza con `DINERO COBRADO SIN REGISTRAR`**: el pago (su `pagoId`, tipo, destino, número de recibo, turno, intentos y
+último error) y el responsable de la conciliación con su canal. Así, si algo corta la vuelta después, el aviso de los
+que ya murieron no se pierde. Cada valor va en una sola línea: un `sistema_destino` escrito por la API genérica con un
+salto de línea no inyecta otra línea en el registro. Es dinero que entró por ventanilla y que su sistema de origen no sabe que entró. **Es un
 registro, no un correo**: llega a una persona si la observabilidad del despliegue alerta sobre las líneas ERROR, y
 aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistro` de `caja`).
 
@@ -877,12 +881,23 @@ La API genérica de wasichai (`POST /api/objects/pago_evento/records`) aplica lo
 un `CAJERO`, que tiene CREATE sobre `pago_evento` para cobrar, puede escribir por ella un evento que nunca ocurrió (el
 hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ninguna lo impide del todo:
 
-- **(a) Coherencia antes de enviar.** El publicador comprueba que el evento coincide con su recibo, leído en la base:
-  el recibo existe; el tipo del cuerpo es el de la fila; un `PAGO_REGISTRADO` es de un recibo `NORMAL`; el `total` del
-  cuerpo es el del recibo; las `ordenes` del cuerpo son las de las líneas del recibo; un `PAGO_ANULADO` tiene su
-  `anulacion_recibo`. Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con
-  su recibo: …», y salta la alerta. **Su límite**: la copia exacta de un evento legítimo con otro `pagoId` cuadra con su
-  recibo y se envía; el receptor la tomaría por otro pago.
+- **(a) El cuerpo se vuelve a componer antes de enviar.** El publicador lee el recibo guardado, sus líneas, la fecha de
+  cada orden, su anulación y los eventos de su buzón, y **vuelve a componer el cuerpo esperado con los mismos
+  compositores que la cobranza y la anulación** (`cuerpoPagoRegistrado` y `cuerpoPagoAnulado`). El `pagoId` es el
+  `evento_id` de la fila y, en una anulación, el `pagoOriginalId` es el `evento_id` del `PAGO_REGISTRADO` del recibo. El
+  cuerpo guardado tiene que ser **igual, campo a campo**: el sistema, el recibo, el pagador, el total y cada orden con
+  su referencia, su importe y su fecha; en una anulación, también el motivo y la fecha. Lo único que no se compara tal
+  cual es **el orden de las órdenes**: la petición no se guarda, así que se comparan ordenadas por `ordenId`. Además:
+  - **El evento tiene que ser el primero de su tipo en su recibo**, por (`created_at`, `id`). La cobranza y la
+    anulación escriben uno solo, en la misma transacción que el recibo o su acta: uno posterior es una copia, aunque
+    lleve otro `pagoId`.
+  - **El `sistema_destino` de la fila es el de las líneas del recibo.**
+  - **Un `PAGO_REGISTRADO` es de un recibo `NORMAL`.**
+
+  Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con su recibo: …» (que
+  nombra las claves que difieren, o la copia), y salta la alerta. **Su límite**: compara con lo que hay en la base. Quien
+  pudiera reescribir a la vez el recibo, sus líneas y el evento (ningún rol de caja puede: solo un ADMIN, o la base)
+  haría un evento que coincide.
 - **(b) El detector.** `caja.comun.GuardiaDeEscrituras`, un `RecordChangeListener`, escribe una línea ERROR
   (`ESCRITURA FUERA DE CAJA: …`, con el objeto, el id y el usuario) por toda creación, cambio o borrado que se haga
   **fuera de la API de caja** sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`, `reimpresion_recibo`,
@@ -891,6 +906,18 @@ hallazgo de la revisión del PR 4b; **wasichai#15**). Hay dos defensas, y ningun
   la corrutina que `Registros` pone alrededor de cada `create`, `replace` y `delete`. **Su límite: no puede vetar**,
   porque wasichai llama a los listeners después de escribir: lo forjado queda escrito, y la línea es lo que permite
   verlo. Impedirlo es wasichai#15.
+- **La otra cara de la puerta: el UPDATE del supervisor.** `SUPERVISOR_CAJA` tiene UPDATE sobre `pago_evento` para
+  explicar un pago, y ese permiso también vale en `PUT /api/objects/pago_evento/records/{id}`, que no pasa por las reglas
+  de caja. Por ahí puede:
+  - poner `EXPLICADO` sin explicación, sin el candado y sin que el pago esté `MUERTO`;
+  - pasar un `PENDIENTE` a `EXPLICADO`, para que nunca se entregue y su turno cierre;
+  - volver un `ENTREGADO` a `PENDIENTE`, para que se entregue otra vez (el destino deduplica por `pagoId`);
+  - editar el `cuerpo` de un `PENDIENTE`.
+
+  **Un cuerpo editado lo ataja la defensa (a)** al entregarlo: ya no se compone igual, así que muere y avisa. **Un
+  cambio de estado no lo ve ningún control de caja: solo el detector (b) y la auditoría de core** (cada `PUT` queda en
+  `audit_log` con su usuario, su antes y su después). Impedirlo es wasichai#15: un permiso de edición que la API genérica
+  no conceda.
 
 #### Los huecos de wasichai que se rodean aquí
 
@@ -919,7 +946,9 @@ cada objeto del modelo. Los PR siguientes lo amplían con sus objetos.
 `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` ni `reversion_cierre`** (`test_apply_roles.py` lo comprueba):
 un recibo no se corrige, su anulación se agrega; un cierre no se corrige, se reversa. **La única excepción es UPDATE
 sobre `pago_evento` para `SUPERVISOR_CAJA`**: explicar un pago `MUERTO` (lo fija `test_apply_roles.py`). El publicador
-marca la entrega sin pasar por los roles (`BuzonStore`). Los privilegios de `caja` se
+marca la entrega sin pasar por los roles (`BuzonStore`). **Ese UPDATE es también una segunda puerta**: la API genérica
+(`PUT /api/objects/pago_evento/records/{id}`) lo acepta sin las reglas de la explicación. Ver «La segunda puerta» y
+wasichai#15. Los privilegios de `caja` se
 vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo`; reimprimir (`IMPRESION`),
 CREATE sobre `reimpresion_recibo`; cerrar (`REGISTRO` de `cierre_caja`), CREATE sobre `cierre_turno`, y reversar
 (`ELIMINACION` de `cierre_caja`), CREATE sobre `reversion_cierre`, así que la UI los lee de `/api/auth/me/permissions`.
@@ -1003,8 +1032,12 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   imputación, el reintento sin perder el pago, la muerte con su alerta, el 401 que sigue vivo y el 422 que muere, el
   token que no viaja en el cuerpo ni en `ultimo_error`, **dos publicadores que cuentan un solo intento**, **la llamada
   fuera de toda transacción** (mirando desde otra conexión mientras el destino contesta), **el evento inventado por la
-  API genérica** (no se envía, muere y salta el detector), la explicación que solo vale con un `MUERTO` y
-  **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
+  API genérica** (no se envía, muere y salta el detector), **la copia con otro `pagoId`** (también con otra referencia),
+  **el cuerpo editado por el supervisor** (el importe repartido de otro modo, otra referencia), **la anulación con otro
+  `pagoOriginalId`**, la anulación legítima que se entrega, la alerta que no se parte con un salto de línea, **el fallo
+  inesperado que cuenta su intento sin atascar a los siguientes**, **la alerta que no se pierde aunque la vuelta se corte
+  después** (con un disparador de prueba que hace fallar la marca en la base), la explicación que solo vale con un
+  `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
   comprueba que apagado no arranca; `GuardiaDeEscriturasApiTest`, que el detector ve un cierre forjado y no ve lo que
   escribe caja.
 - **Integración** (`@Tag("integration")`): `CajaSmokeTest` levanta la app entera (`CajaApplication`) y la llama por HTTP.
