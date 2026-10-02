@@ -21,6 +21,8 @@ import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.context.TestPropertySource
 import tools.jackson.databind.JsonNode
+import tools.jackson.databind.node.ArrayNode
+import tools.jackson.databind.node.ObjectNode
 import wasichai.core.platform.WasichaiSchemas
 import java.time.Instant
 import java.util.UUID
@@ -391,6 +393,121 @@ class BuzonApiTest : CajaApiTest() {
         assertFalse(salida.out.lines().any { it.startsWith("DINERO FALSO") }, "una línea inyectada en el registro")
     }
 
+    // del sello de la transacción: created_at = now(), el comienzo de la transacción
+
+    @Test
+    fun `todo lo que escribe un cobro, y una anulacion, lleva el sello de su transaccion, y una escritura suelta otro`() {
+        val cobro = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
+        val evento = evento(cobro.pagoId)
+        val reciboId = evento["attributes"]["recibo"].asString()
+        val recibo = registro("recibo", reciboId)
+        val sello = recibo["createdAt"].asString()
+        assertEquals(sello, evento["createdAt"].asString(), "el evento nace en la transacción del recibo")
+        val lineas = registros("linea_recibo", "recibo" to reciboId)
+        assertEquals(2, lineas.size)
+        lineas.forEach { assertEquals(sello, it["createdAt"].asString(), "cada línea también") }
+        assertEquals(sello, registro("turno", cobro.turnoId)["createdAt"].asString(), "y el turno que abrió")
+        lineas.forEach { assertEquals(sello, registro("orden_de_cobro", it["attributes"]["orden"].asString())["updatedAt"].asString(), "y cada orden PAGADA") }
+
+        send("POST", "/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, HttpStatus.CREATED, funcionario("SUPERVISOR_CAJA"))
+        val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["createdAt"].asString()
+        assertEquals(acta, anulacionDe(cobro)["createdAt"].asString(), "el PAGO_ANULADO nace en la transacción de su acta")
+        assertTrue(acta != sello)
+
+        // una línea escrita por la API genérica es otra transacción: otro sello
+        val suelta = lineaForjada(funcionario("SUPERVISOR_CAJA"), reciboId, lineas.first()["attributes"]["orden"].asString())
+        assertTrue(registro("linea_recibo", suelta)["createdAt"].asString() != sello)
+    }
+
+    @Test
+    fun `una linea forjada y el cuerpo editado para incluirla no se envian`() {
+        val supervisor = funcionario("SUPERVISOR_CAJA")
+        val cobro = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 200)
+        // otra deuda del mismo sistema, sin pagar, que el forjador quiere dar por cobrada
+        val impaga = post(ORDENES, orden("sistema_origen" to PRUEBAS, "importe" to "10.00"))
+        val reciboId = evento(cobro.pagoId)["attributes"]["recibo"].asString()
+        lineaForjada(supervisor, reciboId, impaga["orden_id"].asString(), impaga["referencia_externa"].asString(), "10.00")
+        val cuerpo = json.readTree(evento(cobro.pagoId)["attributes"]["cuerpo"].asString()) as ObjectNode
+        (cuerpo["ordenes"] as ArrayNode)
+            .addObject()
+            .put("ordenId", impaga["orden_id"].asString())
+            .put("referenciaExterna", impaga["referencia_externa"].asString())
+            .put("importe", "10.00")
+            .put("actualizadoA", "2026-03-15")
+        editarComo(supervisor, evento(cobro.pagoId)["id"].asString(), "cuerpo" to cuerpo.toString())
+
+        vuelta()
+
+        assertTrue(origen.de(cobro.pagoId).isEmpty(), "no se envió")
+        val muerto = evento(cobro.pagoId)["attributes"]
+        assertEquals("MUERTO", muerto["estado"].asString())
+        assertTrue(muerto["ultimo_error"].asString().contains("ordenes"), muerto.toString())
+        assertEquals(
+            "PENDIENTE",
+            tree(send("GET", "/api/objects/orden_de_cobro/records/${impaga["orden_id"].asString()}", null, HttpStatus.OK))["attributes"]["estado"].asString()
+        )
+    }
+
+    @Test
+    fun `una linea forjada despues, o la fecha de la orden cambiada, no matan al evento legitimo`() {
+        val cobro = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 200)
+        val reciboId = evento(cobro.pagoId)["attributes"]["recibo"].asString()
+        val ordenPagada = registros("linea_recibo", "recibo" to reciboId).single()["attributes"]["orden"].asString()
+        lineaForjada(funcionario("CAJERO"), reciboId, ordenPagada)
+        editarComo(funcionario("CAJERO"), ordenPagada, "actualizado_a" to "2027-01-01", objeto = "orden_de_cobro")
+
+        vuelta()
+
+        assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString())
+        assertEquals(1, origen.de(cobro.pagoId).size)
+    }
+
+    @Test
+    fun `un PAGO_ANULADO forjado antes no impide que la anulacion legitima se entregue`() {
+        val cobro = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 200)
+        val legitimo = evento(cobro.pagoId)["attributes"]
+        val forjadoId = UUID.randomUUID().toString()
+        val forjado =
+            tree(
+                send(
+                    "POST",
+                    "/api/objects/pago_evento/records",
+                    mapOf(
+                        "attributes" to
+                            mapOf(
+                                "evento_id" to forjadoId,
+                                "tipo" to "PAGO_ANULADO",
+                                "sistema_destino" to PRUEBAS,
+                                "recibo" to legitimo["recibo"].asString(),
+                                "turno" to legitimo["turno"].asString(),
+                                "cuerpo" to """{"pagoId":"$forjadoId","tipo":"PAGO_ANULADO"}""",
+                                "estado" to "PENDIENTE",
+                                "intentos" to 0
+                            )
+                    ),
+                    HttpStatus.CREATED,
+                    funcionario("CAJERO")
+                )
+            )
+        assertTrue(forjado["id"].asString().isNotEmpty())
+        origen.contestar(forjadoId, 200)
+        vuelta()
+        assertEquals("MUERTO", evento(forjadoId)["attributes"]["estado"].asString())
+        assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString())
+
+        send("POST", "/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, HttpStatus.CREATED, funcionario("SUPERVISOR_CAJA"))
+        val anulado = anulacionesDe(cobro).single { it["attributes"]["evento_id"].asString() != forjadoId }["attributes"]["evento_id"].asString()
+        origen.contestar(anulado, 200)
+        vuelta()
+
+        assertEquals("ENTREGADO", evento(anulado)["attributes"]["estado"].asString())
+        assertEquals(1, origen.de(anulado).size)
+        assertTrue(origen.de(forjadoId).isEmpty())
+    }
+
     // de los fallos a mitad de la vuelta
 
     @Test
@@ -579,8 +696,44 @@ class BuzonApiTest : CajaApiTest() {
     private fun evento(pagoId: String): JsonNode = registros("pago_evento", "evento_id" to pagoId).single()
 
     // el PAGO_ANULADO del recibo de ese cobro
-    private fun anulacionDe(cobro: Cobro): JsonNode =
-        registros("pago_evento", "recibo" to evento(cobro.pagoId)["attributes"]["recibo"].asString(), "tipo" to "PAGO_ANULADO").single()
+    private fun anulacionDe(cobro: Cobro): JsonNode = anulacionesDe(cobro).single()
+
+    private fun anulacionesDe(cobro: Cobro): List<JsonNode> =
+        registros("pago_evento", "recibo" to evento(cobro.pagoId)["attributes"]["recibo"].asString(), "tipo" to "PAGO_ANULADO")
+
+    // un registro entero, leído como admin por la api de core (con su createdAt y su updatedAt)
+    private fun registro(
+        objeto: String,
+        id: String
+    ): JsonNode = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))
+
+    // una linea_recibo escrita por la API genérica en un recibo que ya existe: su id
+    private fun lineaForjada(
+        token: String,
+        reciboId: String,
+        ordenId: String,
+        referencia: String = "FORJADA-${unico()}",
+        monto: String = "0.01"
+    ): String =
+        tree(
+            send(
+                "POST",
+                "/api/objects/linea_recibo/records",
+                mapOf(
+                    "attributes" to
+                        mapOf(
+                            "recibo" to reciboId,
+                            "orden" to ordenId,
+                            "sistema_origen" to PRUEBAS,
+                            "concepto" to "UNA LÍNEA FORJADA",
+                            "referencia_externa" to referencia,
+                            "monto" to monto
+                        )
+                ),
+                HttpStatus.CREATED,
+                token
+            )
+        )["id"].asString()
 
     // un pago_evento escrito por la API genérica, como un cajero: la segunda puerta. su id de registro
     private fun forjar(
@@ -617,11 +770,12 @@ class BuzonApiTest : CajaApiTest() {
     private fun editarComo(
         token: String,
         id: String,
-        vararg cambios: Pair<String, Any?>
+        vararg cambios: Pair<String, Any?>,
+        objeto: String = "pago_evento"
     ) {
-        val guardado = tree(send("GET", "/api/objects/pago_evento/records/$id", null, HttpStatus.OK))["attributes"]
+        val guardado = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))["attributes"]
         val atributos = json.convertValue(guardado, Map::class.java) + cambios
-        send("PUT", "/api/objects/pago_evento/records/$id", mapOf("attributes" to atributos), HttpStatus.OK, token)
+        send("PUT", "/api/objects/$objeto/records/$id", mapOf("attributes" to atributos), HttpStatus.OK, token)
     }
 
     // mientras corre el bloque, toda marca de ese pago_evento (o solo la de ENTREGADO) revienta en la base: un disparador

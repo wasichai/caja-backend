@@ -1,6 +1,5 @@
 package caja.buzon
 
-import caja.cobro.LineaRecibo
 import caja.cobro.Recibo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.LINEA_RECIBO
@@ -119,81 +118,87 @@ class BuzonStore(
 
     // el recibo del evento, tal como está, con lo que hace falta para volver a componer el cuerpo de su evento
     // (incoherencia): el recibo, sus líneas, el actualizado_a de cada orden, su anulación y los eventos de su buzón por
-    // (created_at, id). null si no existe
+    // (created_at, id), cada fila con su sello (su created_at, o el updated_at de la orden). null si no existe
     suspend fun recibo(
         buzon: Buzon,
         reciboId: String?
     ): ReciboDelEvento? {
         val id = reciboId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return null
         val r = buzon.recibos
-        val recibo =
+        val (creadoEn, recibo) =
             filas(
                 "SELECT ${r.c("serie")} AS serie, ${r.c("numero_impreso")} AS numero_impreso, ${r.c("cajero")} AS cajero, " +
                     "${r.c("pagador_documento")} AS pagador_documento, ${r.c("pagador_nombre")} AS pagador_nombre, " +
                     "${r.c("pagador_externo_id")} AS pagador_externo_id, ${r.c("forma_pago")} AS forma_pago, ${r.c("tipo_pago")} AS tipo_pago, " +
-                    "${r.c("total")} AS total, ${r.c("actualizado_a")} AS actualizado_a FROM ${r.nombre} WHERE id = :id AND organization_id = :organizacion",
+                    "${r.c("total")} AS total, ${r.c("actualizado_a")} AS actualizado_a, created_at " +
+                    "FROM ${r.nombre} WHERE id = :id AND organization_id = :organizacion",
                 buzon,
                 id
             ) { row ->
-                Recibo(
-                    id = id.toString(),
-                    serie = row.get("serie", String::class.java),
-                    numeroImpreso = row.get("numero_impreso", String::class.java),
-                    cajero = row.get("cajero", String::class.java),
-                    pagadorDocumento = row.get("pagador_documento", String::class.java),
-                    pagadorNombre = row.get("pagador_nombre", String::class.java),
-                    pagadorExternoId = (row.get("pagador_externo_id") as Number?)?.toLong(),
-                    formaPago = row.get("forma_pago", String::class.java),
-                    tipoPago = row.get("tipo_pago", String::class.java),
-                    total = row.get("total", BigDecimal::class.java),
-                    actualizadoA = row.get("actualizado_a", LocalDate::class.java)
-                )
+                sello(row) to
+                    Recibo(
+                        id = id.toString(),
+                        serie = row.get("serie", String::class.java),
+                        numeroImpreso = row.get("numero_impreso", String::class.java),
+                        cajero = row.get("cajero", String::class.java),
+                        pagadorDocumento = row.get("pagador_documento", String::class.java),
+                        pagadorNombre = row.get("pagador_nombre", String::class.java),
+                        pagadorExternoId = (row.get("pagador_externo_id") as Number?)?.toLong(),
+                        formaPago = row.get("forma_pago", String::class.java),
+                        tipoPago = row.get("tipo_pago", String::class.java),
+                        total = row.get("total", BigDecimal::class.java),
+                        actualizadoA = row.get("actualizado_a", LocalDate::class.java)
+                    )
             }.singleOrNull() ?: return null
         val l = buzon.lineas
         val lineas =
             filas(
                 "SELECT ${l.c("orden")} AS orden, ${l.c("sistema_origen")} AS sistema, ${l.c("referencia_externa")} AS referencia, " +
-                    "${l.c("monto")} AS monto FROM ${l.nombre} WHERE ${l.c("recibo")} = :id AND organization_id = :organizacion",
+                    "${l.c("monto")} AS monto, created_at FROM ${l.nombre} WHERE ${l.c("recibo")} = :id AND organization_id = :organizacion",
                 buzon,
                 id
             ) { row ->
-                LineaRecibo(
-                    recibo = id.toString(),
+                LineaDelEvento(
                     orden = row.get("orden", UUID::class.java)?.toString(),
                     sistemaOrigen = row.get("sistema", String::class.java),
                     referenciaExterna = row.get("referencia", String::class.java),
-                    monto = row.get("monto", BigDecimal::class.java)
+                    monto = row.get("monto", BigDecimal::class.java),
+                    creadoEn = sello(row)
                 )
             }
         val o = buzon.ordenes
-        val ordenes = lineas.mapNotNull { it.orden }.map(UUID::fromString)
-        val actualizado =
-            if (ordenes.isEmpty()) {
+        val ids = lineas.mapNotNull { it.orden }.distinct().map(UUID::fromString)
+        val ordenes =
+            if (ids.isEmpty()) {
                 emptyMap()
             } else {
                 db
-                    .sql("SELECT id, ${o.c("actualizado_a")} AS actualizado_a FROM ${o.nombre} WHERE id = ANY(:ids) AND organization_id = :organizacion")
-                    .bind("ids", ordenes.toTypedArray())
+                    .sql(
+                        "SELECT id, ${o.c("actualizado_a")} AS actualizado_a, updated_at FROM ${o.nombre} " +
+                            "WHERE id = ANY(:ids) AND organization_id = :organizacion"
+                    ).bind("ids", ids.toTypedArray())
                     .bind("organizacion", buzon.organizacion)
-                    .map { row, _ -> row.get("id", UUID::class.java)!!.toString() to row.get("actualizado_a", LocalDate::class.java) }
-                    .all()
+                    .map { row, _ ->
+                        row.get("id", UUID::class.java)!!.toString() to
+                            OrdenDelEvento(row.get("actualizado_a", LocalDate::class.java), sello(row, "updated_at"))
+                    }.all()
                     .asFlow()
                     .toList()
-                    .mapNotNull { (orden, fecha) -> fecha?.let { orden to it } }
                     .toMap()
             }
         val a = buzon.anulaciones
         val anulacion =
             filas(
-                "SELECT ${a.c("motivo")} AS motivo, ${a.c("fecha")} AS fecha FROM ${a.nombre} " +
+                "SELECT ${a.c("motivo")} AS motivo, ${a.c("fecha")} AS fecha, created_at FROM ${a.nombre} " +
                     "WHERE ${a.c("recibo")} = :id AND organization_id = :organizacion ORDER BY created_at, id",
                 buzon,
                 id
-            ) { row -> AnulacionDelEvento(row.get("motivo", String::class.java), row.get("fecha", LocalDate::class.java)) }.firstOrNull()
+            ) { row -> AnulacionDelEvento(row.get("motivo", String::class.java), row.get("fecha", LocalDate::class.java), sello(row)) }
+                .firstOrNull()
         val e = buzon.eventos
         val eventos =
             filas(
-                "SELECT id, ${e.c("evento_id")} AS evento_id, ${e.c("tipo")} AS tipo FROM ${e.nombre} " +
+                "SELECT id, ${e.c("evento_id")} AS evento_id, ${e.c("tipo")} AS tipo, created_at FROM ${e.nombre} " +
                     "WHERE ${e.c("recibo")} = :id AND organization_id = :organizacion ORDER BY created_at, id",
                 buzon,
                 id
@@ -201,11 +206,18 @@ class BuzonStore(
                 EventoDelRecibo(
                     row.get("id", UUID::class.java)!!,
                     row.get("evento_id", UUID::class.java)!!.toString(),
-                    row.get("tipo", String::class.java)
+                    row.get("tipo", String::class.java),
+                    sello(row)
                 )
             }
-        return ReciboDelEvento(recibo, lineas, actualizado, anulacion, eventos)
+        return ReciboDelEvento(recibo, creadoEn, lineas, ordenes, anulacion, eventos)
     }
+
+    // el sello de una fila: el instante que postgres le dio con now(), el comienzo de su transacción (incoherencia)
+    private fun sello(
+        row: Readable,
+        columna: String = "created_at"
+    ): Instant = row.get(columna, OffsetDateTime::class.java)!!.toInstant()
 
     // las filas de una consulta por el id de un recibo, en la organización del buzón
     private suspend fun <T : Any> filas(
