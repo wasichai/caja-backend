@@ -38,7 +38,7 @@ fun origenDelRecibo(
 
 // las líneas que escribió el cobro de ese recibo: las que llevan su SELLO, el created_at que postgres dio con now() al
 // comienzo de la transacción de la cobranza, la misma para el recibo y sus líneas (lo prueba BuzonApiTest). una
-// linea_recibo agregada después por la API genérica de wasichai (wasichai#15) lleva otro sello y no se cuenta: no
+// linea_recibo agregada después, por fuera de la cobranza, lleva otro sello y no se cuenta: no
 // cambia el origen del recibo ni infla la distribución
 fun <T> delCobro(
     creadoEnElRecibo: Instant?,

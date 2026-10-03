@@ -25,8 +25,9 @@ private fun formaConocida(forma: String) {
 }
 
 // por qué las cifras de un recibo no se pueden contar, o null si se pueden: un total o una anulación en negativo, o una
-// anulación mayor que el total. la cobranza y la anulación no las escriben; llegan por la API genérica de wasichai
-// (wasichai#15) o por la base. la misma regla vale para el arqueo y para la recaudación
+// anulación mayor que el total. la cobranza y la anulación no las escriben; llegan por la base, o son de antes de
+// GuardiaDeEscrituras, que cierra la API genérica (caja-backend#20). la misma regla vale para el arqueo y para la
+// recaudación
 fun defectoDeLasCifras(
     total: BigDecimal,
     anulado: BigDecimal

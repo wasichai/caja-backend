@@ -307,7 +307,7 @@ class RecaudacionApiTest : CajaApiTest() {
     }
 
     @Test
-    fun `una linea forjada por la API generica no entra en la recaudacion`() {
+    fun `una linea forjada en la base no entra en la recaudacion`() {
         val dia = diasNuevos(1).single()
         enElDia(dia)
         val caja = nuevaCaja()
@@ -316,14 +316,8 @@ class RecaudacionApiTest : CajaApiTest() {
         nuevaTasa(codigo, "12.30", dia.minusDays(1))
         val numero = cobrarTasa(caja, cajero, codigo)
         val recibo = registros("recibo", "numero_impreso" to numero).single()["id"].asString()
-        // un CAJERO tiene CREATE sobre linea_recibo para cobrar, y la API genérica se la deja usar fuera de la cobranza
-        send(
-            "POST",
-            "/api/objects/linea_recibo/records",
-            mapOf("attributes" to mapOf("recibo" to recibo, "concepto" to "FORJADA", "sistema_origen" to "forjado", "monto" to "999.00")),
-            HttpStatus.CREATED,
-            cajero.token
-        )
+        // la API genérica ya no la escribe (GuardiaDeEscrituras); quien escribe en la base, sí
+        forjarEnLaBase("linea_recibo", mapOf("recibo" to recibo, "concepto" to "FORJADA", "sistema_origen" to "forjado", "monto" to "999.00"))
 
         val avance = avance("desde=$dia&hasta=$dia")
         val porArea = porArea("desde=$dia&hasta=$dia")
@@ -333,7 +327,7 @@ class RecaudacionApiTest : CajaApiTest() {
         assertEquals(1, porArea["filas"].size(), porArea.toString())
     }
 
-    // un recibo roto en el rango (un total negativo escrito por la API genérica, wasichai#15) no tumba con un 500 el
+    // un recibo roto en el rango (un total negativo escrito en la base) no tumba con un 500 el
     // reporte de todo el rango: queda fuera de las cifras y se nombra con su porqué, en las dos rutas
     @Test
     fun `un recibo roto no tumba el avance ni la recaudacion por area, queda fuera y se nombra`() {
@@ -656,7 +650,7 @@ class RecaudacionApiTest : CajaApiTest() {
     // lo que haría el publicador del buzón con ese pago
     private fun entregar(pagoId: String) {
         val evento = registros("pago_evento", "evento_id" to pagoId).single()
-        cambiarComoAdmin("pago_evento", evento["id"].asString(), "estado" to "ENTREGADO", "entregado_en" to Instant.now().toString())
+        cambiarEnLaBase("pago_evento", evento["id"].asString(), "estado" to "ENTREGADO", "entregado_en" to Instant.now().toString())
     }
 
     // el código del área de una tasa

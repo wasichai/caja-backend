@@ -26,7 +26,7 @@ import java.util.UUID
 const val LARGO_ULTIMO_ERROR = 400
 
 // lo que guarda un evento que el publicador no envía porque no cuadra con su recibo (la defensa frente a un pago_evento
-// inventado por la API genérica, wasichai#15)
+// inventado por fuera de caja)
 const val NO_COINCIDE = "el evento no coincide con su recibo"
 
 // cuánto del cuerpo de una respuesta entra en el diagnóstico: un problem+json entero sí, la página de error de un proxy no
@@ -219,24 +219,23 @@ fun marcaDe(
         is Respuesta.NoContesta -> if (intentosLeidos + 1 >= maximos) Marca.MUERTO else Marca.PENDIENTE
     }
 
-// por qué un evento no coincide con su recibo, o null si coincide. es la defensa (a) frente a la segunda puerta (la API
-// genérica de wasichai, wasichai#15): un pago_evento, una linea_recibo o una anulacion_recibo que alguien escribió por
-// POST, o un evento que editó por PUT /api/objects/.../records, no hacen salir de la caja un pago que no ocurrió.
+// por qué un evento no coincide con su recibo, o null si coincide. es la defensa (a) frente a lo que se escribe por fuera
+// de caja: un pago_evento, una linea_recibo o una anulacion_recibo escritos, o un evento editado, no hacen salir de la
+// caja un pago que no ocurrió. la segunda puerta (la API genérica de wasichai) ya no escribe ningún objeto de caja
+// (GuardiaDeEscrituras, caja-backend#20): esto queda como la segunda línea, frente a quien escribe en la base.
 //
 // EL SELLO DE LA TRANSACCIÓN. postgres da a created_at el valor de now(), que es el comienzo de la transacción: todo lo
 // que escribe UNA transacción de caja lleva el mismo instante (lo prueba BuzonApiTest). la cobranza escribe el recibo,
-// sus líneas, el evento y las órdenes PAGADA en una; la anulación, su acta y el PAGO_ANULADO en otra. la API genérica no
-// abre transacción (cada escritura se confirma sola) y no deja escribir created_at: lo que entra por ella lleva SIEMPRE
-// otro sello. así que:
+// sus líneas, el evento y las órdenes PAGADA en una; la anulación, su acta y el PAGO_ANULADO en otra. una escritura
+// suelta es otra transacción: lo que se escribe por fuera de esas dos lleva otro sello, salvo que quien escribe en la
+// base fije created_at a mano. así que:
 // - un PAGO_REGISTRADO tiene el sello de su recibo, y un PAGO_ANULADO el de su anulacion_recibo. si no, es una copia o un
 //   evento forjado, y muere; uno forjado ANTES no le quita el lugar al legítimo, que sigue teniendo su sello;
 // - el cuerpo se compone SOLO con las líneas que llevan el sello del recibo: una línea agregada después no cuenta (ni
 //   mata al evento legítimo, ni hace pasar uno editado para incluirla), y esas líneas suman exactamente el total;
 // - la fecha de cada orden (actualizadoA, que la línea no guarda) sale de la orden SOLO si su updated_at es el sello del
-//   cobro: nadie la tocó desde entonces. si se tocó después (una anulación, un nuevo cobro, un cambio por la API
-//   genérica), su valor de hoy ya no es el del cobro, y se toma el del propio cuerpo del evento para esa orden. ese es el
-//   resto que queda abierto: quien pueda editar el cuerpo de un evento PENDIENTE (el UPDATE del supervisor) Y haya
-//   tocado antes esa orden puede cambiar esa fecha y nada más.
+//   cobro: nadie la tocó desde entonces. si se tocó después (una anulación, un nuevo cobro, un cambio en la base), su
+//   valor de hoy ya no es el del cobro, y se toma el del propio cuerpo del evento para esa orden.
 //
 // con eso, el cuerpo esperado se VUELVE A COMPONER con los MISMOS compositores que la cobranza (cuerpoPagoRegistrado) y
 // la anulación (cuerpoPagoAnulado), con pagoId = el evento_id de la fila y pagoOriginalId = el del PAGO_REGISTRADO con

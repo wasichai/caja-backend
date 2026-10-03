@@ -138,7 +138,7 @@ class EntregaTest {
         private val hoy = LocalDate.parse("2026-10-02")
 
         // el sello de la transacción del cobro (created_at = now(), el comienzo de la transacción), el de la anulación, y
-        // el de una escritura suelta por la API genérica: otra transacción, otro instante
+        // el de una escritura suelta en la base: otra transacción, otro instante
         private val cobro = Instant.parse("2026-10-02T15:15:30.123456Z")
         private val anulacion = Instant.parse("2026-10-02T16:00:00.654321Z")
         private val suelta = Instant.parse("2026-10-02T15:15:30.123457Z")
@@ -261,7 +261,7 @@ class EntregaTest {
         fun `la fecha de una orden sale de la orden si nadie la toco desde el cobro, y si no, del cuerpo`() {
             // sin tocar desde el cobro (su updated_at es el sello del cobro): otra fecha en el cuerpo no coincide
             assertTrue(incoherencia(evento(legitimo.replace("2026-03-16", "2026-03-17")), delRecibo)!!.contains("ordenes"))
-            // tocada después (una anulación, o un cambio por la API genérica): no manda su fecha de hoy, y el evento
+            // tocada después (una anulación, o un cambio en la base): no manda su fecha de hoy, y el evento
             // legítimo se entrega igual
             val tocada = delRecibo.copy(ordenes = ordenes + (orden2 to OrdenDelEvento(LocalDate.parse("2027-01-01"), suelta)))
             assertNull(incoherencia(evento(legitimo), tocada))

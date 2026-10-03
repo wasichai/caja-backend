@@ -44,10 +44,10 @@ import java.time.LocalDate
 // del turno: si el reporte usara otra cosa, la suma de los arqueos de un mes podría no ser la recaudación del mes.
 //
 // UN RECIBO ROTO NO TUMBA EL REPORTE. un recibo con cifras imposibles (defectoDeRecaudacion: un total o una anulación
-// en negativo, una anulación mayor que el total, una línea de su cobro negativa) no lo escribe caja: llega por la API
-// genérica (wasichai#15) o por la base. queda fuera de las cifras, entero (el avance y la recaudación por área cuentan
-// los mismos recibos), y se nombra en recibos_con_datos_rotos. sin esto, un solo recibo así daría un 500 en todo rango
-// que incluyera su día.
+// en negativo, una anulación mayor que el total, una línea de su cobro negativa) no lo escribe caja: llega por la base,
+// o es de antes de GuardiaDeEscrituras, que cierra la API genérica (caja-backend#20). queda fuera de las cifras,
+// entero (el avance y la recaudación por área cuentan los mismos recibos), y se nombra en recibos_con_datos_rotos. sin
+// esto, un solo recibo así daría un 500 en todo rango que incluyera su día.
 //
 // SIN CANDADOS, y ese es el punto: el avance se mira MIENTRAS el cajero cobra, y una lectura que tomara el candado del
 // turno pondría la cola de la ventanilla a esperar por un informe. cada consulta lee en UNA foto de la base

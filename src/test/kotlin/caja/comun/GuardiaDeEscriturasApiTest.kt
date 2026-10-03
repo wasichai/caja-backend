@@ -8,167 +8,242 @@ import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.http.HttpStatus
+import tools.jackson.databind.JsonNode
 import java.time.LocalDate
 import java.time.OffsetDateTime
+import java.util.UUID
 
-// el detector de la segunda puerta (wasichai#15): toda creación, cambio o borrado que se hace FUERA de la api de caja
-// sobre un objeto protegido deja una línea ERROR. no veta nada, porque corre después de escribir: lo forjado queda
-// escrito, y la línea es lo que permite verlo. lo que caja escribe por su api no la deja
+// la guarda antes de escribir (caja-backend#20): ningún objeto de caja se escribe por la API genérica de wasichai
+// (POST/PUT/DELETE /api/objects/{objeto}/records), ni con el permiso del rol ni como ADMIN. 403 antes de tocar la base,
+// y una línea WARN. lo que caja escribe por su api pasa (lo prueba también el resto de la suite), y lo que no es de caja
+// (una caja, un área) se sigue escribiendo por esa puerta
 @ExtendWith(OutputCaptureExtension::class)
 class GuardiaDeEscriturasApiTest : CajaApiTest() {
+    // los dos vectores del #20
+
     @Test
-    fun `un cierre, sus lineas y su reversion forjados por la API generica se detectan`(salida: CapturedOutput) {
+    fun `un acta de anulacion forjada no se escribe, y el arqueo del turno no cambia`(salida: CapturedOutput) {
         val cajero = cuenta("CAJERO")
         val supervisor = cuenta("SUPERVISOR_CAJA")
-        val turno = cobrarTasa(cuenta("CAJERO"))
-        val cierre =
-            crear(
-                "cierre_turno",
-                cajero.token,
-                "turno" to turno,
-                "secuencia" to 1,
-                "fecha" to LocalDate.now(LIMA).toString(),
-                "registrado_en" to OffsetDateTime.now(LIMA).toString(),
-                "total_cobrado" to "0.00",
-                "total_anulado" to "0.00",
-                "neto" to "0.00",
-                "total_declarado" to "0.00",
-                "diferencia" to "0.00",
-                "recibos_emitidos" to 0,
-                "recibos_anulados" to 0,
-                "cobrado_con_evento" to "0.00",
-                "cobrado_sin_evento" to "0.00",
-                "usuario" to cajero.email,
-                "observacion" to "un cierre forjado",
-                "clave_secuencia" to "$turno|1"
-            )
-        val linea =
-            crear(
-                "cierre_turno_linea",
-                cajero.token,
-                "cierre_turno" to cierre,
-                "forma_pago" to "EFECTIVO",
-                "cobrado" to "0.00",
-                "anulado" to "0.00",
-                "neto" to "0.00",
-                "declarado" to "0.00",
-                "clave" to "$cierre|EFECTIVO"
-            )
-        val reversion =
-            crear(
-                "reversion_cierre",
-                supervisor.token,
-                "turno" to turno,
-                "cierre_revertido" to cierre,
-                "secuencia" to 2,
-                "motivo" to "FORJADA",
-                "fecha" to LocalDate.now(LIMA).toString(),
-                "registrado_en" to OffsetDateTime.now(LIMA).toString(),
-                "usuario" to supervisor.email,
-                "observacion" to "una reversión forjada",
-                "clave_secuencia" to "$turno|2"
-            )
+        val cobro = cobrar(cajero)
+        val antes = arqueo(cobro.turno, cajero)
 
-        listOf("cierre_turno" to cierre, "cierre_turno_linea" to linea, "reversion_cierre" to reversion).forEach { (objeto, id) ->
-            val detectada = lineaDe(salida, id)
-            assertTrue(detectada.contains(" ERROR "), detectada)
-            assertTrue(detectada.contains("CREATED") && detectada.contains(objeto), detectada)
-        }
+        // un SUPERVISOR_CAJA tiene CREATE sobre anulacion_recibo para anular: por la API genérica se saltaría el mismo
+        // día, el turno abierto, las órdenes que vuelven a PENDIENTE y el PAGO_ANULADO
+        val acta =
+            mapOf(
+                "recibo" to cobro.recibo,
+                "recibo_anulado" to cobro.recibo,
+                "caja" to cobro.caja.id,
+                "turno" to cobro.turno,
+                "fecha" to LocalDate.now(LIMA).toString(),
+                "motivo" to "UN ACTA FORJADA",
+                "importe" to "150.50",
+                "usuario" to supervisor.email,
+                "observacion" to "el dinero sale del cajón y el cierre cuadra igual"
+            )
+        val problema = tree(send("POST", "/api/objects/anulacion_recibo/records", mapOf("attributes" to acta), HttpStatus.FORBIDDEN, supervisor.token))
+
+        assertTrue(problema["detail"].asString().contains("anulacion_recibo") && problema["detail"].asString().contains("caja-backend#20"), problema.toString())
+        assertTrue(registros("anulacion_recibo", "recibo" to cobro.recibo).isEmpty(), "no quedó ningún acta")
+        assertEquals(antes, arqueo(cobro.turno, cajero), "el arqueo no resta nada")
+        assertTrue(rechazos(salida, "CREATE anulacion_recibo").isNotEmpty())
+
+        // la anulación de verdad, por la api de caja, sí
+        post("/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, supervisor.token)
+        assertEquals(1, registros("anulacion_recibo", "recibo" to cobro.recibo).size)
     }
 
     @Test
-    fun `lo que caja escribe por su api no se detecta, y un cambio de una orden por fuera si`(salida: CapturedOutput) {
-        val cajero = cuenta("CAJERO")
+    fun `un pago ENTREGADO no se reenvia con otro pagoId, ni uno PENDIENTE se explica por fuera`(salida: CapturedOutput) {
+        val supervisor = cuenta("SUPERVISOR_CAJA")
+        val entregado = cobrar(cuenta("CAJERO"))
+        val evento = registros("pago_evento", "evento_id" to entregado.pagoId).single()
+        cambiarEnLaBase("pago_evento", evento["id"].asString(), "estado" to "ENTREGADO", "entregado_en" to OffsetDateTime.now(LIMA).toString())
+        val guardado = registros("pago_evento", "evento_id" to entregado.pagoId).single()
+
+        // el UPDATE del supervisor (para explicar un pago) cambiaría el evento_id y el pagoId del cuerpo y lo volvería a
+        // PENDIENTE: la fila conserva su sello, pasa la defensa (a) y se reenvía con otro pagoId
+        val otroPagoId = UUID.randomUUID().toString()
+        val reenviado =
+            atributos(guardado) +
+                mapOf(
+                    "evento_id" to otroPagoId,
+                    "cuerpo" to guardado["attributes"]["cuerpo"].asString().replace(entregado.pagoId, otroPagoId),
+                    "estado" to "PENDIENTE"
+                )
+        send("PUT", "/api/objects/pago_evento/records/${evento["id"].asString()}", mapOf("attributes" to reenviado), HttpStatus.FORBIDDEN, supervisor.token)
+        val tras = registros("pago_evento", "evento_id" to entregado.pagoId).single()
+        assertEquals("ENTREGADO", tras["attributes"]["estado"].asString())
+        assertEquals(guardado["updatedAt"], tras["updatedAt"], "la fila no se tocó")
+        assertTrue(registros("pago_evento", "evento_id" to otroPagoId).isEmpty())
+
+        // ni un PENDIENTE pasa a EXPLICADO sin explicación, para que su turno cierre: eso es POST /api/caja/pagos/.../explicacion
+        val pendiente = cobrar(cuenta("CAJERO"))
+        val suyo = registros("pago_evento", "evento_id" to pendiente.pagoId).single()
+        val explicado = atributos(suyo) + ("estado" to "EXPLICADO")
+        send("PUT", "/api/objects/pago_evento/records/${suyo["id"].asString()}", mapOf("attributes" to explicado), HttpStatus.FORBIDDEN, supervisor.token)
+        assertEquals("PENDIENTE", registros("pago_evento", "evento_id" to pendiente.pagoId).single()["attributes"]["estado"].asString())
+        assertEquals(2, rechazos(salida, "UPDATE pago_evento").size)
+    }
+
+    // todos los objetos de caja
+
+    @Test
+    fun `ningun objeto de caja se da de alta, se cambia ni se borra por la API generica, ni como ADMIN`(salida: CapturedOutput) {
+        val supervisor = cuenta("SUPERVISOR_CAJA")
+        // un turno con todo lo que escribe caja: el cobro, un duplicado, la anulación, el cierre y su reversión
+        val cobro = cobrar(supervisor)
+        // el duplicado contesta el pdf: solo se mira el 201
+        send(
+            "POST",
+            "/api/caja/recibos/${cobro.numero}/duplicados",
+            mapOf("observacion" to "reimpresión pedida por el pagador"),
+            HttpStatus.CREATED,
+            supervisor.token
+        )
+        post("/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, supervisor.token)
+        registros("pago_evento", "turno" to cobro.turno).forEach {
+            cambiarEnLaBase("pago_evento", it["id"].asString(), "estado" to "ENTREGADO", "entregado_en" to OffsetDateTime.now(LIMA).toString())
+        }
+        val cierre =
+            post(
+                "/api/caja/turnos/cierre",
+                mapOf("caja" to cobro.caja.codigo, "declarado" to mapOf("EFECTIVO" to "0.00"), "observacion" to "cierre del turno"),
+                supervisor.token
+            )
+        post(
+            "/api/caja/turnos/reversion",
+            mapOf("caja" to cobro.caja.codigo, "motivo" to "ARQUEO MAL CONTADO", "observacion" to "se contó mal el cajón"),
+            supervisor.token
+        )
+        val cierreId = cierre["cierre_id"].asString()
+        val uno =
+            mapOf(
+                "recibo" to registros("recibo", "numero_impreso" to cobro.numero).single(),
+                "linea_recibo" to registros("linea_recibo", "recibo" to cobro.recibo).single(),
+                "pago_evento" to registros("pago_evento", "evento_id" to cobro.pagoId).single(),
+                "anulacion_recibo" to registros("anulacion_recibo", "recibo" to cobro.recibo).single(),
+                "reimpresion_recibo" to registros("reimpresion_recibo", "recibo" to cobro.recibo).single(),
+                "turno" to registros("turno", "caja" to cobro.caja.id).single(),
+                "cierre_turno" to registros("cierre_turno", "turno" to cobro.turno).single(),
+                "cierre_turno_linea" to registros("cierre_turno_linea", "cierre_turno" to cierreId).first(),
+                "reversion_cierre" to registros("reversion_cierre", "turno" to cobro.turno).single(),
+                "orden_de_cobro" to registros("orden_de_cobro", "referencia_externa" to cobro.referencia).single()
+            )
+        assertEquals(GuardiaDeEscrituras.PROTEGIDOS, uno.keys, "un registro de cada objeto de caja")
+
+        uno.forEach { (objeto, registro) ->
+            val id = registro["id"].asString()
+            val ruta = "/api/objects/$objeto/records"
+            val cuantos = total(objeto)
+
+            val alta = tree(send("POST", ruta, mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN))
+            assertTrue(alta["detail"].asString().contains("«$objeto»"), alta.toString())
+            send("PUT", "$ruta/$id", mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN)
+            send("DELETE", "$ruta/$id", null, HttpStatus.FORBIDDEN)
+
+            val tras = tree(send("GET", "$ruta/$id", null, HttpStatus.OK))
+            assertEquals(registro["attributes"], tras["attributes"], "$objeto no cambió")
+            assertEquals(registro["updatedAt"], tras["updatedAt"], "$objeto no se tocó")
+            assertEquals(cuantos, total(objeto), "ningún $objeto de más")
+            listOf("CREATE $objeto (alta)", "UPDATE $objeto $id", "DELETE $objeto $id").forEach { assertEquals(1, rechazos(salida, it).size, it) }
+        }
+    }
+
+    // la orden de cobro: su única puerta es el alta de caja
+
+    @Test
+    fun `una orden no se da de alta ni se cambia por la API generica, y por el alta de caja si`(salida: CapturedOutput) {
+        val referencia = "FUERA-${unico()}"
+        val porFuera =
+            mapOf(
+                "sistema_origen" to "rentas",
+                "referencia_externa" to referencia,
+                "clave_origen" to "rentas|$referencia",
+                "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
+                "importe" to "-50.00",
+                "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),
+                "actualizado_a" to LocalDate.now(LIMA).toString(),
+                "estado" to "PENDIENTE",
+                "observacion" to "escrita por la API genérica"
+            )
+        send("POST", "/api/objects/orden_de_cobro/records", mapOf("attributes" to porFuera), HttpStatus.FORBIDDEN, funcionario("SISTEMA_ORIGEN"))
+        assertTrue(registros("orden_de_cobro", "referencia_externa" to referencia).isEmpty())
+        // la línea nombra el importe que el alta habría rechazado: el que rompería un recibo
+        val alta = rechazos(salida, "CREATE orden_de_cobro").single { it.contains("-50.00") }
+        assertTrue(alta.contains("importe roto") && alta.contains("debe ser mayor que 0"), alta)
+
+        // el alta de caja, sí
+        val orden = post("/api/caja/ordenes-de-cobro", orden("importe" to "80.00"))["orden_id"].asString()
+        val guardada = tree(send("GET", "/api/objects/orden_de_cobro/records/$orden", null, HttpStatus.OK))
+
+        // un CAJERO tiene UPDATE sobre orden_de_cobro para cobrarla: no le baja el importe antes de cobrarla
+        val rebajada = atributos(guardada) + ("importe" to "0.50")
+        send("PUT", "/api/objects/orden_de_cobro/records/$orden", mapOf("attributes" to rebajada), HttpStatus.FORBIDDEN, funcionario("CAJERO"))
+        val tras = tree(send("GET", "/api/objects/orden_de_cobro/records/$orden", null, HttpStatus.OK))
+        assertEquals(guardada["attributes"], tras["attributes"])
+        assertEquals(1, rechazos(salida, "UPDATE orden_de_cobro $orden").size)
+    }
+
+    @Test
+    fun `lo que no es de caja se sigue escribiendo por la API generica`(salida: CapturedOutput) {
         val caja = nuevaCaja()
-        val orden = post("/api/caja/ordenes-de-cobro", orden())["orden_id"].asString()
+        cambiarComoAdmin("caja", caja.id, "activa" to false)
+        assertEquals(false, tree(send("GET", "/api/objects/caja/records/${caja.id}", null, HttpStatus.OK))["attributes"]["activa"].asBoolean())
+        assertTrue(rechazos(salida, "caja").none { it.contains(caja.id) })
+    }
+
+    // ayudas
+
+    private class Cobro(
+        val numero: String,
+        val recibo: String,
+        val turno: String,
+        val pagoId: String,
+        val referencia: String,
+        val caja: CajaDePrueba
+    )
+
+    // una orden de rentas, cobrada en una caja nueva por la api de caja
+    private fun cobrar(cajero: Cuenta): Cobro {
+        val caja = nuevaCaja()
+        val alta = post("/api/caja/ordenes-de-cobro", orden())
         val cobro =
             post(
                 "/api/caja/cobros",
-                mapOf("caja" to caja.codigo, "forma_pago" to "EFECTIVO", "ordenes" to listOf(orden), "observacion" to "cobro en ventanilla"),
+                mapOf(
+                    "caja" to caja.codigo,
+                    "forma_pago" to "EFECTIVO",
+                    "ordenes" to listOf(alta["orden_id"].asString()),
+                    "observacion" to "cobro en ventanilla"
+                ),
                 cajero.token
             )
-        val recibo = registros("recibo", "numero_impreso" to cobro["recibo"]["numero_impreso"].asString()).single()["id"].asString()
-        val evento = registros("pago_evento", "evento_id" to cobro["pago_id"].asString()).single()["id"].asString()
+        val numero = cobro["recibo"]["numero_impreso"].asString()
+        val recibo = registros("recibo", "numero_impreso" to numero).single()["id"].asString()
         val turno = registros("turno", "caja" to caja.id).single()["id"].asString()
-        val linea = registros("linea_recibo", "recibo" to recibo).single()["id"].asString()
-        listOf(recibo, evento, turno, linea, orden).forEach { id ->
-            assertEquals(emptyList<String>(), detectadas(salida, id), "la cobranza escribió $id por la api de caja")
-        }
-        // la caja la escribió el admin por la api genérica, pero no es un objeto protegido
-        assertEquals(emptyList<String>(), detectadas(salida, caja.id))
-
-        // la orden, cambiada por fuera de caja: la marcaría PAGADA sin recibo, o la devolvería a PENDIENTE
-        cambiarComoAdmin("orden_de_cobro", orden, "observacion" to "cambiada por fuera de caja")
-        assertTrue(lineaDe(salida, orden).contains("UPDATED"))
+        return Cobro(numero, recibo, turno, cobro["pago_id"].asString(), alta["referencia_externa"].asString(), caja)
     }
 
-    // el alta de caja (POST /api/caja/ordenes-de-cobro) es la única puerta de una orden: la API genérica se salta
-    // todas sus reglas (el importe, el sistema, la clave de origen, nacer PENDIENTE), así que toda alta por ella se
-    // anota. con un importe que el alta rechazaría, la línea dice cuál y por qué: ese es el que rompe un recibo
-    @Test
-    fun `una orden dada de alta por la API generica se detecta, y con el importe roto la linea lo dice`(salida: CapturedOutput) {
-        val origen = funcionario("SISTEMA_ORIGEN")
-        val buena = ordenPorFuera("10.00", origen)
-        val rota = ordenPorFuera("-50.00", origen)
+    private fun arqueo(
+        turno: String,
+        cajero: Cuenta
+    ): JsonNode = tree(send("GET", "/api/caja/turnos/$turno/arqueo", null, HttpStatus.OK, cajero.token))["arqueo"]
 
-        val deLaBuena = lineaDe(salida, buena)
-        assertTrue(deLaBuena.contains(" ERROR ") && deLaBuena.contains("CREATED") && deLaBuena.contains("orden_de_cobro"), deLaBuena)
-        assertTrue(deLaBuena.contains("alta"), deLaBuena)
-        assertTrue(!deLaBuena.contains("importe roto"), deLaBuena)
-        val deLaRota = lineaDe(salida, rota)
-        assertTrue(deLaRota.contains("importe roto") && deLaRota.contains("-50.00") && deLaRota.contains("debe ser mayor que 0"), deLaRota)
-    }
+    // cuántos registros de ese objeto hay en la base compartida
+    private fun total(objeto: String): Long = tree(send("GET", "/api/objects/$objeto/records?size=1", null, HttpStatus.OK))["totalElements"].asLong()
 
-    private fun ordenPorFuera(
-        importe: String,
-        token: String
-    ): String {
-        val referencia = "FUERA-${unico()}"
-        return crear(
-            "orden_de_cobro",
-            token,
-            "sistema_origen" to "rentas",
-            "referencia_externa" to referencia,
-            "clave_origen" to "rentas|$referencia",
-            "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
-            "importe" to importe,
-            "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),
-            "actualizado_a" to LocalDate.now(LIMA).toString(),
-            "estado" to "PENDIENTE",
-            "observacion" to "escrita por la API genérica"
-        )
-    }
+    @Suppress("UNCHECKED_CAST")
+    private fun atributos(registro: JsonNode): Map<String, Any?> = json.convertValue(registro["attributes"], Map::class.java) as Map<String, Any?>
 
-    private fun cobrarTasa(cajero: Cuenta): String {
-        val tasa = codigoDeTasa()
-        nuevaTasa(tasa, "12.30", LocalDate.now(LIMA).minusDays(1))
-        val caja = nuevaCaja()
-        post(
-            "/api/caja/cobros/tasas",
-            mapOf(
-                "caja" to caja.codigo,
-                "forma_pago" to "EFECTIVO",
-                "conceptos" to listOf(mapOf("codigo" to tasa, "cantidad" to 1)),
-                "observacion" to "cobro de tasas en ventanilla"
-            ),
-            cajero.token
-        )
-        return registros("turno", "caja" to caja.id).single()["id"].asString()
-    }
-
-    private fun crear(
-        objeto: String,
-        token: String,
-        vararg atributos: Pair<String, Any?>
-    ): String = tree(send("POST", "/api/objects/$objeto/records", mapOf("attributes" to atributos.toMap()), HttpStatus.CREATED, token))["id"].asString()
-
-    private fun detectadas(
+    // las líneas WARN de la guarda que nombran eso
+    private fun rechazos(
         salida: CapturedOutput,
-        id: String
-    ): List<String> = salida.out.lines().filter { it.contains("ESCRITURA FUERA DE CAJA") && it.contains(id) }
+        que: String
+    ): List<String> = salida.out.lines().filter { it.contains(" WARN ") && it.contains("ESCRITURA FUERA DE CAJA RECHAZADA: ") && it.contains(que) }
 
-    private fun lineaDe(
-        salida: CapturedOutput,
-        id: String
-    ): String = detectadas(salida, id).singleOrNull() ?: error("el detector no vio $id: ${detectadas(salida, id)}")
+    private companion object {
+        val ANULACION = mapOf("motivo" to "COBRO EN DEMASÍA", "observacion" to "el pagador pagó dos veces en ventanilla")
+    }
 }

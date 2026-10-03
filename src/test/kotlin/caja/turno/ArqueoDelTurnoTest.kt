@@ -168,7 +168,7 @@ class ArqueoDelTurnoTest {
         }
     }
 
-    // un recibo roto (escrito por la API genérica o en la base, nunca por la cobranza) no tumba el arqueo entero ni
+    // un recibo roto (escrito en la base, nunca por la cobranza) no tumba el arqueo entero ni
     // bloquea el cierre: queda fuera de las cifras y se nombra con su porqué. el invariante de ReciboDelTurno no cambia
     @Nested
     inner class DeLosRecibosRotos {
