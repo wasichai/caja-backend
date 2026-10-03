@@ -163,7 +163,7 @@ class EntregaTest {
             )
         private val ordenes =
             mapOf(orden1 to OrdenDelEvento(LocalDate.parse("2026-03-15"), cobro), orden2 to OrdenDelEvento(LocalDate.parse("2026-03-16"), cobro))
-        private val eventos = listOf(EventoDelRecibo(registradoId, registradoId.toString(), "PAGO_REGISTRADO", cobro))
+        private val eventos = listOf(EventoDelRecibo(registradoId, registradoId.toString(), "PAGO_REGISTRADO", cobro, "ENTREGADO"))
         private val delRecibo = ReciboDelEvento(recibo, cobro, lineas, ordenes, null, eventos)
 
         // el cuerpo que escribió la cobranza: el mismo compositor, con las órdenes de la petición
@@ -210,7 +210,7 @@ class EntregaTest {
         fun `un evento que no nacio en la transaccion de su recibo es una copia o un forjado, aunque su cuerpo diga lo mismo`() {
             val otro = UUID.randomUUID()
             val copia = evento(legitimo.replace(registradoId.toString(), otro.toString()), id = otro, creadoEn = suelta)
-            val conLaCopia = delRecibo.copy(eventos = eventos + EventoDelRecibo(otro, otro.toString(), "PAGO_REGISTRADO", suelta))
+            val conLaCopia = delRecibo.copy(eventos = eventos + EventoDelRecibo(otro, otro.toString(), "PAGO_REGISTRADO", suelta, "PENDIENTE"))
             assertTrue(incoherencia(copia, conLaCopia)!!.contains("copia"))
             // y el legítimo sigue coincidiendo
             assertNull(incoherencia(evento(legitimo), conLaCopia))
@@ -288,7 +288,7 @@ class EntregaTest {
             val conAnulacion =
                 delRecibo.copy(
                     anulacion = AnulacionDelEvento("COBRO EN DEMASÍA", hoy, anulacion),
-                    eventos = eventos + EventoDelRecibo(anuladoId, anuladoId.toString(), "PAGO_ANULADO", anulacion)
+                    eventos = eventos + EventoDelRecibo(anuladoId, anuladoId.toString(), "PAGO_ANULADO", anulacion, "PENDIENTE")
                 )
             val delAnulado = evento(anulado, tipo = "PAGO_ANULADO", id = anuladoId, creadoEn = anulacion)
             assertNull(incoherencia(delAnulado, conAnulacion))
@@ -314,10 +314,61 @@ class EntregaTest {
                     anulacion = AnulacionDelEvento("COBRO EN DEMASÍA", hoy, anulacion),
                     eventos =
                         eventos +
-                            EventoDelRecibo(forjadoId, forjadoId.toString(), "PAGO_ANULADO", suelta) +
-                            EventoDelRecibo(anuladoId, anuladoId.toString(), "PAGO_ANULADO", anulacion)
+                            EventoDelRecibo(forjadoId, forjadoId.toString(), "PAGO_ANULADO", suelta, "MUERTO") +
+                            EventoDelRecibo(anuladoId, anuladoId.toString(), "PAGO_ANULADO", anulacion, "PENDIENTE")
                 )
             assertNull(incoherencia(evento(anulado, tipo = "PAGO_ANULADO", id = anuladoId, creadoEn = anulacion), conForjadoAntes))
+        }
+
+        // de la salida: un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (caja-backend#23)
+
+        private val anulado = cuerpoPagoAnulado(anuladoId, registradoId.toString(), recibo, "COBRO EN DEMASÍA", hoy)
+        private val delAnulado = evento(anulado, tipo = "PAGO_ANULADO", id = anuladoId, creadoEn = anulacion)
+
+        // el recibo anulado, con su PAGO_REGISTRADO en ese estado
+        private fun anuladoConSuPago(estado: String?): ReciboDelEvento =
+            delRecibo.copy(
+                anulacion = AnulacionDelEvento("COBRO EN DEMASÍA", hoy, anulacion),
+                eventos =
+                    listOf(
+                        EventoDelRecibo(registradoId, registradoId.toString(), "PAGO_REGISTRADO", cobro, estado),
+                        EventoDelRecibo(anuladoId, anuladoId.toString(), "PAGO_ANULADO", anulacion, "PENDIENTE")
+                    )
+            )
+
+        @Test
+        fun `un PAGO_REGISTRADO sale siempre`() {
+            assertEquals(Salida.Sale, salida(evento(legitimo), delRecibo))
+            assertEquals(Salida.Sale, salida(evento(legitimo), delRecibo.copy(eventos = listOf(eventos.single().copy(estado = "PENDIENTE")))))
+        }
+
+        @Test
+        fun `un PAGO_ANULADO sale con su PAGO_REGISTRADO ENTREGADO, y espera mientras siga PENDIENTE`() {
+            assertNull(incoherencia(delAnulado, anuladoConSuPago("PENDIENTE")), "la espera no es una incoherencia")
+            assertEquals(Salida.Sale, salida(delAnulado, anuladoConSuPago("ENTREGADO")))
+            val espera = assertInstanceOf(Salida.Espera::class.java, salida(delAnulado, anuladoConSuPago("PENDIENTE")))
+            assertTrue(espera.motivo.contains(registradoId.toString()), espera.motivo)
+        }
+
+        @Test
+        fun `si su PAGO_REGISTRADO no llego, MUERTO o EXPLICADO, la anulacion no sale nunca y el motivo lo nombra`() {
+            listOf("MUERTO", "EXPLICADO", "OTRO", null).forEach { estado ->
+                val noSale = assertInstanceOf(Salida.NoSale::class.java, salida(delAnulado, anuladoConSuPago(estado)), "con el registrado $estado")
+                assertTrue(noSale.motivo.contains(registradoId.toString()) && noSale.motivo.contains("está $estado"), noSale.motivo)
+                assertTrue(noSale.motivo.contains("no se envía"), noSale.motivo)
+                assertTrue(recortar(noSale.motivo) == noSale.motivo, "cabe entero en ultimo_error: ${noSale.motivo.length}")
+            }
+        }
+
+        @Test
+        fun `un PAGO_REGISTRADO forjado y PENDIENTE no hace esperar a la anulacion legitima`() {
+            val forjadoId = UUID.randomUUID()
+            val conForjado =
+                anuladoConSuPago("ENTREGADO").let {
+                    it.copy(eventos = listOf(EventoDelRecibo(forjadoId, forjadoId.toString(), "PAGO_REGISTRADO", suelta, "PENDIENTE")) + it.eventos)
+                }
+            assertNull(incoherencia(delAnulado, conForjado))
+            assertEquals(Salida.Sale, salida(delAnulado, conForjado))
         }
 
         @Test
