@@ -318,7 +318,7 @@
       "name": "orden_de_cobro",
       "label": "Orden de cobro",
       "pluralLabel": "Órdenes de cobro",
-      "description": "Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo y a qué fecha está esa cifra. No es deuda tributaria: no tiene tributo, ejercicio ni periodo, y si los ganara la caja dejaría de servir para cobrar un puesto de mercado. La da de alta el sistema de origen por POST /api/caja/ordenes-de-cobro. La API genérica no la escribe (apiOnly: solo caja, por su api).",
+      "description": "Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo y a qué fecha está esa cifra. No es deuda tributaria: no tiene tributo, ejercicio ni periodo, y si los ganara la caja dejaría de servir para cobrar un puesto de mercado. La da de alta el sistema de origen por POST /api/caja/ordenes-de-cobro, con su cuenta de servicio: su sistema es el nombre de la cuenta. Es única por (sistema_origen, referencia_externa). La API genérica no la escribe (apiOnly: solo caja, por su api).",
       "apiOnly": true,
       "requiresReason": true,
       "uniqueConstraints": [
@@ -540,7 +540,7 @@
       "name": "anulacion_recibo",
       "label": "Anulación de recibo",
       "pluralLabel": "Anulaciones de recibo",
-      "description": "La anulación de un recibo el mismo día del pago: se agrega, y el recibo no se toca (recibo_movimiento de caja, tipo ANULACION). Las órdenes del recibo vuelven a PENDIENTE y, si el recibo avisó su pago, sale un PAGO_ANULADO en la misma transacción. Crearla es el privilegio ELIMINACION de caja; nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
+      "description": "La anulación de un recibo el mismo día del pago: se agrega, y el recibo no se toca (recibo_movimiento de caja, tipo ANULACION). Las órdenes del recibo vuelven a PENDIENTE y, si el recibo avisó su pago, sale un PAGO_ANULADO en la misma transacción. Crearla es el privilegio ELIMINACION de caja; nadie la edita ni la borra. Un recibo se anula una sola vez: su relación recibo es única. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
       "requiresReason": true,
       "appendOnly": true,

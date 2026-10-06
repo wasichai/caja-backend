@@ -11,14 +11,16 @@ Cómo preparar, iniciar y probar caja-backend en una máquina de desarrollo. La 
 | Docker | cualquiera reciente | PostgreSQL (`compose.yml`) y los tests de integración |
 | Node | >= 26 | solo si también corres el front, `../caja-ui` |
 
-Las librerías de wasichai (`wasichai:wasichai-bom:0.2.0` y sus starters) se resuelven así, en este orden:
+Las librerías de wasichai (`wasichai:wasichai-bom:0.3.2` y sus starters) se resuelven así, en este orden:
 
 1. **GitHub Packages**. Pide un token aunque sea para leer. En `~/.gradle/gradle.properties`:
    ```properties
    gpr.user=<usuario de github>
    gpr.key=<PAT con read:packages>
    ```
-   También sirven `GITHUB_ACTOR` / `GITHUB_TOKEN` en `develop/.env`.
+   También sirven `GITHUB_ACTOR` / `GITHUB_TOKEN`, en `develop/.env` o antepuestas a cada `./gradlew` (con la CLI de
+   GitHub: `GITHUB_ACTOR=<usuario> GITHUB_TOKEN=$(gh auth token) ./gradlew build integrationTest --rerun`). El token
+   necesita `read:packages`: **0.3.2 se descarga de GitHub Packages**, y sin él Gradle no resuelve el BOM.
 2. **mavenLocal**, como respaldo mientras no haya una release publicada. En un checkout de
    [wasichai](https://github.com/wasichai/wasichai):
    ```bash
@@ -91,7 +93,8 @@ curl http://localhost:8091/actuator/health       # {"status":"UP",...}
 
 El modelo (`area`, `caja`, `tasa`, `turno`, `recibo`, `orden_de_cobro`, `linea_recibo`, `pago_evento`,
 `anulacion_recibo`, `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre`, con sus dieciocho
-relaciones) está en
+relaciones, con sus banderas `apiOnly`, `appendOnly` y `requiresReason`, sus `uniqueConstraints` y la acción
+`ANULAR_AJENO`) está en
 `model/model.json`, los roles de caja en `model/roles.json`, y cuatro scripts de Python (solo librería estándar, 3.11 o más) lo cargan en un core que ya esté corriendo. El detalle de cada
 campo está en la sección «Modelo» del [README principal](../../README.md#modelo).
 
@@ -101,7 +104,7 @@ set -a; source develop/.env; set +a     # WASICHAI_CORE (http://localhost:8091),
 
 cd model
 python3 apply.py --validate-only        # el modelo cumple las reglas de core (no necesita core)
-python3 apply.py                        # crea 13 objetos y 18 relaciones; la segunda vez no crea nada
+python3 apply.py                        # crea 13 objetos, 18 relaciones y 1 acción (ANULAR_AJENO); la segunda vez no crea nada
 python3 apply_roles.py                  # crea o sincroniza SISTEMA_ORIGEN, CAJERO, SUPERVISOR_CAJA y TESORERIA
 python3 import_cajas.py --dry-run       # 5 cajas y 3 áreas del ejemplo, sin escribir
 python3 import_cajas.py                 # data/ejemplos/cajas.csv
@@ -147,18 +150,26 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 - **Una clase nueva de la API** hereda de `CajaApiTest`: antes de cada test aplica `model/model.json` y
   `model/roles.json` (como `apply.py` y `apply_roles.py`) y deja el token del admin en `token`. Da `funcionario("CAJERO")`
   (un usuario con un rol de `roles.json`), `funcionario(listOf(permiso("caja", "READ")))` (uno con un rol propio;
-  `rolPropio(permisos)` da el rol para dárselo a varios con `cuenta(rol)`),
+  `rolPropio(permisos)` da el rol para dárselo a varios con `cuenta(rol)`; un permiso puede ser una acción declarada,
+  como `permiso("recibo", "ANULAR_AJENO")`),
+  `cuentaDeServicio(prefijo, rol)` (la cuenta de servicio de un sistema de origen: su nombre, que es el `sistema_origen`
+  de sus órdenes, y su Bearer de 15 minutos; con `rol = "SISTEMA_ORIGEN"` por defecto),
+  `organizacion()` (la organización del admin sembrado, para `runBlocking { records.asPlatform(organizacion()) { … } }`:
+  un `RecordService` sin petición falla en `currentUser.require()`, y `asPlatform` es la forma de escribir en proceso
+  desde una prueba),
   `rejected(método, ruta, cuerpo, campo)` (un 400 cuyo primer error es ese campo), `orden(...)` (un alta válida con una
   referencia nueva), `registro(objeto, atributos)` (un registro por la API de core, de lo que no es de caja: una caja,
   un área), `cuenta("CAJERO")` (un usuario con
   su correo: el cajero de la sesión), `nuevaCaja()` (una caja activa con una serie única), `nuevaTasa(codigo, importe, desde, hasta)` (una vigencia de
   una tasa, con un área nueva; las cifras son de la prueba), `codigoDeTasa()` (un código único), `reciboEscrito(caja, numero, emitidoEn, documento)` (un recibo
-  con su turno escrito en la base, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento),
+  con su turno escrito en la base, sin pasar por la cobranza: un instante de emisión fijo o un recibo sin evento; el turno
+  es el de `(caja, cajero, fecha)` y se **reutiliza** si ya existe, porque esa tupla es única),
   `registros(objeto, filtros)` (lo guardado, leído como admin) y `cambiarComoAdmin(objeto, id, cambios)` (cambia campos
   por la API de core: el admin al dar de baja una caja). **Un objeto de caja no se escribe por la API de core, ni como
   admin** (`GuardiaDeEscrituras`, caja-backend#20): lo roto o forjado se escribe **en la base**, por debajo de la guarda,
-  con `forjarEnLaBase(objeto, atributos)` y `cambiarEnLaBase(objeto, id, cambios)` (lo que haría el publicador del buzón
-  al entregar un pago, o quien toca la base por fuera). Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
+  con `forjarEnLaBase(objeto, atributos)` y `cambiarEnLaBase(objeto, id, cambios)` (quien toca la base por fuera; el
+  publicador del buzón ya no escribe así: marca por `RecordService` como la plataforma). Los diez objetos de caja son
+  `apiOnly` (403 de wasichai por la API de core) y ocho `appendOnly` (409 al cambiarlos): por eso lo forjado va a la base. Cada clase fija `caja.municipalidad.nombre` por `@TestPropertySource`.
 - **La concurrencia y la transacción.** Las pruebas de diez y de veinte cobros simultáneos, la de diez anulaciones
   simultáneas y la del fallo a mitad (`CobroEnUnaTransaccionApiTest`, con su propio contexto por el
   `RecordChangeListener` de prueba), son el corazón de la cobranza: no se dan por buenas sin correrlas contra un
