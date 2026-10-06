@@ -1,9 +1,8 @@
 package caja.turno
 
 import caja.cobro.FORMAS_DE_PAGO
+import caja.comun.CuerpoEstricto
 import caja.comun.Importe
-import com.fasterxml.jackson.annotation.JsonAnySetter
-import com.fasterxml.jackson.annotation.JsonIgnore
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 import java.math.BigDecimal
@@ -70,18 +69,7 @@ class PeticionDeCierre(
     val fecha: String? = null,
     val declarado: Map<String, String?>? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que manda la ventanilla para reversar el cierre vigente de su turno: la caja, el motivo y por qué se registra
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
@@ -91,18 +79,7 @@ class PeticionDeReversion(
     val fecha: String? = null,
     val motivo: String? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // los turnos de hoy de quien pregunta, con su situación. sin ninguno es una respuesta (SIN_ABRIR, turnos vacío), no un
 // error: a las ocho de la mañana todos están así, porque el turno lo abre el primer cobro

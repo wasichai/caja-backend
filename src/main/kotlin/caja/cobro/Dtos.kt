@@ -1,8 +1,7 @@
 package caja.cobro
 
+import caja.comun.CuerpoEstricto
 import caja.comun.Importe
-import com.fasterxml.jackson.annotation.JsonAnySetter
-import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonInclude
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
@@ -30,18 +29,7 @@ class NuevaOrden(
     val pagadorNombre: String? = null,
     val pagadorExternoId: String? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // una orden de cobro como la guarda core. recibo es el id del que la cobró: PAGADA lo nombra (orden_recibo_ck)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
@@ -173,18 +161,7 @@ data class Tasa(
 class ConceptoPedido(
     val codigo: String? = null,
     val cantidad: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que manda la ventanilla para cobrar. el cajero y el día salen de la sesión: cajero y fecha_de_pago son opcionales
 // y solo se admiten iguales a los de la sesión. todo en cadena, para que las reglas rechacen sobre su campo, y una
@@ -197,18 +174,7 @@ class NuevoCobro(
     val fechaDePago: String? = null,
     val ordenes: List<String>? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que manda la ventanilla para cobrar tasas. sin precio ni importe: el precio sale de la tarifa vigente (regla 5),
 // y un importe o un precio en el cuerpo es un 400 que lo dice. el pagador puede ser anónimo: los tres opcionales. el
@@ -224,54 +190,21 @@ class NuevoCobroDeTasas(
     val pagadorExternoId: String? = null,
     val conceptos: List<ConceptoPedido>? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // la vista previa de un cobro de órdenes: las mismas órdenes y la misma fecha que el cobro
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class VistaPreviaDeOrdenes(
     val ordenes: List<String>? = null,
     val fechaDePago: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // la vista previa de un cobro de tasas: los mismos conceptos y la misma fecha que el cobro
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class VistaPreviaDeTasas(
     val conceptos: List<ConceptoPedido>? = null,
     val fechaDeCobro: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que costaría el cobro, sin cobrarlo: las líneas y el total como saldrían en el recibo (null si no hay ninguna
 // línea), si se puede cobrar y, si no, por qué. un problema no es un error: va en motivos
