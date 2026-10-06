@@ -298,6 +298,26 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         return rol
     }
 
+    // la cuenta de servicio de un sistema de origen: su nombre (el sistema_origen de sus órdenes, de 20 caracteres a lo sumo)
+    // y su Bearer, que dura 15 minutos
+    protected fun cuentaDeServicio(
+        prefijo: String = "rentas",
+        rol: String = "SISTEMA_ORIGEN"
+    ): Pair<String, String> {
+        val nombre = uniqueName(prefijo)
+        val creada = tree(send("POST", "/api/service-accounts", mapOf("name" to nombre, "roles" to listOf(rol)), HttpStatus.CREATED))
+        val acceso =
+            tree(
+                send(
+                    "POST",
+                    "/api/auth/token",
+                    mapOf("clientId" to creada["clientId"].asString(), "clientSecret" to creada["clientSecret"].asString()),
+                    HttpStatus.OK
+                )
+            )
+        return nombre to "Bearer ${acceso["token"].asString()}"
+    }
+
     private fun usuario(rol: String): Cuenta {
         val email = "${uniqueName(rol.lowercase())}@caja.test"
         send("POST", "/api/users", mapOf("email" to email, "displayName" to rol, "password" to CLAVE, "roles" to listOf(rol)), HttpStatus.CREATED)

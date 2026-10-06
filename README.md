@@ -394,6 +394,25 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 - **Todo importe va con su fecha** (regla 9) y en cadena (regla 1): `"importe": {"importe": "150.50", "actualizado_a":
   "2026-03-15"}`. El alta recibe el importe en cadena, `"150.50"`, nunca como número.
 
+**El alta de órdenes** la da un sistema de origen con su **cuenta de servicio** de wasichai, no con un usuario y una
+contraseña. El administrador la crea una vez, con el rol `SISTEMA_ORIGEN`; el nombre es el sistema (`[a-z0-9_-]`, de 1 a
+20 caracteres, que es la regla de `sistema_origen`) y la respuesta trae `clientId` y `clientSecret`, que no se vuelven a
+ver:
+
+```
+POST /api/service-accounts   {"name": "rentas", "roles": ["SISTEMA_ORIGEN"]}
+POST /api/auth/token         {"clientId": "…", "clientSecret": "…"}   ->  {"token": "…", "expiresAt": "…"}
+```
+
+El token se manda como `Authorization: Bearer …` y **dura 15 minutos**: el sistema lo pide de nuevo al vencer. Quién
+da de alta fija el `sistema_origen` de la orden:
+
+- **una cuenta de servicio**: el sistema es el nombre de su cuenta. El cuerpo puede omitir `sistema_origen`; si lo trae
+  (se normaliza igual: `" RENTAS "` es `rentas`) y no coincide, **403**. Si el nombre de la cuenta no cumple la regla de
+  `sistema_origen`, también 403;
+- **un ADMIN**: nombra el sistema en el cuerpo, como contingencia (sin él, 400 en `sistema_origen`);
+- **cualquier otra persona**, aunque tenga el rol `SISTEMA_ORIGEN` o permiso de CREATE: 403.
+
 El alta recibe `sistema_origen`, `referencia_externa`, `concepto`, `detalle`, `importe`, `fecha_exigibilidad`,
 `actualizado_a`, `pagador_documento`, `pagador_nombre`, `pagador_externo_id` y `observacion`. **Una propiedad que no
 sea una de ésas es un 400 que la nombra** (`tributo`, `ejercicio`…). El importe va en cadena, de hasta 13 enteros y 2
@@ -1154,7 +1173,7 @@ cada uno de los trece objetos del modelo.
 
 | Rol               | Puede                                                    |
 | ----------------- | -------------------------------------------------------- |
-| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes. **Hueco declarado**: el `sistema_origen` sale del cuerpo, no del usuario, así que cualquier usuario `SISTEMA_ORIGEN` puede dar de alta órdenes a nombre de otro sistema; ligarlo a la cuenta espera las cuentas de servicio (wasichai#17) |
+| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: es el rol de la **cuenta de servicio** de un sistema de origen, y da de alta órdenes. Una persona con este rol recibe 403 en el alta (ver «El alta de órdenes») |
 | `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime. READ y CREATE sobre `cierre_turno` y `cierre_turno_linea`: cierra su turno. READ sobre `reversion_cierre`: no reversa |
 | `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero), sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno), y **UPDATE sobre `pago_evento`** (explica un pago sin entregar) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |

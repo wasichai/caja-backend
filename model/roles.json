@@ -3,7 +3,7 @@
     {
       "name": "SISTEMA_ORIGEN",
       "label": "Sistema de origen",
-      "description": "El usuario técnico de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor.",
+      "description": "El rol de la cuenta de servicio de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor. Su nombre es el sistema de origen de sus órdenes. Una persona con este rol no da de alta.",
       "permisos": {
         "orden_de_cobro": ["READ", "CREATE"]
       }
