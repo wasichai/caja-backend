@@ -147,24 +147,6 @@ class Registros(
         return withContext(EscrituraDeCaja) { read(type, records.update(objectName, id, RecordRequest(escribibles(objectName, stored + attributes)))) }
     }
 
-    // el valor más alto que guarda un campo. los null quedan fuera: postgres los ordena primero al descender
-    suspend fun highest(
-        objectName: String,
-        field: String
-    ): String? {
-        val criterion =
-            RecordCriterion { definition, _ ->
-                "${definition.fields.first { it.name == field }.columnName} IS NOT NULL"
-            }
-        return records
-            .list(objectName, RecordQuery(page = PageRequest.of(0, 1), sort = field, descending = true, criteria = listOf(criterion)))
-            .content
-            .firstOrNull()
-            ?.attributes
-            ?.get(field)
-            ?.toString()
-    }
-
     private fun <T : Any> read(
         type: Class<T>,
         response: RecordResponse
