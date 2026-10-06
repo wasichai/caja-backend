@@ -127,9 +127,8 @@ class ReglasTest {
         assertEquals("estado", rechazado { estadoOrden("VENCIDA") })
     }
 
-    // la frontera: una orden no lleva tributo, ejercicio ni periodo, ni nada que la caja no conozca
-
-    // la frontera: una orden no lleva tributo, ejercicio ni periodo, y los que vengan se nombran todos en el mismo 400
+    // la frontera: una orden no lleva tributo, ejercicio ni periodo, ni nada que la caja no conozca, y lo que venga se
+    // nombra entero en el mismo 400
     @Test
     fun `un campo desconocido se rechaza con su nombre`() {
         sinCamposDesconocidos(emptyList(), "una orden de cobro")
