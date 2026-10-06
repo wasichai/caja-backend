@@ -9,7 +9,6 @@ import caja.cobro.PENDIENTE
 import caja.cobro.PagoEvento
 import caja.cobro.Recibo
 import caja.cobro.Turno
-import caja.cobro.campo
 import caja.cobro.produceEvento
 import caja.comun.ANULACION_RECIBO
 import caja.comun.Candado
@@ -24,6 +23,8 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
 import caja.turno.LibroDelTurno
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service

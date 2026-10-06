@@ -2,7 +2,6 @@ package caja.buzon
 
 import caja.cobro.PagoEvento
 import caja.cobro.Recibo
-import caja.cobro.campo
 import caja.comun.Candado
 import caja.comun.Candados
 import caja.comun.Observacion
@@ -11,7 +10,8 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
-import caja.recibo.sinCamposDesconocidos
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
 import org.springframework.stereotype.Service
 import wasichai.core.audit.AuditOperation
 import wasichai.core.audit.AuditService

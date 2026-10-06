@@ -1,8 +1,9 @@
 package caja.recaudacion
 
 import caja.cobro.PAGO_DE_TASA
-import caja.recibo.diaPedido
-import caja.recibo.rangoDeDias
+import caja.comun.campo
+import caja.comun.diaPedido
+import caja.comun.rangoDeDias
 import caja.turno.defectoDeLasCifras
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.ValidationException
@@ -188,19 +189,8 @@ fun rangoPedido(
     hoy: LocalDate
 ): Rango {
     val errores = mutableListOf<FieldViolation>()
-
-    fun dia(
-        valor: String?,
-        campo: String
-    ): LocalDate? =
-        try {
-            diaPedido(valor, campo)
-        } catch (e: ValidationException) {
-            errores += e.violations
-            null
-        }
-    val primero = dia(desde, "desde")
-    val ultimo = dia(hasta, "hasta")
+    val primero = campo(errores) { diaPedido(desde, "desde") }
+    val ultimo = campo(errores) { diaPedido(hasta, "hasta") }
     if (errores.isNotEmpty()) throw ValidationException("El rango no es válido", errores)
     val fin = ultimo ?: hoy
     val inicio = primero ?: fin.withDayOfYear(1)

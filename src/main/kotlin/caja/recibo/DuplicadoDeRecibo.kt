@@ -3,7 +3,6 @@ package caja.recibo
 import caja.cobro.Caja
 import caja.cobro.LineaRecibo
 import caja.cobro.Recibo
-import caja.cobro.campo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.CAJA
 import caja.comun.Candado
@@ -15,6 +14,8 @@ import caja.comun.RECIBO
 import caja.comun.REIMPRESION_RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
 import caja.emision.ReciboPdf
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions

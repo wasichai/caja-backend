@@ -1,5 +1,6 @@
 package caja.cobro
 
+import caja.comun.campo
 import wasichai.core.common.ConflictException
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException

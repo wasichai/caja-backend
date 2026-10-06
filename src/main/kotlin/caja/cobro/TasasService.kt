@@ -7,6 +7,7 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TASA
+import caja.comun.campo
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions

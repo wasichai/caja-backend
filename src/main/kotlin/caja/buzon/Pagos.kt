@@ -1,9 +1,8 @@
 package caja.buzon
 
 import caja.cobro.PagoEvento
-import caja.comun.LIMA
+import caja.comun.enLima
 import wasichai.core.common.ValidationException
-import java.time.Instant
 import java.util.UUID
 
 // las reglas de la pantalla de los pagos sin entregar (PagoController y ExplicarPagoSinEntregar de caja)
@@ -48,5 +47,3 @@ fun pagoDelBuzon(
         entregadoEn = evento.entregadoEn?.let(::enLima),
         explicacion = evento.explicacion
     )
-
-private fun enLima(instante: Instant): String = instante.atZone(LIMA).toOffsetDateTime().toString()

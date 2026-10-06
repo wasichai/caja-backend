@@ -1,7 +1,7 @@
 package caja.cobro
 
 import caja.comun.Importe
-import caja.comun.LIMA
+import caja.comun.enLima
 import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.ConflictException
 import wasichai.core.common.ForbiddenException
@@ -183,11 +183,7 @@ fun respuestaDelCobro(
                 pagadorExternoId = recibo.pagadorExternoId,
                 formaPago = recibo.formaPago!!,
                 tipoPago = recibo.tipoPago!!,
-                emitidoEn =
-                    recibo.emitidoEn!!
-                        .atZone(LIMA)
-                        .toOffsetDateTime()
-                        .toString(),
+                emitidoEn = enLima(recibo.emitidoEn!!),
                 total = Importe.de(recibo.total!!, fecha),
                 lineas = lineasEnOrden(lineas).map { lineaRespuesta(it, fecha, codigos) }
             ),

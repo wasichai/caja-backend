@@ -8,6 +8,7 @@ import caja.comun.PAGO_EVENTO
 import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
+import caja.comun.campo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.FieldViolation
@@ -161,15 +162,3 @@ class CobroService(
         val ordenes: List<UUID>
     )
 }
-
-// una regla sobre la petición: su valor, o su 400 anotado en errores para juntarlos todos en uno
-internal fun <T> campo(
-    errores: MutableList<FieldViolation>,
-    regla: () -> T
-): T? =
-    try {
-        regla()
-    } catch (e: ValidationException) {
-        errores += e.violations
-        null
-    }
