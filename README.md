@@ -767,8 +767,8 @@ sobre `emitido_en`, los dos incluidos: `hasta` llega hasta las 23:59:59 de Lima)
 se resuelve con un `EXISTS` sobre la tabla de `anulacion_recibo`). Un rango al revés, una fecha mal escrita o un estado
 desconocido son **400** (un filtro que no se entiende no es «todos»). Una búsqueda sin resultados es una página vacía.
 
-El orden es `emitido_en` descendente con **desempate estable por id**: el `ORDER BY` de core es de una sola columna, así
-que se leen los recibos entre el instante del último de la página y el del primero, se cuentan los más recientes, y la
+El orden es `emitido_en` descendente con **desempate estable por id**. Se escribió cuando el `ORDER BY` de core (0.2.0) era de
+una sola columna, y se queda tal cual aunque 0.3.x ya termina todo orden con `id` (D21): se leen los recibos entre el instante del último de la página y el del primero, se cuentan los más recientes, y la
 página es el tramo que le toca en el orden (`emitido_en`, `id`). Dos recibos del mismo instante no se repiten ni se
 pierden al pasar de página. Esas lecturas, y las de las anulaciones y reimpresiones de la página, van en **una
 transacción de solo lectura en `REPEATABLE READ`** (`Transaccion.lectura`): ven una sola foto de la base, y un cobro que
@@ -1219,14 +1219,14 @@ número. Lo mismo la conciliación: cuenta los eventos de los turnos de esa `fec
   recibo roto»).
 - **Una caja o un cajero que no existen son 400** en `caja` o en `cajero`, no un avance en cero: una errata se leería
   como «no cobró nada». Un cajero existe para el avance si abrió algún turno, cualquier día.
-- **Cada fila se lee una sola vez.** Core ordena por una sola columna (por defecto `created_at`) y pagina con
-  `LIMIT`/`OFFSET`. Sobre una columna con empates, postgres no garantiza el mismo orden de una consulta a otra, y los
-  empates son lo normal: las líneas de un recibo comparten su `created_at`. Con cobros simultáneos, una suma sobre esas
+- **Cada fila se lee una sola vez.** Antes de 0.3.x, core ordenaba por una sola columna (por defecto `created_at`) y
+  paginaba con `LIMIT`/`OFFSET`; sobre una columna con empates, postgres no garantiza el mismo orden de una consulta a
+  otra, y los empates son lo normal: las líneas de un recibo comparten su `created_at`. Con cobros simultáneos, una suma sobre esas
   páginas contaba unas líneas dos veces y otras ninguna (`RecaudacionApiTest` lo reproducía con 920 líneas). Por eso
   `Registros.all`, y con él `byRelation` y todo lo que lee varias páginas (también `LibroDelTurno`, que alimenta el
   arqueo y el cierre), **pagina por `id`**, que es único, y aplica el orden pedido después, sobre todo lo leído, con el
-  id como desempate. wasichai 0.3.x ya termina todo `ORDER BY` con `id` (D21, wasichai#20), así que este rodeo no estorba
-  y se queda: ver «Lo que no se migra, y por qué».
+  id como desempate. Hoy wasichai 0.3.x termina todo `ORDER BY` con `id` (D21, wasichai#20), así que ese empate ya no
+  se repite entre páginas; este rodeo no estorba y se queda: ver «Lo que no se migra, y por qué».
 - **El límite**: se agrega en la aplicación, sobre lo que core devuelve página por página (200 registros), no con un
   `GROUP BY` en la base. Un rango de un año con mucho movimiento es lento; un agregado en la base necesitaría una
   agregación en wasichai (el buzón ya no lee tablas físicas: lee por `RecordService`, como la plataforma).
