@@ -2,6 +2,7 @@ package caja.buzon
 
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import wasichai.core.common.WasichaiException
 import java.time.Clock
 import java.time.OffsetDateTime
 import kotlin.coroutines.cancellation.CancellationException
@@ -24,7 +25,8 @@ import kotlin.coroutines.cancellation.CancellationException
 //
 // una organización cuyo buzón revienta no tumba a las demás: se registra y la vuelta sigue. lo ya marcado queda marcado,
 // y lo que no se marcó sigue PENDIENTE para la vuelta siguiente; si el destino ya lo tenía, lo recibe otra vez con el
-// mismo pagoId y lo deduplica
+// mismo pagoId y lo deduplica. un evento cuya fila la plataforma no deja marcar no atasca a los de su organización: deja
+// su ERROR y la vuelta sigue (intentar)
 @Service
 class PublicadorDelBuzon(
     private val store: BuzonStore,
@@ -94,8 +96,15 @@ class PublicadorDelBuzon(
     // un evento, y lo que no se esperaba (EntregarEventos de caja, #109): un fallo que no es del destino (la base al
     // leer su recibo o al marcarlo) CUENTA COMO UN INTENTO, con su tipo en ultimo_error (el mensaje va al registro, con su
     // traza), y la vuelta sigue con el siguiente. si no contara, el evento, primero en la cola, se reintentaría en cada
-    // vuelta sin morir ni avisar, y atascaría el buzón de su organización. lo que no se atrapa es un fallo al anotar ESE
-    // intento: entonces no hay dónde contarlo, y la vuelta de la organización se corta (lo ya anotado queda anotado).
+    // vuelta sin morir ni avisar, y atascaría el buzón de su organización. si tampoco se puede anotar ESE intento:
+    // - porque la plataforma rechaza la fila misma (una WasichaiException: un valor que su tipo no admite, escrito en la
+    //   base por fuera de caja tras quitar el CHECK de su columna; el update de core reescribe la fila entera y vuelve a
+    //   validar cada campo), ese evento no se puede marcar nunca. es un problema de ese evento, no del buzón: sigue
+    //   PENDIENTE sin contar el intento, deja en cada vuelta una línea ERROR que lo nombra (filaRechazada) hasta que
+    //   alguien corrija la fila en la base, y la vuelta sigue con el siguiente. si llegó a salir, sale otra vez con el
+    //   mismo pagoId, y el destino lo deduplica;
+    // - por otro fallo (la base caída), no hay dónde contarlo, y la vuelta de la organización se corta (lo ya anotado
+    //   queda anotado).
     // null: el evento espera a su pago, y no hubo intento
     private suspend fun intentar(
         buzon: BuzonStore.Buzon,
@@ -109,12 +118,39 @@ class PublicadorDelBuzon(
             log.warn("El evento {} no se pudo entregar por un fallo inesperado; cuenta como intento", evento.eventoId, e)
             val error = recortar("Fallo inesperado al entregar: ${e.javaClass.simpleName}. Se reintenta: el detalle está en el registro")
             val marca = marcaDe(Respuesta.NoContesta(error), evento.intentos, propiedades.intentos)
-            val anotado = store.fallido(buzon, evento, error, muere = marca == Marca.MUERTO)
+            val anotado =
+                try {
+                    store.fallido(buzon, evento, error, muere = marca == Marca.MUERTO)
+                } catch (rechazo: WasichaiException) {
+                    filaRechazada(buzon, evento, rechazo)
+                    false
+                }
             Intento(evento, null, marca, error, anotado)
         }
 
+    // UNA línea ERROR por un evento cuya fila la plataforma no deja marcar. cada valor en una sola línea (enUnaLinea),
+    // como la alerta: el tipo y el destino son lo que haya en la base. sin la traza: la lleva el WARN del fallo inesperado
+    private fun filaRechazada(
+        buzon: BuzonStore.Buzon,
+        evento: EventoDelBuzon,
+        rechazo: WasichaiException
+    ) {
+        log.error(
+            "El evento {} del buzón ({}, destino {}, recibo {}) de la organización {} no se puede anotar: la plataforma rechaza su fila " +
+                "({}). Sigue PENDIENTE, sin contar el intento, y vuelve en cada vuelta hasta que alguien corrija la fila en la base; la " +
+                "vuelta sigue con el siguiente",
+            enUnaLinea(evento.eventoId),
+            enUnaLinea(evento.tipo),
+            enUnaLinea(evento.sistemaDestino),
+            enUnaLinea(evento.recibo),
+            buzon.organizacion,
+            enUnaLinea(rechazo.message + rechazo.violations.joinToString("") { "; ${it.field} ${it.message}" })
+        )
+    }
+
     // un evento, tal como se leyó: se comprueba, se entrega (si coincide y le toca salir) y se anota. anotado es false si
-    // otro publicador ya lo había anotado desde que se leyó: entonces este intento no cuenta. null si es un PAGO_ANULADO
+    // otro publicador ya lo había anotado desde que se leyó (o, en intentar, si la plataforma rechaza su fila): entonces
+    // este intento no cuenta. null si es un PAGO_ANULADO
     // cuyo PAGO_REGISTRADO sigue PENDIENTE: no se llamó ni se anotó nada, y no cuenta intento (salida)
     suspend fun entregarUno(
         buzon: BuzonStore.Buzon,

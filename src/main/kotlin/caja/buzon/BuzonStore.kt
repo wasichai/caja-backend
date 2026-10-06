@@ -148,8 +148,10 @@ class BuzonStore(
         )
 
     // una marca, en su propia transacción y bajo el candado de su evento: lo relee y, si sigue PENDIENTE con los intentos
-    // leídos, escribe lo guardado con los cambios encima (el update de core reemplaza cada campo). el candado se suelta
-    // con el commit
+    // leídos, escribe lo guardado con los cambios encima (el update de core reemplaza cada campo, y vuelve a validarlos
+    // todos: una fila con un valor que su tipo no admite, escrita en la base por fuera de caja tras quitar el CHECK de su
+    // columna, no se puede marcar, y lanza la WasichaiException de la plataforma; PublicadorDelBuzon.intentar). el
+    // candado se suelta con el commit
     private suspend fun marcar(
         buzon: Buzon,
         evento: EventoDelBuzon,

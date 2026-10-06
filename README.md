@@ -1039,14 +1039,21 @@ destino viaja en él **tachado**: el token configurado y todo lo que parece una 
 
 **Un fallo inesperado con un evento** (la base al leer su recibo o al marcarlo; `EntregarEventos` de `caja`, #109)
 **cuenta como un intento**, con su tipo en `ultimo_error` y su traza en el registro, y la vuelta sigue con el siguiente:
-un evento envenenado, primero en la cola, no atasca el buzón de su organización para siempre. Si ni siquiera se puede
-anotar ese intento, la vuelta de esa organización se corta; las demás siguen. Lo ya marcado queda marcado, y lo que no
-se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo deduplica.
+un evento envenenado, primero en la cola, no atasca el buzón de su organización para siempre. Si ese intento tampoco se
+puede anotar porque la plataforma rechaza la fila misma (un valor que su tipo no admite, escrito en la base por fuera de
+caja tras quitar el `CHECK` de su columna: el `update` de core reescribe la fila entera y vuelve a validar cada campo),
+es un problema de ese evento: sigue `PENDIENTE` sin contar el intento, deja en cada vuelta una línea ERROR que lo
+nombra hasta que alguien corrija la fila en la base, y la vuelta sigue con el siguiente. Si no se puede anotar por otra
+causa (la base caída), la vuelta de esa organización se corta; las demás siguen. Lo ya marcado queda marcado, y lo que
+no se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo deduplica.
 
 **Lo que cuesta.** Leer y marcar por `RecordService` en vez de por SQL propio hace unas 4 veces más consultas por evento
 (cada `list` y cada `update` cargan la definición del objeto): medido en local, cada evento tarda unas 2 veces más (6 a
 8 ms más) y una vuelta vacía unos 10 ms más (la conexión del cerrojo, la lista de organizaciones y un `list`). A cambio,
-el buzón ya no depende de nombres de tablas que wasichai no promete.
+el buzón ya no depende de nombres de tablas que wasichai no promete. Y la auditoría crece: cada marca es un `update` de
+core, que guarda en `audit_log` la fila entera antes y después, con el `cuerpo`, que lleva el nombre y el documento del
+pagador; con `caja.buzon.intentos: 8`, un evento que no se entrega deja hasta 16 copias. El tamaño de esa tabla y la
+retención de esos datos personales (quién la purga y cuándo) se deciden en el despliegue.
 
 **Esta versión se despliega sin réplicas mezcladas.** Las claves de los candados cambiaron: el cerrojo del buzón y los
 candados de `Candados` son ahora de `ClusterLock`, con su `lockId` (los primeros 64 bits del SHA-256) de `caja.buzon` y

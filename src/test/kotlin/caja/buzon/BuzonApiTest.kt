@@ -652,6 +652,57 @@ class BuzonApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `un pago_evento con un valor que su tipo no admite, escrito en la base antes que uno legitimo, no atasca el buzon`(salida: CapturedOutput) {
+        val cobro = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 200)
+        val malo = UUID.randomUUID().toString()
+        val tabla = runBlocking { tablaDe("pago_evento") }
+        val eventoId = runBlocking { columnaDe("pago_evento", "evento_id") }
+        // en la base, un ENUM es una columna text con un CHECK de sus opciones, y quien escribe en la base con el dueño de
+        // las tablas también lo quita. por SQL crudo, por debajo del almacén de wasichai: una copia del legítimo con un tipo
+        // fuera de sus opciones y anterior a él, primero en la cola. no coincide con su recibo y muere, pero el update de
+        // core reescribe la fila entera, vuelve a validar cada campo y la rechaza: no se puede marcar, ni de respaldo
+        sinElCheckDe("pago_evento", "tipo") {
+            val legitimo = evento(cobro.pagoId)["id"].asString()
+            runBlocking {
+                // columna -> lo que lleva la copia: lo mismo que el legítimo (null), salvo lo que se nombra
+                val copia =
+                    mapOf(
+                        "evento_id" to "'$malo'::uuid",
+                        "tipo" to "'pago_registrado'",
+                        "sistema_destino" to null,
+                        "recibo" to null,
+                        "turno" to null,
+                        "cuerpo" to null,
+                        "estado" to "'PENDIENTE'",
+                        "intentos" to "0"
+                    ).entries.associate { (campo, valor) -> "\"${columnaDe("pago_evento", campo)}\"".let { it to (valor ?: it) } }
+                ejecutar(
+                    "INSERT INTO $tabla (organization_id, created_by, updated_by, created_at, updated_at, ${copia.keys.joinToString(", ")}) " +
+                        "SELECT organization_id, created_by, updated_by, created_at - interval '1 minute', created_at - interval '1 minute', " +
+                        "${copia.values.joinToString(", ")} FROM $tabla WHERE id = '$legitimo'::uuid"
+                )
+            }
+            try {
+                vuelta()
+
+                assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString(), "el legítimo sale en la misma vuelta")
+                assertFalse(salida.out.contains("no se pudo sacar en esta vuelta"), "la vuelta de la organización no se cortó")
+                assertTrue(origen.de(malo).isEmpty(), "el malo no se envió")
+                val guardado = evento(malo)["attributes"]
+                assertEquals("PENDIENTE", guardado["estado"].asString(), "no se pudo marcar: sigue como estaba")
+                assertEquals(0, guardado["intentos"].asInt())
+                // una sola línea ERROR que nombra el evento y por qué no se puede anotar
+                val error = salida.out.lines().single { it.contains(" ERROR ") && it.contains(malo) }
+                assertTrue(error.contains("pago_registrado") && error.contains("tipo must be one of"), error)
+            } finally {
+                // la base es compartida: la fila mala no queda para las vueltas de las demás pruebas, y el CHECK vuelve
+                runBlocking { ejecutar("DELETE FROM $tabla WHERE \"$eventoId\" = '$malo'::uuid") }
+            }
+        }
+    }
+
+    @Test
     fun `la alerta de un pago que murio no se pierde aunque la vuelta se corte despues`(salida: CapturedOutput) {
         val muerto = cobrar(PRUEBAS)
         val despues = cobrar(PRUEBAS)
@@ -905,6 +956,36 @@ class BuzonApiTest : CajaApiTest() {
             bloque()
         } finally {
             runBlocking { ejecutar("DROP TRIGGER IF EXISTS $disparador ON ${tablaDe("pago_evento")}") }
+        }
+    }
+
+    // mientras corre el bloque, la columna de ese campo no tiene su CHECK (el de las opciones de un ENUM): lo que haría
+    // quien escribe en la base con el dueño de las tablas. al terminar vuelve tal cual, así que el bloque deja la columna
+    // como la encontró
+    private fun sinElCheckDe(
+        objeto: String,
+        campo: String,
+        bloque: () -> Unit
+    ) {
+        val tabla = runBlocking { tablaDe(objeto) }
+        val (nombre, definicion) =
+            runBlocking {
+                db
+                    .sql(
+                        "SELECT c.conname::text, pg_get_constraintdef(c.oid) FROM pg_constraint c " +
+                            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) " +
+                            "WHERE c.conrelid = to_regclass(:tabla) AND c.contype = 'c' AND a.attname = :columna"
+                    ).bind("tabla", tabla)
+                    .bind("columna", columnaDe(objeto, campo))
+                    .map { row, _ -> row.get(0, String::class.java)!! to row.get(1, String::class.java)!! }
+                    .one()
+                    .awaitSingle()
+            }
+        runBlocking { ejecutar("ALTER TABLE $tabla DROP CONSTRAINT \"$nombre\"") }
+        try {
+            bloque()
+        } finally {
+            runBlocking { ejecutar("ALTER TABLE $tabla ADD CONSTRAINT \"$nombre\" $definicion") }
         }
     }
 
