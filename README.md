@@ -930,11 +930,18 @@ configuración, no un despliegue. Por variables: `CAJA_BUZON_DESTINOS_RENTAS_URL
 `caja.buzon.BucleDelBuzon` es un `SmartLifecycle` que solo arranca con `habilitado`: espera el intervalo, da una vuelta y
 vuelve a esperar. En cada vuelta:
 
-1. Intenta **`CerrojoBuzon`**, un `pg_try_advisory_lock` **de sesión** sobre una conexión propia (el `CerrojoEmision` de
-   `srtm`). Si otro lo tiene, la vuelta no hace nada: **un solo publicador por base, no uno por réplica**. Una instancia
-   que muere lo suelta con su sesión.
-2. Con el cerrojo, recorre cada organización y lee hasta `por-vuelta` eventos `PENDIENTE`, por orden de creación
-   (`BuzonStore`).
+1. Intenta **`CerrojoBuzon`**: `ClusterLock.tryLock("caja.buzon")` de wasichai, un `pg_try_advisory_lock` **de
+   sesión**. Si otro lo tiene, la vuelta no hace nada: **un solo publicador por base, no uno por réplica**. Una instancia
+   que muere lo suelta con su sesión. **El cerrojo abre una conexión propia en cada vuelta, por debajo del pool**, y la
+   cierra al soltarlo, así el candado nunca vuelve al pool tomado: es una conexión nueva cada `intervalo`, también
+   cuando no hay nada que entregar, y cuenta en el `max_connections` de la base.
+2. Con el cerrojo, recorre cada organización que tiene `pago_evento` y lee hasta `por-vuelta` eventos `PENDIENTE`, por
+   orden de creación, de 200 en 200 (`BuzonStore`). Lee y marca por `RecordService` **como la plataforma** de esa
+   organización (`asPlatform` de wasichai: sin usuario y sin roles, como un ADMIN), sin SQL sobre las tablas de datos.
+   **Una organización con `pago_evento` y el modelo de caja incompleto ya no se salta en silencio**: si le falta algo
+   que la lista de pendientes lee, su vuelta falla con **un ERROR en cada vuelta** («El buzón de la organización … no
+   se pudo sacar en esta vuelta») y las demás siguen; si le falta algo del recibo, cada evento cuenta un intento fallido
+   (abajo).
 3. Cada evento se comprueba contra su recibo (la defensa (a), abajo).
 4. **Un `PAGO_ANULADO` no sale antes que su `PAGO_REGISTRADO`** (caja-backend#23). Mira el estado del
    `PAGO_REGISTRADO` que deshace, el que lleva el sello del cobro (uno forjado no cuenta):
@@ -953,9 +960,16 @@ vuelve a esperar. En cada vuelta:
 5. Si le toca salir, se entrega **fuera de cualquier transacción**: `POST {url}/pagos` con el `cuerpo` **congelado**,
    tal cual se escribió al cobrar. `ClienteDelSistemaDeOrigen` comprueba que no hay una transacción abierta antes de
    llamar, y falla si la hay.
-6. Cada marca va **en su propia transacción y es condicional**: `WHERE estado = 'PENDIENTE' AND intentos = :leidos`.
-   Si dos publicadores llegaran a coincidir, se cuenta un solo intento. Cada marca se audita con `AuditService` y
-   usuario `null` (la escribió el sistema).
+6. Cada marca va **en su propia transacción, bajo el candado de su evento y es condicional**. Como wasichai no tiene
+   un update condicional, con `Candado.PAGO` del evento (el mismo que toma la explicación) se relee, y solo se escribe
+   si sigue `PENDIENTE` con los intentos leídos; el `update` de core reemplaza el registro entero, así que va lo
+   guardado con los cambios encima. Si dos publicadores llegaran a coincidir, se cuenta un solo intento, y una marca
+   nunca pisa un evento ya explicado o ya entregado. **Core escribe su auditoría, con usuario `null` y una razón fija**
+   («entrega del buzón: ENTREGADO», «entrega del buzón: intento fallido» o «entrega del buzón: MUERTO»; nunca el error
+   ni lo que contestó el destino, que van en `ultimo_error`). Pasa por `GuardiaDeEscrituras` con la marca
+   `EscrituraDeCaja`, y **las marcas llegan ahora a los `RecordChangeListener`**, dentro de su transacción (antes se
+   escribían en la tabla y no llegaban). Hoy no hay ninguno (caja no instala `wasichai-automation`); un módulo que se
+   instale después verá cada marca.
 
 | Respuesta | Qué es | Qué queda |
 |---|---|---|
@@ -973,6 +987,13 @@ destino viaja en él **tachado**: el token configurado y todo lo que parece una 
 un evento envenenado, primero en la cola, no atasca el buzón de su organización para siempre. Si ni siquiera se puede
 anotar ese intento, la vuelta de esa organización se corta; las demás siguen. Lo ya marcado queda marcado, y lo que no
 se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo deduplica.
+
+**Esta versión se despliega sin réplicas mezcladas.** Las claves de los candados cambiaron: el cerrojo del buzón y los
+candados de `Candados` son ahora de `ClusterLock`, con su `lockId` (los primeros 64 bits del SHA-256) de `caja.buzon` y
+de `caja.<CANDADO>.<clave>`, no la constante `0x43414A4142555A4E` ni la forma de dos enteros
+`(clase, hashtext(clave))`. Una réplica vieja y una nueva no se excluyen: habría dos publicadores a la vez, y dos cobros
+de la misma serie o del mismo turno no se esperarían. Se paran todas las réplicas viejas antes de arrancar las nuevas
+(un `Recreate`, no un rolling update).
 
 #### La alerta
 

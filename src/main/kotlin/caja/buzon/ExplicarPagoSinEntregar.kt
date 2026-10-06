@@ -28,8 +28,9 @@ import java.util.UUID
 // cerrar para siempre, y la presión acabaría relajando el cierre para todos. así que la salida existe y cuesta lo que
 // tiene que costar: SOLO UN PAGO MUERTO (uno PENDIENTE se entregaría solo, y explicarlo lo sacaría de la cola), con su
 // explicación en el evento y su observación en la auditoría, y SOLO con UPDATE sobre pago_evento, que roles.json da
-// únicamente a SUPERVISOR_CAJA: es la única edición del buzón. se escribe por RecordService, como el usuario, con el
-// candado del evento y releyéndolo bajo él: dos explicaciones a la vez dan una y un 409
+// únicamente a SUPERVISOR_CAJA: es la única edición del buzón que hace una persona. se escribe por RecordService, como el
+// usuario, con el candado del evento (el mismo que toma cada marca del publicador, BuzonStore) y releyéndolo bajo él:
+// dos explicaciones a la vez dan una y un 409, y una explicación y una marca del publicador no se pisan
 @Service
 class ExplicarPagoSinEntregar(
     private val registros: Registros,

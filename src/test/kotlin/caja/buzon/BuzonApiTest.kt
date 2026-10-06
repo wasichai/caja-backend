@@ -1,6 +1,13 @@
 package caja.buzon
 
 import caja.CajaApiTest
+import caja.comun.Candado
+import caja.comun.Candados
+import caja.comun.Transaccion
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterAll
@@ -63,6 +70,12 @@ class BuzonApiTest : CajaApiTest() {
 
     @Autowired
     lateinit var schemas: WasichaiSchemas
+
+    @Autowired
+    lateinit var candados: Candados
+
+    @Autowired
+    lateinit var transaccion: Transaccion
 
     // del cobro con el origen caído
 
@@ -192,14 +205,47 @@ class BuzonApiTest : CajaApiTest() {
     fun `dos publicadores que leyeron el mismo evento y fallan los dos cuentan un solo intento`() =
         runBlocking {
             val cobro = cobrar(PRUEBAS)
-            val (buzon, leido) =
-                store.buzones().firstNotNullOf { b -> store.pendientes(b, 100000).firstOrNull { it.eventoId == cobro.pagoId }?.let { b to it } }
+            val (buzon, leido) = leidoDe(cobro)
 
             publicador.entregarUno(buzon, leido)
             publicador.entregarUno(buzon, leido)
 
             assertEquals(2, origen.de(cobro.pagoId).size, "los dos llamaron")
             assertEquals(1, evento(cobro.pagoId)["attributes"]["intentos"].asInt(), "y se contó uno")
+        }
+
+    @Test
+    fun `una marca espera el candado de su evento, el de la explicacion, y a la vez cuentan un solo intento`() =
+        runBlocking {
+            val cobro = cobrar(PRUEBAS)
+            val (buzon, leido) = leidoDe(cobro)
+            val tomado = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            // otra transacción con el candado del evento, como lo toma ExplicarPagoSinEntregar
+            val otra =
+                async(Dispatchers.IO) {
+                    transaccion.en {
+                        candados.bloquear(Candado.PAGO, cobro.pagoId)
+                        tomado.complete(Unit)
+                        soltar.await()
+                    }
+                }
+            tomado.await()
+            val marca = async(Dispatchers.IO) { store.fallido(buzon, leido, "no contesta", muere = false) }
+            delay(500)
+            assertFalse(marca.isCompleted, "la marca espera el candado del evento")
+            // mientras espera, otro publicador ya anotó su intento
+            cambiarEnLaBase("pago_evento", leido.id.toString(), "intentos" to 1, "ultimo_error" to "lo anotó otro")
+            soltar.complete(Unit)
+            otra.await()
+            assertFalse(marca.await(), "bajo el candado lo releyó: ya no estaba como se leyó, y no anota")
+            assertEquals("lo anotó otro", evento(cobro.pagoId)["attributes"]["ultimo_error"].asString())
+
+            // cuatro marcas a la vez sobre lo mismo leído: el candado las pone en fila, y solo la primera lo encuentra igual
+            val (_, releido) = leidoDe(cobro)
+            val anotadas = (1..4).map { async(Dispatchers.IO) { store.fallido(buzon, releido, "no contesta", muere = false) } }.map { it.await() }
+            assertEquals(1, anotadas.count { it }, anotadas.toString())
+            assertEquals(2, evento(cobro.pagoId)["attributes"]["intentos"].asInt())
         }
 
     @Test
@@ -232,6 +278,45 @@ class BuzonApiTest : CajaApiTest() {
         assertEquals(0L, enTransaccion, "ninguna transacción abierta esperando la respuesta")
         assertEquals(0L, bloqueos, "nadie retiene un candado sobre pago_evento durante la llamada")
         assertEquals("ENTREGADO", evento(segundo.pagoId)["attributes"]["estado"].asString())
+    }
+
+    @Test
+    fun `cada marca deja su auditoria como la plataforma, sin usuario y con su razon fija`() {
+        val entregado = cobrar(PRUEBAS)
+        val fallido = cobrar(PRUEBAS)
+        val muerto = cobrar(PRUEBAS)
+        origen.contestar(entregado.pagoId, 200)
+        origen.contestar(muerto.pagoId, 422, """{"detail":"rentas no conoce esa orden"}""")
+        // al fallido nadie le dijo nada al origen: contesta 503, y sigue PENDIENTE con un intento
+
+        vuelta()
+
+        listOf(
+            Triple(entregado, "ENTREGADO", "entrega del buzón: ENTREGADO"),
+            Triple(fallido, "PENDIENTE", "entrega del buzón: intento fallido"),
+            Triple(muerto, "MUERTO", "entrega del buzón: MUERTO")
+        ).forEach { (cobro, estado, razon) ->
+            val guardado = evento(cobro.pagoId)
+            assertEquals(estado, guardado["attributes"]["estado"].asString())
+            val id = guardado["id"].asString()
+            val historia = tree(send("GET", "/api/objects/pago_evento/records/$id/history", null, HttpStatus.OK)).toList()
+            val marca = historia.single { it["operation"].asString() == "UPDATE" }
+            // la razón fija, nunca lo que contestó el destino (eso va en ultimo_error)
+            assertEquals(razon, marca["reason"].asString(), marca.toString())
+            assertTrue(marca["userEmail"].isNull, "la marca la escribió la plataforma, no una persona: $marca")
+            assertFalse(marca.has("serviceAccount"), "ni una cuenta de servicio: $marca")
+            val intentos = marca["changes"].toList().single { it["field"].asString() == "intentos" }
+            assertEquals(0, intentos["before"].asInt(), marca.toString())
+            assertEquals(1, intentos["after"].asInt(), marca.toString())
+            val sinUsuario =
+                runBlocking {
+                    contar(
+                        "SELECT count(*) FROM ${schemas.metadata}.audit_log WHERE record_id = '$id'::uuid AND operation = 'UPDATE' " +
+                            "AND user_id IS NULL AND reason = '$razon'"
+                    )
+                }
+            assertEquals(1L, sinUsuario, "su fila de auditoría no tiene usuario")
+        }
     }
 
     // de lo que se escribe por fuera de caja
@@ -734,6 +819,10 @@ class BuzonApiTest : CajaApiTest() {
     }
 
     private fun evento(pagoId: String): JsonNode = registros("pago_evento", "evento_id" to pagoId).single()
+
+    // el evento de ese cobro como lo lee el publicador, con su buzón
+    private suspend fun leidoDe(cobro: Cobro): Pair<BuzonStore.Buzon, EventoDelBuzon> =
+        store.buzones().firstNotNullOf { b -> store.pendientes(b, 100000).firstOrNull { it.eventoId == cobro.pagoId }?.let { b to it } }
 
     // el PAGO_ANULADO del recibo de ese cobro
     private fun anulacionDe(cobro: Cobro): JsonNode = anulacionesDe(cobro).single()

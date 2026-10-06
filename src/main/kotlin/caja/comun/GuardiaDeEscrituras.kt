@@ -21,13 +21,14 @@ import wasichai.core.data.RecordWriteGuard
 // incluido, desde wasichai, sin pasar por aquí) y ocho son appendOnly (ni caja los cambia: 409). esto cubre lo que el
 // modelo no ve, lo que corre DENTRO del proceso: wasichai llama a beforeWrite antes de toda escritura de RecordService,
 // en la corrutina de quien escribe, así que aquí se ve la marca EscrituraDeCaja que Registros pone alrededor de cada
-// create y replace. un cliente http no puede ponerla. sobre los objetos de caja:
+// create y replace, y BuzonStore alrededor de cada marca del publicador. un cliente http no puede ponerla. sobre los
+// objetos de caja:
 // - SIN LA MARCA NO SE ESCRIBE NADA: ni un alta ni un cambio, tampoco la plataforma ni otro módulo. 403 antes de tocar la
 //   base: no queda fila, ni auditoría, ni listener al que avisar;
 // - NADA SE BORRA, nunca: caja no borra, ni con la marca.
 // cada rechazo deja una línea WARN que empieza con ESCRITURA FUERA DE CAJA RECHAZADA, con el objeto, el id y quien
-// escribe (el usuario, o la plataforma). lo que NO ve: quien escribe en la base directamente (así marca BuzonStore sus
-// entregas, y es caja) y el borrado del objeto entero por la api de metadatos
+// escribe (el usuario, o la plataforma). lo que NO ve: quien escribe en la base directamente y el borrado del objeto
+// entero por la api de metadatos
 @Component
 class GuardiaDeEscrituras : RecordWriteGuard {
     private val log = LoggerFactory.getLogger(javaClass)

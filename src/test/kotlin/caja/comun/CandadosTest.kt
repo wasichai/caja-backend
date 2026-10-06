@@ -10,9 +10,10 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.r2dbc.core.DatabaseClient
+import wasichai.core.platform.ClusterLock
 
-// el candado consultivo de transacción: fuera de una transacción falla (no protegería nada), dentro dura hasta que
-// ella termina, y cada clase de candado tiene su propio espacio de claves
+// el candado consultivo de transacción, sobre ClusterLock: fuera de una transacción falla (no protegería nada), dentro
+// dura hasta que ella termina, y la misma clave en otra clase de candado es otro candado
 class CandadosTest : CajaApiTest() {
     @Autowired
     lateinit var candados: Candados
@@ -51,27 +52,15 @@ class CandadosTest : CajaApiTest() {
             assertEquals(true, otroLoToma(Candado.TURNO, clave), "al terminar, se suelta")
         }
 
-    @Test
-    fun `cada clase de candado tiene su numero, distinto de las demas`() {
-        assertEquals(
-            Candado.entries.size,
-            Candado.entries
-                .map { it.clase }
-                .toSet()
-                .size
-        )
-    }
-
-    // si otra transacción lo toma sin esperar
+    // si otra transacción lo toma sin esperar, con la clave que le da ClusterLock
     private suspend fun otroLoToma(
         candado: Candado,
         clave: String
     ): Boolean =
         transaccion.en {
             db
-                .sql("SELECT pg_try_advisory_xact_lock(:clase, hashtext(:clave)) AS tomado")
-                .bind("clase", candado.clase)
-                .bind("clave", clave)
+                .sql("SELECT pg_try_advisory_xact_lock(:id) AS tomado")
+                .bind("id", ClusterLock.lockId(Candados.clave(candado, clave)))
                 .map { fila, _ -> fila.get("tomado", java.lang.Boolean::class.java)!!.booleanValue() }
                 .one()
                 .awaitSingle()

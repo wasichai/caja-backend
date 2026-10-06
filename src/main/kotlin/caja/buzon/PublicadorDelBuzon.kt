@@ -16,8 +16,8 @@ import kotlin.coroutines.cancellation.CancellationException
 //   2. un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (salida, caja-backend#23): mientras ése siga PENDIENTE,
 //      espera sin intento; si nunca llegó (MUERTO, EXPLICADO), no se envía y muere con su motivo;
 //   3. se entrega FUERA DE CUALQUIER TRANSACCIÓN (ClienteDelSistemaDeOrigen lo comprueba);
-//   4. se marca en SU PROPIA transacción, condicional a que siga como se leyó (BuzonStore): ENTREGADO, o un intento más
-//      con su motivo, PENDIENTE o MUERTO (marcaDe).
+//   4. se marca en SU PROPIA transacción, bajo el candado de su evento y solo si sigue como se leyó (BuzonStore):
+//      ENTREGADO, o un intento más con su motivo, PENDIENTE o MUERTO (marcaDe).
 // cuando muere alguno, la alerta (una línea ERROR que empieza con DINERO COBRADO SIN REGISTRAR) nombra al responsable
 // de la conciliación y su canal. un turno con un pago MUERTO no cierra hasta que alguien lo explique por escrito
 // (ExplicarPagoSinEntregar).
@@ -39,7 +39,8 @@ class PublicadorDelBuzon(
     // lo que hizo una vuelta, o null si no tomó el cerrojo (otro publicador está dando la suya)
     suspend fun vuelta(): Vuelta? {
         val tomado = cerrojo.tomar() ?: return null
-        try {
+        // use lo suelta al terminar, también si la vuelta revienta o se cancela
+        return tomado.use {
             var total = Vuelta(0, 0, 0, 0)
             for (buzon in store.buzones()) {
                 try {
@@ -50,9 +51,7 @@ class PublicadorDelBuzon(
                     log.error("El buzón de la organización {} no se pudo sacar en esta vuelta: queda para la siguiente", buzon.organizacion, e)
                 }
             }
-            return total
-        } finally {
-            tomado.soltar()
+            total
         }
     }
 
