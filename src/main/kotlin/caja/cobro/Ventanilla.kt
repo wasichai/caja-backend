@@ -24,13 +24,14 @@ import java.util.Locale
 // el recibo y sus líneas, y lo que cada cobro agrega (las órdenes PAGADA y su evento; las tasas, nada). se confirma todo
 // junto o no queda nada. el dinero entra por la misma ventanilla: la numeración y el turno son los mismos.
 //
-// wasichai no bloquea filas ni tiene unicidad compuesta: cada decisión se toma bajo un candado consultivo de la
-// transacción (Candados), con lo leído DESPUÉS de tomarlo. el orden de los candados es siempre el mismo, para que dos
-// cobros no se esperen en cruz: TURNO_CLAVE <caja|cajero|fecha> → TURNO <id del turno> → (los que tome el cobro, en preparar:
-// ORDEN <id> de cada orden, ordenadas por id) → SERIE <serie de la caja>, cada clase en su espacio (Candado). los unique
-// de (caja, cajero, fecha), numero_impreso, clave_idempotencia y evento_id son la red: si uno salta (DuplicateKeyException), la
-// transacción entera se revierte y el cobro contesta 409, sin datos a medias y sin reintentar dentro (postgres no deja
-// leer nada en una transacción abortada). cualquier otra violación de integridad sigue su camino como lo que es.
+// wasichai no bloquea filas: cada decisión se toma bajo un candado consultivo de la transacción (Candados), con lo
+// leído DESPUÉS de tomarlo. el orden de los candados es siempre el mismo, para que dos cobros no se esperen en cruz:
+// TURNO_CLAVE <caja|cajero|fecha> → TURNO <id del turno> → (los que tome el cobro, en preparar: ORDEN <id> de cada
+// orden, ordenadas por id) → SERIE <serie de la caja>, cada clase en su espacio (Candado). la unicidad de wasichai es
+// la red: la uniqueConstraint compuesta (caja, cajero, fecha) del turno y los unique de numero_impreso,
+// clave_idempotencia y evento_id. si una salta (DuplicateKeyException), la transacción entera se revierte y el cobro
+// contesta 409, sin datos a medias y sin reintentar dentro (postgres no deja leer nada en una transacción abortada).
+// cualquier otra violación de integridad sigue su camino como lo que es.
 //
 // el turno cerrado no cobra: se mira bajo el candado del turno, el mismo que toma el cierre (caja.turno.CerrarTurno).
 // el reenvío de un intento ya emitido se contesta antes de todo eso, con una lectura por su clave.

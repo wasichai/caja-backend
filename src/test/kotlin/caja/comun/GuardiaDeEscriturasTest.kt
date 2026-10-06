@@ -9,9 +9,11 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
+import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.ForbiddenException
 import wasichai.core.data.RecordChangeKind
 import wasichai.core.data.RecordWrite
+import java.io.File
 import java.util.UUID
 
 // la guarda antes de escribir (caja-backend#20), sin Spring ni base: lo que deja pasar y lo que no, con la marca
@@ -101,6 +103,22 @@ class GuardiaDeEscriturasTest {
             ),
             GuardiaDeEscrituras.PROTEGIDOS
         )
+    }
+
+    // el modelo y la guarda nombran los mismos objetos: los apiOnly de model/model.json (la API genérica da 403 desde
+    // wasichai) son exactamente los que la guarda protege dentro del proceso. un objeto de caja que entre en uno y no en
+    // el otro queda con una sola de las dos puertas cerrada
+    @Test
+    fun `los objetos apiOnly del modelo son exactamente los protegidos`() {
+        val apiOnly =
+            JsonMapper
+                .builder()
+                .build()
+                .readTree(File("model/model.json"))["objects"]
+                .filter { it["apiOnly"]?.booleanValue() == true }
+                .map { it["name"].asString() }
+                .toSet()
+        assertEquals(GuardiaDeEscrituras.PROTEGIDOS, apiOnly)
     }
 
     private fun rechaza(bloque: suspend () -> Unit): ForbiddenException = assertThrows(ForbiddenException::class.java) { runBlocking { bloque() } }

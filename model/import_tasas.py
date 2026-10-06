@@ -14,7 +14,8 @@ Reglas:
 - documentoFuente es obligatorio.
 - codigo se guarda recortado y en mayúsculas (como en caja): es como lo pide la ventanilla.
 - la fila se rechaza si core ya tiene una tasa con ese codigo y esa vigenciaDesde (o el archivo ya la cargó): se
-  comprueba antes de escribir, porque core contesta 500 a un duplicado. La uniqueConstraint del modelo queda de red.
+  comprueba antes de escribir, porque el 409 de core a un duplicado sería un rechazo de core (salida 1), no el de la
+  fila con su motivo, y el dry run no lo vería. La uniqueConstraint del modelo queda de red.
 
 Correr: python3 import_tasas.py --archivo tasas.csv [--dry-run]
 Salida: 0 si va bien, 1 si core rechaza algo o no responde.

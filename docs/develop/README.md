@@ -118,8 +118,9 @@ python3 -m unittest -v                  # las pruebas, con un core falso (FakeCo
 - **Orden.** `apply.py` antes que los importadores, y `import_cajas.py` antes que `import_tasas.py`: las tasas exigen que
   su área exista.
 - **El rechazo es por fila.** Una fila mala se informa con su línea y su motivo y no impide las siguientes. Los dos
-  importadores comprueban lo que core ya tiene antes de escribir, porque core contesta 500, sin detalle, a una violación
-  de unicidad. Salen con 1 si core rechaza algo o no responde.
+  importadores comprueban lo que core ya tiene antes de escribir: el 409 de core a una violación de unicidad sería un
+  rechazo de core, no el de la fila con su motivo, y el `--dry-run` no lo vería. Salen con 1 si core rechaza algo o no
+  responde.
 - **Las tarifas no están en el repositorio.** Las cifras del TUPA salen de la normativa verificada; `import_tasas.py`
   recibe el CSV por `--archivo`.
 - `python3 apply.py --drop` borra los objetos del modelo y sus datos, en orden inverso (`--dry-run` lo muestra antes).

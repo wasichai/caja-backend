@@ -103,9 +103,10 @@ objetos, las 18 relaciones y la acción.
 
 Los datos de una municipalidad entran por REST con dos importadores, sin dependencias. El rechazo es **por fila, nunca
 por archivo**: una fila rechazada se informa con su número de línea y su motivo y no impide las siguientes. Los dos
-comprueban lo que core ya tiene **antes** de escribir, porque core contesta 500 (sin detalle) a una violación de
-unicidad; el `unique` del modelo queda como red. Ambos llevan `--dry-run` (lee core y no escribe), `--core`, `--email`,
-`--password` y `--archivo`, y salen con 0 si va bien y con 1 si core rechaza algo o no responde.
+comprueban lo que core ya tiene **antes** de escribir: core contesta 409 a una violación de unicidad, pero eso sería un
+rechazo de core (salida 1), no el de la fila con su motivo, y el `--dry-run` no lo vería; el `unique` del modelo queda
+como red. Ambos llevan `--dry-run` (lee core y no escribe), `--core`, `--email`, `--password` y `--archivo`, y salen con
+0 si va bien y con 1 si core rechaza algo o no responde.
 
 ```bash
 cd model
@@ -1457,10 +1458,12 @@ estaba, cada cosa con su motivo:
 - **`cierre_revertido` sigue siendo un TEXT único.** No es una clave sintética como las que reemplazaron las
   `uniqueConstraints`: guarda el id real del cierre que se reversa, y su `unique` ya garantiza que un cierre se reversa
   una vez. Convertirlo en una relación sería una relación y una FK nuevas sin cambiar esa garantía.
-- **El WARN no cubre la API genérica.** El 403 de `apiOnly` lo da wasichai antes de permisos, de `appendOnly` y de la
-  guarda, y no ofrece un gancho para registrarlo: la línea `ESCRITURA FUERA DE CAJA RECHAZADA` solo sale de las
-  escrituras en proceso sin la marca. Quien intente la segunda puerta por REST recibe el 403 y wasichai no deja rastro en
-  caja; antes dejaba el WARN.
+- **El WARN no cubre la API genérica, por decisión.** Con `apiOnly`, wasichai da el 403 antes de permisos, de
+  `appendOnly` y de la guarda: la línea `ESCRITURA FUERA DE CAJA RECHAZADA` queda para las escrituras dentro del proceso
+  sin la marca. Quien intente la segunda puerta por REST recibe el 403 y no deja rastro en el registro de caja (antes
+  dejaba el WARN). Si se quiere ese rastro, la vía es un `WebFilter` propio de caja, de unas 30 líneas, que anote
+  `ESCRITURA FUERA DE CAJA RECHAZADA` cuando una escritura a `/api/objects/{objeto}/records…` (las rutas de los
+  registros relacionados incluidas) sobre un objeto protegido termina en 403. No se hizo.
 
 ## Siguientes pasos (fuera de este alcance)
 

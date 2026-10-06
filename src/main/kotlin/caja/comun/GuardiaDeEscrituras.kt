@@ -39,10 +39,11 @@ class GuardiaDeEscrituras : RecordWriteGuard {
             throw rechazo(change, "un objeto de caja no se borra, por ninguna puerta: un recibo se anula y un cierre se reversa")
         }
         if (currentCoroutineContext()[EscrituraDeCaja.Clave] != null) return
+        // a la API genérica ya la para apiOnly, antes de llegar aquí: lo que llega es una escritura dentro del proceso
         throw rechazo(
             change,
-            "«${change.objectName}» solo lo escribe caja, por su api (/api/caja/...), que corre sus reglas. La API genérica no las corre, " +
-                "y no lo escribe nadie por ella, tampoco un ADMIN (caja-backend#20)",
+            "«${change.objectName}» solo lo escribe caja, por su api (/api/caja/...), que corre sus reglas. Una escritura dentro del " +
+                "proceso sin la marca de caja (EscrituraDeCaja), de otro módulo o de la plataforma, no las corre y no se acepta (caja-backend#20)",
             deLaOrden(change)
         )
     }

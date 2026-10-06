@@ -164,7 +164,7 @@ class RechazoPorFilaTests(ImportTasasTestCase):
         code, out, err = self.run_main(self.csv(FILA, fila(codigo="T-02")))
         self.assertEqual(code, 0, err)
         self.assertIn("rechazada línea 2: ya hay una tasa con el código 'T-01' y la vigencia desde 2026-01-01", out)
-        # se comprueba antes de escribir: core contesta 500 a un duplicado
+        # se comprueba antes de escribir: el 409 de core a un duplicado sería un rechazo de core, sin el motivo de la fila
         self.assertEqual(self.writes(), [("POST", "/api/objects/tasa/records")])
 
     def test_dos_filas_del_mismo_archivo_no_repiten_vigencia(self):

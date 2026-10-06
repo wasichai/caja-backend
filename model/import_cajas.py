@@ -13,7 +13,8 @@ Reglas:
 - Un área que ya existe por codigoArea se reutiliza (su nombre no se reescribe); si no existe se crea con nombreArea.
 - Una caja sin codigoArea entra sin área: las cajas tributarias no tienen.
 - El código y la serie de una caja no se repiten. Se comprueba contra lo que core ya tiene (y contra lo que el archivo
-  ya cargó) antes de escribir, porque core contesta 500 a un duplicado; el unique del modelo queda como red.
+  ya cargó) antes de escribir, porque el 409 de core a un duplicado sería un rechazo de core (salida 1), no el de la
+  fila con su motivo, y el dry run no lo vería; el unique del modelo queda como red.
 - Las cajas nuevas entran activas, y las áreas nuevas también.
 
 Una segunda corrida con el mismo archivo no escribe nada: rechaza cada fila por repetida.
