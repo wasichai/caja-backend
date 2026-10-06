@@ -1,8 +1,8 @@
 package caja.turno
 
-import caja.cobro.FORMAS_DE_PAGO
 import caja.comun.CuerpoEstricto
 import caja.comun.Importe
+import caja.modelo.FORMAS_DE_PAGO
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 import java.math.BigDecimal

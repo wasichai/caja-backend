@@ -5,6 +5,8 @@ import caja.comun.Observacion
 import caja.comun.Registros
 import caja.comun.campo
 import caja.comun.sinCamposDesconocidos
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PENDIENTE
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import wasichai.core.common.FieldViolation

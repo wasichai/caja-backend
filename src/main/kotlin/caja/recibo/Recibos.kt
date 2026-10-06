@@ -1,9 +1,10 @@
 package caja.recibo
 
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.cobro.lineasEnOrden
 import caja.cobro.numeroImpreso
+import caja.modelo.LineaRecibo
+import caja.modelo.PAGO_ANULADO
+import caja.modelo.Recibo
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.ForbiddenException
@@ -25,8 +26,6 @@ import java.util.UUID
 const val EMITIDO = "EMITIDO"
 const val ANULADO = "ANULADO"
 val ESTADOS_DE_RECIBO = listOf(EMITIDO, ANULADO)
-
-const val PAGO_ANULADO = "PAGO_ANULADO"
 
 // el rol que anula el recibo de otro cajero (el privilegio ESPECIAL de caja). wasichai no tiene acciones propias: se
 // comprueba por el nombre del rol, un hueco declarado

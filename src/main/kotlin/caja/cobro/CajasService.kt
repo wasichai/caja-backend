@@ -3,6 +3,8 @@ package caja.cobro
 import caja.comun.AREA
 import caja.comun.CAJA
 import caja.comun.Registros
+import caja.modelo.Area
+import caja.modelo.Caja
 import org.springframework.stereotype.Service
 import wasichai.core.common.PageRequest
 import wasichai.core.common.PageResponse

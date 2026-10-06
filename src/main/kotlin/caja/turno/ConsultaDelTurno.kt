@@ -1,13 +1,13 @@
 package caja.turno
 
-import caja.cobro.Caja
-import caja.cobro.Turno
 import caja.comun.CAJA
 import caja.comun.Importe
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
 import caja.comun.enLima
+import caja.modelo.Caja
+import caja.modelo.Turno
 import org.springframework.stereotype.Service
 import wasichai.core.common.NotFoundException
 import wasichai.core.identity.CurrentUser

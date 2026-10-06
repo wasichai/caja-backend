@@ -1,9 +1,5 @@
 package caja.recibo
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
-import caja.cobro.Tasa
 import caja.cobro.lineaRespuesta
 import caja.cobro.lineasEnOrden
 import caja.comun.ANULACION_RECIBO
@@ -20,6 +16,11 @@ import caja.comun.campo
 import caja.comun.diaPedido
 import caja.comun.enLima
 import caja.comun.rangoDeDias
+import caja.modelo.AnulacionRecibo
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
+import caja.modelo.Tasa
 import org.springframework.stereotype.Service
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException

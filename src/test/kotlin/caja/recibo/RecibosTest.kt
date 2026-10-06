@@ -1,10 +1,11 @@
 package caja.recibo
 
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.comun.diaPedido
 import caja.comun.rangoDeDias
 import caja.comun.sinCamposDesconocidos
+import caja.modelo.LineaRecibo
+import caja.modelo.PAGO_ANULADO
+import caja.modelo.Recibo
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull

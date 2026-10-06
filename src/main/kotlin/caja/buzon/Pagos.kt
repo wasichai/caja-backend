@@ -1,13 +1,12 @@
 package caja.buzon
 
-import caja.cobro.PagoEvento
 import caja.comun.enLima
+import caja.modelo.PagoEvento
 import wasichai.core.common.ValidationException
 import java.util.UUID
 
 // las reglas de la pantalla de los pagos sin entregar (PagoController y ExplicarPagoSinEntregar de caja)
 
-const val EXPLICADO = "EXPLICADO"
 const val MINIMO_EXPLICACION = 5
 
 // el pago_id de la ruta: el pagoId del evento, el que dan la respuesta del cobro y GET /pagos/sin-entregar

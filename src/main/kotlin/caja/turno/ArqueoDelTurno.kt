@@ -1,9 +1,9 @@
 package caja.turno
 
-import caja.cobro.FORMAS_DE_PAGO
+import caja.modelo.FORMAS_DE_PAGO
 import java.math.BigDecimal
 import java.time.LocalDate
-import caja.cobro.produceEvento as avisaAlOrigen
+import caja.modelo.produceEvento as avisaAlOrigen
 
 // el arqueo de un turno (ArqueoDelTurno, LineaDeArqueo y ReciboDelTurno de caja, #36, RF-087): lo cobrado, lo anulado y
 // el neto, forma de pago por forma de pago, con lo que el cajero declaró haber contado.

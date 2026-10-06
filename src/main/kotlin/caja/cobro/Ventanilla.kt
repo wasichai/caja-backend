@@ -10,6 +10,11 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
+import caja.modelo.Turno
+import caja.modelo.claveDelTurno
 import caja.turno.LibroDelTurno
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Component

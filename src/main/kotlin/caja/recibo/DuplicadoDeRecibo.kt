@@ -1,8 +1,5 @@
 package caja.recibo
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.CAJA
 import caja.comun.Candado
@@ -17,6 +14,10 @@ import caja.comun.Transaccion
 import caja.comun.campo
 import caja.comun.sinCamposDesconocidos
 import caja.emision.ReciboPdf
+import caja.modelo.AnulacionRecibo
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.ConflictException

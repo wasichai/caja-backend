@@ -52,3 +52,7 @@ fun rangoDeDias(
         throw ValidationException("Rango al revés", "hasta", "el rango de fechas está al revés: desde $desde hasta $hasta")
     }
 }
+
+// el código de la caja que nombra la petición: la que cobra, o la del turno que se cierra o se reversa
+fun codigoDeCaja(valor: String?): String =
+    valor?.trim()?.ifEmpty { null } ?: throw ValidationException("Falta un dato", "caja", "el código de la caja que cobra")

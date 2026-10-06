@@ -1,11 +1,11 @@
 package caja.emision
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.cobro.lineasEnOrden
 import caja.cobro.nombreImpreso
 import caja.comun.LIMA
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.LocalDate

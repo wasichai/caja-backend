@@ -1,9 +1,9 @@
 package caja.recaudacion
 
-import caja.cobro.PAGO_DE_TASA
 import caja.comun.campo
 import caja.comun.diaPedido
 import caja.comun.rangoDeDias
+import caja.modelo.PAGO_DE_TASA
 import caja.turno.defectoDeLasCifras
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.ValidationException

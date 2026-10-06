@@ -1,5 +1,14 @@
 package caja.cobro
 
+import caja.comun.ENTEROS_DEL_IMPORTE
+import caja.comun.codigoDeCaja
+import caja.comun.defectoDelImporte
+import caja.modelo.ANULADA
+import caja.modelo.NORMAL
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PAGADA
+import caja.modelo.PENDIENTE
+import caja.modelo.Recibo
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull

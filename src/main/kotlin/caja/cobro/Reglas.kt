@@ -1,5 +1,8 @@
 package caja.cobro
 
+import caja.comun.defectoDelImporte
+import caja.modelo.ESTADOS_DE_ORDEN
+import caja.modelo.PENDIENTE
 import wasichai.core.common.ValidationException
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -16,14 +19,6 @@ const val LARGO_CONCEPTO = 120
 const val LARGO_DETALLE = 200
 const val LARGO_DOCUMENTO = 20
 const val LARGO_NOMBRE = 150
-
-// numeric(15,2) de caja: 13 dígitos enteros y 2 decimales
-const val ENTEROS_DEL_IMPORTE = 13
-
-const val PENDIENTE = "PENDIENTE"
-const val PAGADA = "PAGADA"
-const val ANULADA = "ANULADA"
-val ESTADOS = listOf(PENDIENTE, PAGADA, ANULADA)
 
 private val SISTEMA = Regex("[a-z0-9_-]+")
 
@@ -72,18 +67,6 @@ fun importe(valor: String?): BigDecimal {
     return importe
 }
 
-// lo que el alta rechaza de un importe ya leído, o null si vale. el cobro lo vuelve a mirar (motivoNoCobrable): una
-// orden escrita en la base no pasó por el alta. GuardiaDeEscrituras lo nombra en el alta que rechaza por la API
-// genérica
-fun defectoDelImporte(importe: BigDecimal?): String? =
-    when {
-        importe == null -> "no tiene importe"
-        importe.signum() <= 0 -> "debe ser mayor que 0"
-        importe.scale() > 2 -> "a lo sumo 2 decimales"
-        importe.precision() - importe.scale() > ENTEROS_DEL_IMPORTE -> "a lo sumo $ENTEROS_DEL_IMPORTE dígitos enteros"
-        else -> null
-    }
-
 fun fecha(
     valor: String?,
     campo: String
@@ -129,7 +112,7 @@ private fun idExterno(valor: String?): Long? {
 // el filtro de la ventanilla: sin estado, las pendientes
 fun estadoOrden(valor: String?): String {
     val estado = valor?.trim()?.uppercase(Locale.ROOT)?.ifEmpty { null } ?: return PENDIENTE
-    if (estado !in ESTADOS) throw ValidationException("Estado inválido", "estado", "uno de ${ESTADOS.joinToString(", ")}")
+    if (estado !in ESTADOS_DE_ORDEN) throw ValidationException("Estado inválido", "estado", "uno de ${ESTADOS_DE_ORDEN.joinToString(", ")}")
     return estado
 }
 

@@ -1,12 +1,15 @@
 package caja.buzon
 
-import caja.cobro.Recibo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.LINEA_RECIBO
 import caja.comun.ORDEN_DE_COBRO
 import caja.comun.PAGO_EVENTO
 import caja.comun.RECIBO
 import caja.comun.Transaccion
+import caja.modelo.EVENTO_ENTREGADO
+import caja.modelo.EVENTO_MUERTO
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.Recibo
 import io.r2dbc.spi.Readable
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.reactive.asFlow
@@ -97,7 +100,7 @@ class BuzonStore(
                     "${t.c("recibo")} AS recibo, ${t.c("turno")} AS turno, ${t.c("cuerpo")} AS cuerpo, ${t.c("intentos")} AS intentos " +
                     "FROM ${t.nombre} WHERE organization_id = :organizacion AND ${t.c("estado")} = :pendiente ORDER BY created_at, id LIMIT :cuantos"
             ).bind("organizacion", buzon.organizacion)
-            .bind("pendiente", PENDIENTE)
+            .bind("pendiente", EVENTO_PENDIENTE)
             .bind("cuantos", cuantos)
             .map { row, _ ->
                 EventoDelBuzon(
@@ -248,8 +251,8 @@ class BuzonStore(
             buzon,
             evento,
             "${t.c("estado")} = :estado, ${t.c("entregado_en")} = :cuando, ${t.c("intentos")} = ${t.c("intentos")} + 1, ${t.c("ultimo_error")} = NULL",
-            mapOf("estado" to ENTREGADO, "cuando" to cuando),
-            mapOf("estado" to ENTREGADO, "intentos" to evento.intentos + 1, "entregado_en" to cuando.toString(), "ultimo_error" to null)
+            mapOf("estado" to EVENTO_ENTREGADO, "cuando" to cuando),
+            mapOf("estado" to EVENTO_ENTREGADO, "intentos" to evento.intentos + 1, "entregado_en" to cuando.toString(), "ultimo_error" to null)
         )
     }
 
@@ -261,7 +264,7 @@ class BuzonStore(
         muere: Boolean
     ): Boolean {
         val t = buzon.eventos
-        val estado = if (muere) MUERTO else PENDIENTE
+        val estado = if (muere) EVENTO_MUERTO else EVENTO_PENDIENTE
         return marcar(
             buzon,
             evento,
@@ -288,7 +291,7 @@ class BuzonStore(
                             "AND ${t.c("estado")} = :pendiente AND ${t.c("intentos")} = :leidos"
                     ).bind("id", evento.id)
                     .bind("organizacion", buzon.organizacion)
-                    .bind("pendiente", PENDIENTE)
+                    .bind("pendiente", EVENTO_PENDIENTE)
                     .bind("leidos", evento.intentos)
             valores.forEach { (nombre, valor) -> sentencia = sentencia.bind(nombre, valor) }
             val cambiadas = sentencia.fetch().awaitRowsUpdated()
@@ -299,7 +302,7 @@ class BuzonStore(
                     PAGO_EVENTO,
                     evento.id,
                     AuditOperation.UPDATE,
-                    before = mapOf("estado" to PENDIENTE, "intentos" to evento.intentos),
+                    before = mapOf("estado" to EVENTO_PENDIENTE, "intentos" to evento.intentos),
                     after = despues
                 )
             }
@@ -333,10 +336,6 @@ class BuzonStore(
     )
 
     companion object {
-        const val PENDIENTE = "PENDIENTE"
-        const val ENTREGADO = "ENTREGADO"
-        const val MUERTO = "MUERTO"
-
         // los campos que el publicador lee o escribe, por objeto: una organización sin alguno no tiene buzón
         private val CAMPOS =
             mapOf(

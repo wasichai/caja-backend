@@ -9,7 +9,16 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.campo
+import caja.comun.codigoDeCaja
 import caja.comun.sinCamposDesconocidos
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.LineaRecibo
+import caja.modelo.NORMAL
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PAGADA
+import caja.modelo.PAGO_REGISTRADO
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.FieldViolation

@@ -1,8 +1,8 @@
 package caja.buzon
 
-import caja.cobro.OrdenDeCobro
-import caja.cobro.Recibo
 import caja.cobro.cuerpoPagoRegistrado
+import caja.modelo.OrdenDeCobro
+import caja.modelo.Recibo
 import caja.recibo.cuerpoPagoAnulado
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse

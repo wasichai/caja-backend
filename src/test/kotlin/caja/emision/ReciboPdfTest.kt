@@ -1,9 +1,9 @@
 package caja.emision
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.NORMAL
-import caja.cobro.Recibo
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.NORMAL
+import caja.modelo.Recibo
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse

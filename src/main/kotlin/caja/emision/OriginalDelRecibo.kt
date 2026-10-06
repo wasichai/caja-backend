@@ -1,8 +1,5 @@
 package caja.emision
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.CAJA
 import caja.comun.LIMA
@@ -11,6 +8,9 @@ import caja.comun.RECIBO
 import caja.comun.REIMPRESION_RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
 import caja.turno.EstadoDelTurno
 import caja.turno.LibroDelTurno
 import org.springframework.stereotype.Service

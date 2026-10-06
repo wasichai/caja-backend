@@ -1,6 +1,8 @@
 package caja.cobro
 
 import caja.comun.campo
+import caja.modelo.LineaRecibo
+import caja.modelo.Tasa
 import wasichai.core.common.ConflictException
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException
@@ -14,15 +16,8 @@ import java.util.Locale
 // nunca de la petición ni de una constante (regla 5): que viniera de la petición dejaría al cliente poner la tarifa, y
 // una compilada solo se cambiaría desplegando. aquí no hay ninguna cifra: todas son datos de la tabla tasa
 
-// el tipo_pago de un recibo de tasas. una tasa no produce evento: la emitió esta misma caja, no hubo orden y no hay a
-// quién avisarle
-const val PAGO_DE_TASA = "TASA"
-
 // lo que la ventanilla ve del pago de un recibo sin evento
 const val SIN_EVENTO = "SIN_EVENTO"
-
-// TipoDePago.produceEvento de caja: solo un cobro de órdenes avisa a su sistema de origen
-fun produceEvento(tipoPago: String): Boolean = tipoPago == NORMAL
 
 // las claves que traerían una cifra: un cobro de tasas no lleva ninguna
 private val CIFRAS = setOf("importe", "precio", "precio_unitario", "monto", "total")

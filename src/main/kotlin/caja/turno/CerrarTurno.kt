@@ -1,9 +1,5 @@
 package caja.turno
 
-import caja.cobro.Caja
-import caja.cobro.Turno
-import caja.cobro.claveDelTurno
-import caja.cobro.codigoDeCaja
 import caja.comun.CAJA
 import caja.comun.CIERRE_TURNO
 import caja.comun.CIERRE_TURNO_LINEA
@@ -17,8 +13,12 @@ import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
 import caja.comun.campo
+import caja.comun.codigoDeCaja
 import caja.comun.enLima
 import caja.comun.sinCamposDesconocidos
+import caja.modelo.Caja
+import caja.modelo.Turno
+import caja.modelo.claveDelTurno
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
