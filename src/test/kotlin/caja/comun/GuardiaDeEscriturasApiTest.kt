@@ -43,7 +43,6 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
         val acta =
             mapOf(
                 "recibo" to cobro.recibo,
-                "recibo_anulado" to cobro.recibo,
                 "caja" to cobro.caja.id,
                 "turno" to cobro.turno,
                 "fecha" to LocalDate.now(LIMA).toString(),
@@ -167,7 +166,6 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             mapOf(
                 "sistema_origen" to "rentas",
                 "referencia_externa" to referencia,
-                "clave_origen" to "rentas|$referencia",
                 "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
                 "importe" to "-50.00",
                 "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),
@@ -197,7 +195,6 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             mapOf(
                 "sistema_origen" to "rentas",
                 "referencia_externa" to referencia,
-                "clave_origen" to "rentas|$referencia",
                 "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
                 "importe" to "-50.00",
                 "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),

@@ -46,13 +46,21 @@ fun numeroImpreso(
     return String.format(Locale.ROOT, FORMATO_NUMERO, limpia, numero)
 }
 
-// la clave del turno de un cajero en una caja un día (clave_turno): un cajero tiene un solo turno al día por caja. el
-// cobro lo busca o lo crea con ella, el cierre y la reversión lo buscan
+// la clave del candado TURNO_CLAVE: un cajero tiene un solo turno al día por caja. el cobro lo busca o lo crea bajo ese
+// candado, y la garantía es la uniqueConstraint (caja, cajero, fecha) del turno; no se guarda en ningún campo
 fun claveDelTurno(
     cajaId: String,
     cajero: String,
     fecha: LocalDate
 ): String = "$cajaId|$cajero|$fecha"
+
+// los filtros que encuentran el turno de un cajero en una caja un día: los tres campos de su uniqueConstraint. el cobro,
+// el cierre, la reversión y la consulta lo buscan así
+fun filtroDelTurno(
+    cajaId: String,
+    cajero: String,
+    fecha: LocalDate
+): Map<String, String> = mapOf("caja" to cajaId, "cajero" to cajero, "fecha" to fecha.toString())
 
 // el total es la suma de las líneas, exacta, nunca una cifra aparte: el papel y su desglose no pueden discrepar
 fun totalDe(montos: List<BigDecimal>): BigDecimal {

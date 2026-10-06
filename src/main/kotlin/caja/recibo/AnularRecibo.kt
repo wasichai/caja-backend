@@ -42,7 +42,7 @@ import java.util.UUID
 // anulacion_recibo, y el número, las líneas y el total siguen donde estaban, porque el pagador tiene ese papel en la
 // mano. todo en UNA transacción, bajo el candado del turno del recibo (el mismo que toman el cobro y el cierre) y
 // después los de sus órdenes, por id: el orden de siempre, turno → órdenes. cada decisión se toma con lo leído después
-// de tomar su candado; el unique de recibo_anulado es la red, y si salta no se relee nada dentro.
+// de tomar su candado; el unique de la relación recibo es la red, y si salta no se relee nada dentro.
 //
 // las órdenes vuelven a PENDIENTE y sin recibo, no ANULADA: el dinero volvió y la deuda sigue, así que tienen que poder
 // cobrarse otra vez. y si el recibo avisó su pago (NORMAL), sale PAGO_ANULADO en el buzón, en la misma transacción
@@ -68,7 +68,7 @@ class AnularRecibo(
         return try {
             transaccion.en { anularEnLaTransaccion(pedido, usuario) }
         } catch (choque: DuplicateKeyException) {
-            // la red del unique de recibo_anulado (o de evento_id): otra anulación se confirmó a la vez. la transacción
+            // la red del unique de recibo (o de evento_id): otra anulación se confirmó a la vez. la transacción
             // ya se revirtió entera
             throw ConflictException("El recibo ${pedido.numero} se anuló a la vez desde otra petición: ya está anulado")
                 .apply { initCause(choque) }
@@ -98,7 +98,7 @@ class AnularRecibo(
         // curso lo encuentra cerrado
         libro.exigirAbierto(turno, "no se anula ninguno de sus recibos: el acta ya congeló el $numero como cobrado")
 
-        // 3. anular dos veces no anula dos veces: 409. el unique de recibo_anulado es la red
+        // 3. anular dos veces no anula dos veces: 409. el unique de la relación recibo es la red
         registros.primero(ANULACION_RECIBO, AnulacionRecibo::class.java, mapOf("recibo" to reciboId))?.let {
             throw ConflictException("El recibo $numero ya se anuló el ${it.fecha}: las órdenes que cobró ya volvieron a PENDIENTE")
         }
@@ -127,7 +127,6 @@ class AnularRecibo(
                 AnulacionRecibo::class.java,
                 mapOf(
                     "recibo" to reciboId,
-                    "recibo_anulado" to reciboId,
                     "caja" to recibo.caja,
                     "turno" to recibo.turno,
                     "fecha" to hoy.toString(),

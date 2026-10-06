@@ -26,9 +26,9 @@ import java.util.Locale
 //
 // wasichai no bloquea filas ni tiene unicidad compuesta: cada decisión se toma bajo un candado consultivo de la
 // transacción (Candados), con lo leído DESPUÉS de tomarlo. el orden de los candados es siempre el mismo, para que dos
-// cobros no se esperen en cruz: TURNO_CLAVE <clave_turno> → TURNO <id del turno> → (los que tome el cobro, en preparar:
+// cobros no se esperen en cruz: TURNO_CLAVE <caja|cajero|fecha> → TURNO <id del turno> → (los que tome el cobro, en preparar:
 // ORDEN <id> de cada orden, ordenadas por id) → SERIE <serie de la caja>, cada clase en su espacio (Candado). los unique
-// de clave_turno, numero_impreso, clave_idempotencia y evento_id son la red: si uno salta (DuplicateKeyException), la
+// de (caja, cajero, fecha), numero_impreso, clave_idempotencia y evento_id son la red: si uno salta (DuplicateKeyException), la
 // transacción entera se revierte y el cobro contesta 409, sin datos a medias y sin reintentar dentro (postgres no deja
 // leer nada en una transacción abortada). cualquier otra violación de integridad sigue su camino como lo que es.
 //
@@ -113,7 +113,7 @@ class Ventanilla(
         val claveTurno = claveDelTurno(cajaId, apertura.cajero, apertura.hoy)
         candados.bloquear(Candado.TURNO_CLAVE, claveTurno)
         val turno =
-            registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveTurno))
+            registros.primero(TURNO, Turno::class.java, filtroDelTurno(cajaId, apertura.cajero, apertura.hoy))
                 ?: registros.create(
                     TURNO,
                     Turno::class.java,
@@ -122,8 +122,7 @@ class Ventanilla(
                         "cajero" to apertura.cajero,
                         "fecha" to apertura.hoy.toString(),
                         "abierto_en" to OffsetDateTime.now(reloj).toString(),
-                        "observacion" to apertura.observacion.texto,
-                        "clave_turno" to claveTurno
+                        "observacion" to apertura.observacion.texto
                     )
                 )
         val turnoId = turno.id!!

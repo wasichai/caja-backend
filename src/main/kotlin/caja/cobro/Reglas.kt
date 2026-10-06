@@ -48,13 +48,6 @@ fun sistemaOrigen(valor: String?): String {
 // opaca: no se analiza, no se compara por partes y no se ordena. solo se recorta
 fun referenciaExterna(valor: String?): String = texto(valor, "referencia_externa", LARGO_REFERENCIA)
 
-// reemplaza orden_referencia_uq (sistema_origen, referencia_externa): wasichai no tiene unicidad compuesta. el sistema
-// no lleva barra, así que la primera barra parte la clave sin ambigüedad
-fun claveDeOrigen(
-    sistema: String,
-    referencia: String
-): String = "$sistema|$referencia"
-
 fun concepto(valor: String?): String = texto(valor, "concepto", LARGO_CONCEPTO)
 
 fun detalle(valor: String?): String? = opcional(valor, "detalle", LARGO_DETALLE)

@@ -30,8 +30,7 @@ data class CierreTurno(
     val cobradoConEvento: BigDecimal? = null,
     val cobradoSinEvento: BigDecimal? = null,
     val usuario: String? = null,
-    val observacion: String? = null,
-    val claveSecuencia: String? = null
+    val observacion: String? = null
 )
 
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
@@ -42,8 +41,7 @@ data class CierreTurnoLinea(
     val cobrado: BigDecimal? = null,
     val anulado: BigDecimal? = null,
     val neto: BigDecimal? = null,
-    val declarado: BigDecimal? = null,
-    val clave: String? = null
+    val declarado: BigDecimal? = null
 )
 
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
@@ -56,8 +54,7 @@ data class ReversionCierre(
     val fecha: LocalDate? = null,
     val registradoEn: Instant? = null,
     val usuario: String? = null,
-    val observacion: String? = null,
-    val claveSecuencia: String? = null
+    val observacion: String? = null
 )
 
 // lo que manda la ventanilla para cerrar: la caja, lo contado por forma de pago (en cadena: regla 1) y por qué. el

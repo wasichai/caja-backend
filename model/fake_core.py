@@ -56,7 +56,7 @@ class FakeCore:
 
     def __init__(self, existing_objects=(), existing_relationships=(), fail_on_post_object=None,
                  fail_put=False, fail_put_status=500, login_response=None, fail_on_record=None, existing_fields=None,
-                 fail_on_update=None, fail_on_delete=None, fail_on_role=None, object_flags=None):
+                 fail_on_update=None, fail_on_delete=None, fail_on_role=None, object_flags=None, fail_put_object=None):
         self.existing_objects = set(existing_objects)
         self.existing_fields = existing_fields or {}  # object name -> list of {"name", "enumOptions"?}
         self.existing_relationships = set(existing_relationships)
@@ -68,6 +68,7 @@ class FakeCore:
         self.fail_on_record = fail_on_record  # object name -> its record POSTs answer 400
         self.fail_on_update = fail_on_update  # object name -> its record PUTs answer 400
         self.fail_on_delete = fail_on_delete  # object name -> its record DELETEs answer 409
+        self.fail_put_object = fail_put_object  # object name -> its PUT /api/objects/{name} answers 409
         self.fail_on_role = fail_on_role  # role name -> its POST /api/roles answers 500
         self.records = {}  # object name -> list of {"id", "attributes"}
         self.roles = {}  # role name -> {"name", "label", "permissions": [{"objectName", "action", "allowed"}]}
@@ -179,14 +180,20 @@ class FakeCore:
                 return 500, {"message": "boom"}
             if name in self.existing_objects:
                 return 409, {"message": "exists"}
+            # what GET /api/objects tells of it from now on: its write rules and, when it has any, its constraints
+            self.existing_objects.add(name)
+            self.object_flags[name] = {k: body[k] for k in ("apiOnly", "appendOnly", "uniqueConstraints") if body.get(k)}
             return 201, {"name": name}
         if OBJECT.match(path) and method == "PUT":
             name = OBJECT.match(path).group(1)
             if name not in self.existing_objects:
                 return 404, {"detail": "not found"}
-            # Core replaces the object: the flags it was not sent keep their value, as its null does
-            self.object_flags[name] = {**self.object_flags.get(name, {}),
-                                       **{k: v for k, v in body.items() if k in ("apiOnly", "appendOnly")}}
+            if name == self.fail_put_object:
+                return 409, {"detail": "repeats"}
+            # Core replaces the object: the flags it was not sent keep their value, as its null does. an empty
+            # uniqueConstraints is a key GET leaves out
+            flags = {**self.object_flags.get(name, {}), **{k: v for k, v in body.items() if k in ("apiOnly", "appendOnly", "uniqueConstraints")}}
+            self.object_flags[name] = {k: v for k, v in flags.items() if v != [] or k != "uniqueConstraints"}
             return 200, {"name": name, **self.object_flags[name]}
         if path == "/api/relationships" and method == "POST":
             name = body["name"]

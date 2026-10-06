@@ -35,13 +35,20 @@ def load_model():
 
 
 def model_flags(model):
-    """What GET /api/objects tells of each object's write rules once model.json is applied."""
-    return {o["name"]: {"apiOnly": o.get("apiOnly", False), "appendOnly": o.get("appendOnly", False)} for o in model["objects"]}
+    """What GET /api/objects tells of each object's write rules and constraints once model.json is applied (Core leaves
+    uniqueConstraints out when an object has none)."""
+    return {o["name"]: {"apiOnly": o.get("apiOnly", False), "appendOnly": o.get("appendOnly", False),
+                        **({"uniqueConstraints": o["uniqueConstraints"]} if o.get("uniqueConstraints") else {})}
+            for o in model["objects"]}
 
 
 APPEND_ONLY = ["turno", "recibo", "linea_recibo", "anulacion_recibo", "reimpresion_recibo", "cierre_turno",
                "cierre_turno_linea", "reversion_cierre"]
 API_ONLY = APPEND_ONLY + ["orden_de_cobro", "pago_evento"]
+# the objects whose constraints name a relationship's field: they wait for phase 3 (orden_de_cobro and tasa go in the POST)
+DROP_PUTS = ["tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "anulacion_recibo", "reimpresion_recibo",
+             "cierre_turno", "cierre_turno_linea", "reversion_cierre"]
+WAITING = ["turno", "cierre_turno", "cierre_turno_linea", "reversion_cierre"]
 
 
 def core_fields(model, obj_name, drop=(), options=None):
@@ -55,6 +62,9 @@ def core_fields(model, obj_name, drop=(), options=None):
         if f["type"] == "ENUM":
             field["enumOptions"] = (options or {}).get(f["name"], model["enums"][f["enum"]])
         fields.append(field)
+    # the relationships' fields too: Core lists them as RELATION, with the unique the model gives them
+    fields += [{"name": r["fieldName"], "label": r["label"], "type": "RELATION", "unique": r.get("unique", False)}
+               for r in model["relationships"] if r["source"] == obj_name]
     return fields
 
 
@@ -87,6 +97,9 @@ class DryRunTests(ApplyCliTestCase):
         # the write rules go in each object's POST
         self.assertIn('"apiOnly": true', out)
         self.assertIn('"appendOnly": false', out)
+        # phase 3: the constraints that name a relationship's field, and the unique of the annulment's relation
+        self.assertEqual(out.count("# PUT /api/objects/"), len(WAITING))
+        self.assertIn("# PUT /api/metadata/objects/anulacion_recibo/fields/recibo", out)
 
 
 class HappyPathTests(ApplyCliTestCase):
@@ -104,13 +117,31 @@ class HappyPathTests(ApplyCliTestCase):
 
         # the required relationships, each made required right after its POST. caja_area is not (the cajas tributarias
         # have no area), nor orden_recibo (a PENDIENTE orden has no recibo), nor a linea's orden or tasa
-        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT"]
-        self.assertEqual(puts, [(f"/api/metadata/objects/{path}", {"required": True}) for path in (
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and r[1].startswith("/api/metadata/")]
+        self.assertEqual(puts[:-1], [(f"/api/metadata/objects/{path}", {"required": True}) for path in (
             "tasa/fields/area", "turno/fields/caja", "recibo/fields/caja", "recibo/fields/turno",
             "linea_recibo/fields/recibo", "pago_evento/fields/recibo", "pago_evento/fields/turno",
             "anulacion_recibo/fields/recibo", "anulacion_recibo/fields/caja", "anulacion_recibo/fields/turno",
             "reimpresion_recibo/fields/recibo", "cierre_turno/fields/turno", "cierre_turno_linea/fields/cierre_turno",
             "reversion_cierre/fields/turno")])
+        # the unique of the annulment's relation comes last, in phase 3
+        self.assertEqual(puts[-1], ("/api/metadata/objects/anulacion_recibo/fields/recibo", {"unique": True}))
+
+        # orden_de_cobro and tasa carry their constraints in the POST; the others get the whole object by PUT, after the
+        # relationships, with the labels and the write rules the PUT replaces
+        by_name = {o["name"]: o for o in load_model()["objects"]}
+        self.assertEqual({p["name"]: p["uniqueConstraints"] for p in object_posts if "uniqueConstraints" in p},
+                         {"orden_de_cobro": [["sistema_origen", "referencia_externa"]], "tasa": [["codigo", "vigencia_desde"]]})
+        object_puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and r[1].startswith("/api/objects/")]
+        self.assertEqual([path for path, _ in object_puts], [f"/api/objects/{n}" for n in WAITING])
+        for path, body in object_puts:
+            obj = by_name[path.rsplit("/", 1)[1]]
+            self.assertEqual(body, {"label": obj["label"], "pluralLabel": obj["pluralLabel"], "description": obj["description"],
+                                    "enabled": True, "apiOnly": True, "appendOnly": True,
+                                    "uniqueConstraints": obj["uniqueConstraints"]})
+        last_relationship = max(i for i, r in enumerate(self.core.requests) if r[1] == "/api/relationships")
+        first_object_put = min(i for i, r in enumerate(self.core.requests) if r[0] == "PUT" and r[1].startswith("/api/objects/"))
+        self.assertGreater(first_object_put, last_relationship)
 
         for method, path, auth, body in self.core.requests:
             if path == "/api/auth/login":
@@ -118,7 +149,7 @@ class HappyPathTests(ApplyCliTestCase):
             else:
                 self.assertEqual(auth, "Bearer t")
 
-        self.assertIn(f"done: {TOTAL} created, 0 updated, 0 skipped", out)
+        self.assertIn(f"done: {TOTAL} created, {len(WAITING) + 1} updated, 0 skipped", out)
 
 
 class IdempotencyTests(ApplyCliTestCase):
@@ -138,6 +169,9 @@ class IdempotencyTests(ApplyCliTestCase):
         object_posts = [r for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
         self.assertEqual(object_posts, [])
         self.assertEqual([r for r in self.core.requests if r[0] == "POST" and "/fields" in r[1]], [])
+        # neither the constraints nor the unique of the relation differ: nothing is put
+        self.assertEqual([r for r in self.core.requests if r[0] == "PUT" and not r[1].endswith("/fields/" + r[1].rsplit("/", 1)[1])], [])
+        self.assertEqual([r for r in self.core.requests if r[0] == "PUT" and r[1].startswith("/api/objects/")], [])
         self.assertIn(f"done: 0 created, 0 updated, {TOTAL} skipped", out)
 
 
@@ -166,7 +200,7 @@ def existing_core(model, fields):
 class SyncTests(ApplyCliTestCase):
     """tasa as an earlier model left it: its new fields are added, nothing else."""
 
-    NEW_FIELDS = ["vigencia_hasta", "documento_fuente", "clave_vigencia"]
+    NEW_FIELDS = ["vigencia_hasta", "documento_fuente"]
 
     def setUp(self):
         model = load_model()
@@ -180,9 +214,70 @@ class SyncTests(ApplyCliTestCase):
         self.assertEqual(code, 0, msg=err)
         added = [r[3] for r in self.core.requests if r[0] == "POST" and r[1] == "/api/metadata/objects/tasa/fields"]
         self.assertEqual([f["name"] for f in added], self.NEW_FIELDS)
-        clave = next(f for f in added if f["name"] == "clave_vigencia")
-        self.assertEqual((clave["type"], clave["required"], clave["unique"]), ("TEXT", True, True))
-        self.assertIn(f"done: 3 created, 0 updated, {OTHERS} skipped", out)
+        documento = next(f for f in added if f["name"] == "documento_fuente")
+        self.assertEqual((documento["type"], documento["required"], documento["unique"]), ("TEXT", True, False))
+        self.assertIn(f"done: 2 created, 0 updated, {OTHERS} skipped", out)
+
+
+class ExtraFieldsTests(ApplyCliTestCase):
+    """A field model.json no longer has (tasa.clave_vigencia, as the earlier model left it) is reported, kept, and
+    relaxed when required: a record written without it stays valid."""
+
+    def setUp(self):
+        model = load_model()
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        fields["tasa"].append({"name": "clave_vigencia", "label": "Clave de vigencia", "type": "TEXT", "required": True, "unique": True})
+        fields["turno"].append({"name": "clave_turno", "label": "Clave del turno", "type": "TEXT", "required": False})
+        self.core = existing_core(model, fields)
+        self.addCleanup(self.core.stop)
+
+    def test_reports_the_extra_and_relaxes_the_required(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        self.assertIn("extra  field tasa.clave_vigencia", out)
+        self.assertIn("extra  field turno.clave_turno", out)
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and "/fields/" in r[1] and "required" in (r[3] or {})
+                and r[3]["required"] is False]
+        self.assertEqual(puts, [("/api/metadata/objects/tasa/fields/clave_vigencia", {"required": False})])
+        self.assertEqual([r for r in self.core.requests if r[0] == "DELETE"], [])
+        self.assertIn(f"done: 0 created, 1 updated, {OTHERS} skipped", out)
+
+
+class UniqueConstraintsTests(ApplyCliTestCase):
+    """An object Core has without its constraints gets the complete list by a PUT of the whole object, orden_de_cobro and
+    tasa too (an existing object never gets the POST); the relation's unique is put once; and a second run puts nothing."""
+
+    def setUp(self):
+        model = load_model()
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        next(f for f in fields["anulacion_recibo"] if f["name"] == "recibo")["unique"] = False
+        self.core = existing_core(model, fields)
+        self.core.object_flags = {n: {k: v for k, v in flags.items() if k != "uniqueConstraints"}
+                                  for n, flags in model_flags(model).items()}
+        self.addCleanup(self.core.stop)
+
+    def test_puts_every_constraint_and_the_unique_of_the_relation(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        by_name = {o["name"]: o for o in load_model()["objects"]}
+        object_puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and r[1].startswith("/api/objects/")]
+        self.assertEqual([path for path, _ in object_puts],
+                         [f"/api/objects/{n}" for n in OBJECT_ORDER if n in WAITING + ["orden_de_cobro", "tasa"]])
+        for path, body in object_puts:
+            obj = by_name[path.rsplit("/", 1)[1]]
+            self.assertEqual(body["uniqueConstraints"], obj["uniqueConstraints"])
+            self.assertEqual((body["label"], body["pluralLabel"], body["enabled"]), (obj["label"], obj["pluralLabel"], True))
+        field_puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and r[1].endswith("/fields/recibo")
+                      and r[3] == {"unique": True}]
+        self.assertEqual(field_puts, [("/api/metadata/objects/anulacion_recibo/fields/recibo", {"unique": True})])
+        self.assertIn("update object turno (uniqueConstraints=[[\"caja\", \"cajero\", \"fecha\"]])", out)
+        self.assertIn(f"done: 0 created, {len(WAITING) + 3} updated, {TOTAL} skipped", out)
+
+    def test_a_refusal_of_the_put_stops_the_apply(self):
+        self.core.fail_put_object = "turno"
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 1)
+        self.assertIn("error PUT /api/objects/turno -> 409", err)
 
 
 class EnumOptionsTests(ApplyCliTestCase):
@@ -386,7 +481,7 @@ class DropTests(ApplyCliTestCase):
         self.assertEqual(code, 0, msg=err)
         self.assertEqual(self.core.requests, [])
         self.assertEqual(out.count("# DELETE "), OBJECTS + RELATIONSHIPS)
-        self.assertEqual(out.count("# PUT /api/objects/"), len(APPEND_ONLY))
+        self.assertEqual(out.count("# PUT /api/objects/"), len(DROP_PUTS))
 
     def test_drop_turns_append_only_off_before_deleting_relationships_and_objects(self):
         model = load_model()
@@ -396,14 +491,15 @@ class DropTests(ApplyCliTestCase):
         self.assertEqual(code, 0, msg=err)
         calls = [(r[0], r[1]) for r in self.core.requests if r[0] in ("PUT", "DELETE")]
         puts = [(m, p) for m, p in calls if m == "PUT"]
-        self.assertEqual(puts, [("PUT", f"/api/objects/{n}") for n in OBJECT_ORDER if n in APPEND_ONLY])
+        self.assertEqual(puts, [("PUT", f"/api/objects/{n}") for n in OBJECT_ORDER if n in DROP_PUTS])
         # the PUTs come first, then the relationships, then the objects
         self.assertEqual(calls[:len(puts)], puts)
         self.assertEqual([p for m, p in calls[len(puts):]], [f"/api/relationships/{n}" for n in reversed(RELATIONSHIP_ORDER)]
                          + [f"/api/objects/{n}" for n in reversed(OBJECT_ORDER)])
         for _, body in [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT"]:
             self.assertIs(body["appendOnly"], False)
-            self.assertNotIn("uniqueConstraints", body)
+            # Core refuses to delete a relationship whose field sits in a constraint: they are emptied too
+            self.assertEqual(body["uniqueConstraints"], [])
         self.assertIn(f"done: {TOTAL} deleted, 0 skipped", out)
 
 

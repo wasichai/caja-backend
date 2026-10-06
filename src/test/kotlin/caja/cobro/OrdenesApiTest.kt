@@ -71,7 +71,10 @@ class OrdenesApiTest : CajaApiTest() {
         assertTrue(estados.all { it == HttpStatus.CREATED || it == HttpStatus.OK }, respuestas.toString())
         assertEquals(1, estados.count { it == HttpStatus.CREATED }, estados.toString())
         assertEquals(1, respuestas.map { tree(it.second)["orden_id"].asString() }.toSet().size, respuestas.toString())
-        val guardadas = tree(send("GET", "/api/objects/orden_de_cobro/records?clave_origen=rentas|${cuerpo["referencia_externa"]}", null, HttpStatus.OK))
+        val guardadas =
+            tree(
+                send("GET", "/api/objects/orden_de_cobro/records?sistema_origen=rentas&referencia_externa=${cuerpo["referencia_externa"]}", null, HttpStatus.OK)
+            )
         assertEquals(1, guardadas["totalElements"].asInt(), guardadas.toString())
     }
 

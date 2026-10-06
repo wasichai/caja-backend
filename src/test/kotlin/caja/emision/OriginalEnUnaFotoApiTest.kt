@@ -67,8 +67,8 @@ class OriginalEnUnaFotoApiTest : CajaApiTest() {
                         sql("LOCK TABLE ${reversiones.nombre} IN ACCESS EXCLUSIVE MODE")
                         tomada.complete(Unit)
                         esperando.await()
-                        val cierre = copiar(cierres, cierreMolde, mapOf("turno" to turno, "clave_secuencia" to "$turno|1"))
-                        copiar(reversiones, reversionMolde, mapOf("turno" to turno, "cierre_revertido" to cierre.toString(), "clave_secuencia" to "$turno|2"))
+                        val cierre = copiar(cierres, cierreMolde, mapOf("turno" to turno))
+                        copiar(reversiones, reversionMolde, mapOf("turno" to turno, "cierre_revertido" to cierre.toString()))
                     }
                 }
             tomada.await()
@@ -124,8 +124,7 @@ class OriginalEnUnaFotoApiTest : CajaApiTest() {
         val origen =
             columnas.joinToString(", ") { c ->
                 if (c in porColumna) {
-                    val valor = porColumna.getValue(c)
-                    if (c == tabla.columnas["clave_secuencia"]) SqlIdentifier.literal(valor) else "${SqlIdentifier.literal(valor)}::uuid"
+                    "${SqlIdentifier.literal(porColumna.getValue(c))}::uuid"
                 } else {
                     SqlIdentifier.quote(c)
                 }

@@ -59,7 +59,7 @@ class CobroApiTest : CajaApiTest() {
         assertEquals("PAGADA", pagada["estado"].asString())
         assertEquals(reciboId, pagada["recibo"].asString())
 
-        val turno = registros("turno", "clave_turno" to "${caja.id}|${cajero.email}|$hoy").single()
+        val turno = registros("turno", "caja" to caja.id, "cajero" to cajero.email, "fecha" to hoy.toString()).single()
         assertEquals(guardado["attributes"]["turno"].asString(), turno["id"].asString())
         assertEquals(caja.id, turno["attributes"]["caja"].asString())
         assertEquals(hoy.toString(), turno["attributes"]["fecha"].asString())

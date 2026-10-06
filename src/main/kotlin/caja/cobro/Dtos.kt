@@ -49,7 +49,6 @@ data class OrdenDeCobro(
     val id: String? = null,
     val sistemaOrigen: String? = null,
     val referenciaExterna: String? = null,
-    val claveOrigen: String? = null,
     val concepto: String? = null,
     val detalle: String? = null,
     val importe: BigDecimal? = null,
@@ -150,7 +149,6 @@ data class Tasa(
     val vigenciaDesde: LocalDate? = null,
     val vigenciaHasta: LocalDate? = null,
     val documentoFuente: String? = null,
-    val claveVigencia: String? = null,
     val area: String? = null
 ) {
     // Tasa.vigenteA de caja: rige ese día, ambos extremos incluidos; sin vigencia_hasta, no caduca. una vigencia que
@@ -159,7 +157,7 @@ data class Tasa(
         val desde = vigenciaDesde!!
         if (vigenciaHasta != null && vigenciaHasta.isBefore(desde)) {
             throw ConflictException(
-                "La vigencia de la tasa $codigo ($claveVigencia) termina antes de empezar ($vigenciaHasta < $desde): es un dato mal " +
+                "La vigencia de la tasa $codigo termina antes de empezar ($vigenciaHasta < $desde): es un dato mal " +
                     "cargado, corríjalo en el admin"
             )
         }
@@ -302,8 +300,7 @@ data class Turno(
     val cajero: String? = null,
     val fecha: LocalDate? = null,
     val abiertoEn: Instant? = null,
-    val observacion: String? = null,
-    val claveTurno: String? = null
+    val observacion: String? = null
 )
 
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)

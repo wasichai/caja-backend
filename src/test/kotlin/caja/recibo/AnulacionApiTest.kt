@@ -4,11 +4,13 @@ import caja.CajaApiTest
 import caja.comun.LIMA
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import wasichai.core.data.RecordChange
 import wasichai.core.data.RecordChangeKind
@@ -108,7 +110,7 @@ class AnulacionApiTest : CajaApiTest() {
 
         // el acta, con la caja y el turno del recibo y su total congelado
         val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["attributes"]
-        assertEquals(reciboId, acta["recibo_anulado"].asString())
+        assertEquals(reciboId, acta["recibo"].asString())
         assertEquals(caja.id, acta["caja"].asString())
         assertEquals(antes["attributes"]["turno"].asString(), acta["turno"].asString())
         assertEquals(hoy.toString(), acta["fecha"].asString())
@@ -207,6 +209,20 @@ class AnulacionApiTest : CajaApiTest() {
         val reciboId = registros("recibo", "numero_impreso" to cobro.numero).single()["id"].asString()
         assertEquals(1, registros("anulacion_recibo", "recibo" to reciboId).size)
         assertEquals(2, registros("pago_evento", "recibo" to reciboId).size)
+    }
+
+    @Test
+    fun `una segunda acta forjada en la base para el mismo recibo choca`() {
+        val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
+        post(anulacion(cobro.numero), PETICION, funcionario("SUPERVISOR_CAJA"))
+        val reciboId = registros("recibo", "numero_impreso" to cobro.numero).single()["id"].asString()
+        val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["attributes"]
+
+        // el unique de la relación recibo es la red: la API genérica no escribe el acta (apiOnly), y la base no la repite
+        @Suppress("UNCHECKED_CAST")
+        val otra = json.convertValue(acta, Map::class.java) as Map<String, Any?>
+        assertThrows(DataIntegrityViolationException::class.java) { forjarEnLaBase("anulacion_recibo", otra) }
+        assertEquals(1, registros("anulacion_recibo", "recibo" to reciboId).size)
     }
 
     @Test

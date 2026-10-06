@@ -99,7 +99,13 @@
       "name": "tasa",
       "label": "Tasa",
       "pluralLabel": "Tasas",
-      "description": "Tarifa de un trámite o servicio del TUPA en una vigencia. La cifra es un dato publicado desde la normativa verificada, no un literal del código. Clave natural: codigo y vigencia_desde, que clave_vigencia reúne en un campo.",
+      "description": "Tarifa de un trámite o servicio del TUPA en una vigencia. La cifra es un dato publicado desde la normativa verificada, no un literal del código. Clave natural: codigo y vigencia_desde (uniqueConstraints).",
+      "uniqueConstraints": [
+        [
+          "codigo",
+          "vigencia_desde"
+        ]
+      ],
       "fields": [
         {
           "name": "codigo",
@@ -145,14 +151,6 @@
           "type": "TEXT",
           "required": true,
           "description": "La norma o el TUPA de donde sale la tarifa."
-        },
-        {
-          "name": "clave_vigencia",
-          "label": "Clave de vigencia",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "<codigo>|<vigencia_desde en ISO>. Reemplaza la unicidad compuesta (codigo, vigencia_desde), que wasichai no tiene."
         }
       ]
     },
@@ -163,6 +161,13 @@
       "description": "La apertura de una caja por un cajero en un día (cierre_caja de caja, con el nombre que tiene mientras está viva). No tiene endpoint propio: el primer cobro del día lo abre, de forma implícita e idempotente, y el resto del turno cobra contra él. Lo cierra el arqueo. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
       "appendOnly": true,
+      "uniqueConstraints": [
+        [
+          "caja",
+          "cajero",
+          "fecha"
+        ]
+      ],
       "fields": [
         {
           "name": "cajero",
@@ -191,14 +196,6 @@
           "type": "LONG_TEXT",
           "required": true,
           "description": "Por qué se abrió (regla 10): la del cobro que lo abrió."
-        },
-        {
-          "name": "clave_turno",
-          "label": "Clave del turno",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "<caja id>|<cajero>|<fecha en ISO>. Un cajero tiene un solo turno al día por caja: reemplaza cierre_uq, la unicidad compuesta que wasichai no tiene."
         }
       ]
     },
@@ -315,6 +312,12 @@
       "pluralLabel": "Órdenes de cobro",
       "description": "Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo y a qué fecha está esa cifra. No es deuda tributaria: no tiene tributo, ejercicio ni periodo, y si los ganara la caja dejaría de servir para cobrar un puesto de mercado. La da de alta el sistema de origen por POST /api/caja/ordenes-de-cobro. La API genérica no la escribe (apiOnly: solo caja, por su api).",
       "apiOnly": true,
+      "uniqueConstraints": [
+        [
+          "sistema_origen",
+          "referencia_externa"
+        ]
+      ],
       "fields": [
         {
           "name": "sistema_origen",
@@ -329,14 +332,6 @@
           "type": "TEXT",
           "required": true,
           "description": "Cómo la reconoce quien la mandó, hasta 120 caracteres. Opaca: no se analiza, no se compara por partes y no se ordena."
-        },
-        {
-          "name": "clave_origen",
-          "label": "Clave de origen",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "<sistema_origen>|<referencia_externa>. El alta es idempotente por aquí: reemplaza orden_referencia_uq, la unicidad compuesta que wasichai no tiene."
         },
         {
           "name": "concepto",
@@ -539,14 +534,6 @@
       "appendOnly": true,
       "fields": [
         {
-          "name": "recibo_anulado",
-          "label": "Recibo anulado",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "El id del recibo, otra vez: su unicidad es la red de que un recibo se anula una sola vez (reemplaza recibo_movimiento_anulacion_uq, un índice único parcial que wasichai no tiene)."
-        },
-        {
           "name": "fecha",
           "label": "Fecha",
           "type": "DATE",
@@ -640,6 +627,12 @@
       "description": "El acta del cierre de un turno con su arqueo congelado (cierre_turno de caja, V32, RF-087). Solo se agrega: un cierre no se modifica ni se borra, se reversa con una reversion_cierre, que reabre el turno. El estado del turno no es una columna: se deriva del último movimiento por secuencia. Crearlo es el privilegio REGISTRO de cierre_caja; nadie lo edita ni lo borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
       "appendOnly": true,
+      "uniqueConstraints": [
+        [
+          "turno",
+          "secuencia"
+        ]
+      ],
       "fields": [
         {
           "name": "secuencia",
@@ -738,14 +731,6 @@
           "type": "LONG_TEXT",
           "required": true,
           "description": "Por qué se cierra, escrito por quien cierra (regla 10)."
-        },
-        {
-          "name": "clave_secuencia",
-          "label": "Clave de la secuencia",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "<turno>|<secuencia>. La red de que dos cierres a la vez no tomen la misma secuencia (cierre_turno_secuencia_uq de caja, una unicidad compuesta que wasichai no tiene)."
         }
       ]
     },
@@ -756,6 +741,12 @@
       "description": "El arqueo de un cierre, forma de pago por forma de pago (cierre_turno_detalle de caja): lo cobrado, lo anulado, el neto y lo declarado. Se escribe con su cierre y nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
       "appendOnly": true,
+      "uniqueConstraints": [
+        [
+          "cierre_turno",
+          "forma_pago"
+        ]
+      ],
       "fields": [
         {
           "name": "forma_pago",
@@ -791,14 +782,6 @@
           "type": "DECIMAL",
           "required": true,
           "description": "Lo que el cajero contó en el cajón: el único dato del arqueo que el sistema no puede recomponer. Cero si no lo declaró."
-        },
-        {
-          "name": "clave",
-          "label": "Clave",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "<cierre>|<forma_pago>: una línea por forma de pago y cierre (la clave primaria compuesta de cierre_turno_detalle)."
         }
       ]
     },
@@ -809,6 +792,12 @@
       "description": "Deja sin efecto el cierre vigente de un turno y lo reabre (cierre_turno de caja, tipo REVERSION). El cierre reversado no se toca: sigue diciendo lo que decía, con su arqueo. Crearla es el privilegio ELIMINACION de cierre_caja; nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
       "appendOnly": true,
+      "uniqueConstraints": [
+        [
+          "turno",
+          "secuencia"
+        ]
+      ],
       "fields": [
         {
           "name": "cierre_revertido",
@@ -859,14 +848,6 @@
           "type": "LONG_TEXT",
           "required": true,
           "description": "Por qué se registra, escrito por quien reversa (regla 10). Es otra cosa que el motivo."
-        },
-        {
-          "name": "clave_secuencia",
-          "label": "Clave de la secuencia",
-          "type": "TEXT",
-          "required": true,
-          "unique": true,
-          "description": "<turno>|<secuencia>, como la del cierre: la red de que dos movimientos del mismo objeto no tomen la misma secuencia."
         }
       ]
     }
@@ -978,7 +959,8 @@
       "source": "anulacion_recibo",
       "target": "recibo",
       "fieldName": "recibo",
-      "required": true
+      "required": true,
+      "unique": true
     },
     {
       "name": "anulacion_recibo_caja",

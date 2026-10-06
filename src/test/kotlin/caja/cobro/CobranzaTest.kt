@@ -299,7 +299,6 @@ class CobranzaTest {
         id = UUID.randomUUID().toString(),
         sistemaOrigen = sistemaOrigen,
         referenciaExterna = "PREDIAL-2026-${UUID.randomUUID()}",
-        claveOrigen = null,
         concepto = "IMPUESTO PREDIAL 2026 - CUOTA 1",
         detalle = null,
         importe = importe,

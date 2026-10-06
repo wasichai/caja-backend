@@ -14,8 +14,8 @@ import java.util.Locale
 
 // las órdenes de cobro: el alta que manda el sistema de origen y la lista de la ventanilla. los permisos los aplica
 // RecordService como el usuario que llama: un CAJERO no da de alta (403 de core), un SISTEMA_ORIGEN sí.
-// el alta es idempotente por clave_origen y la garantía es del motor, no de un if (#188 de caja): se inserta, y si el
-// unique de clave_origen salta se relee la que ya estaba. una lectura previa se colaría por la carrera: dos altas
+// el alta es idempotente por (sistema_origen, referencia_externa) y la garantía es del motor, no de un if (#188 de caja):
+// se inserta, y si la uniqueConstraint salta se relee la que ya estaba. una lectura previa se colaría por la carrera: dos altas
 // simultáneas pasarían las dos la comprobación, y el mismo administrado tendría dos órdenes por la misma deuda
 @Service
 class OrdenesService(
@@ -23,13 +23,12 @@ class OrdenesService(
 ) {
     suspend fun registrar(body: NuevaOrden): OrdenRespuesta {
         val atributos = atributos(body)
-        val clave = atributos.getValue("clave_origen") as String
         return try {
             OrdenRespuesta.de(registros.create(ORDEN_DE_COBRO, OrdenDeCobro::class.java, atributos), nueva = true)
         } catch (choque: DataIntegrityViolationException) {
             // DuplicateKeyException incluida. RecordService no abre transacción: la orden que ganó ya está confirmada
             // cuando el motor rechaza esta. si no está, el choque fue otro y sigue su camino
-            OrdenRespuesta.de(porClave(clave) ?: throw choque, nueva = false)
+            OrdenRespuesta.de(porOrigen(atributos) ?: throw choque, nueva = false)
         }
     }
 
@@ -53,11 +52,15 @@ class OrdenesService(
         return PageResponse(ordenes.content.map { OrdenRespuesta.de(it) }, ordenes.page, ordenes.size, ordenes.totalElements, ordenes.totalPages)
     }
 
-    private suspend fun porClave(clave: String): OrdenDeCobro? =
-        registros
-            .page(ORDEN_DE_COBRO, OrdenDeCobro::class.java, RecordQuery(page = PageRequest.of(0, 1), filters = mapOf("clave_origen" to clave)))
-            .content
-            .firstOrNull()
+    private suspend fun porOrigen(atributos: Map<String, Any?>): OrdenDeCobro? =
+        registros.primero(
+            ORDEN_DE_COBRO,
+            OrdenDeCobro::class.java,
+            mapOf(
+                "sistema_origen" to atributos.getValue("sistema_origen") as String,
+                "referencia_externa" to atributos.getValue("referencia_externa") as String
+            )
+        )
 
     // las reglas sobre el cuerpo, con todos los campos que fallan en un solo 400
     private fun atributos(body: NuevaOrden): Map<String, Any?> {
@@ -84,9 +87,8 @@ class OrdenesService(
         if (errores.isNotEmpty()) throw ValidationException("La orden de cobro no es válida", errores)
 
         return mapOf(
-            "sistema_origen" to sistema,
-            "referencia_externa" to referencia,
-            "clave_origen" to claveDeOrigen(sistema!!, referencia!!),
+            "sistema_origen" to sistema!!,
+            "referencia_externa" to referencia!!,
             "concepto" to concepto,
             "detalle" to detalle,
             "importe" to importe!!.toPlainString(),

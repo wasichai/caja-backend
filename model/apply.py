@@ -4,18 +4,24 @@
 Reads a JSON metadata model (objects, fields, relationships, enums), checks it
 against Core's rules (--validate-only stops there) and creates it in Core via
 the REST API, in file order (so relationship targets already exist), marking
-each required relationship's field required. Today that is 13 objects and 18
-relationships: "done: 31 created" on an empty Core, "31 skipped" on a second run.
+each required relationship's field required. A third phase, after the
+relationships, puts what needs them: each object's uniqueConstraints (a set may
+name a relationship's field) and the `unique: true` of a relationship's field.
+Today that is 13 objects and 18 relationships: "done: 31 created, 5 updated" on
+an empty Core (the four objects whose constraints name a relationship, and that
+one field), "31 skipped" on a second run.
 
 On a Core that already has the model it syncs instead: it adds the fields and
 the ENUM options model.json has and Core lacks, drops the ENUM options it no
 longer lists and no record uses (a list it changes takes model.json's order, the
 options kept for being in use last), relaxes a field model.json no longer
-requires, relabels one labelled differently and puts an object's write rules
-(apiOnly, appendOnly) when they differ. It never renames, retypes, makes
-required or removes a field or an option in use, so imported records stay
-valid. --drop first turns appendOnly off (Core refuses to delete a relationship
-on such an object), then tears everything down in reverse order (data included).
+requires (and reports it as extra), relabels one labelled differently and puts
+an object's write rules (apiOnly, appendOnly) and its uniqueConstraints when
+they differ. It never renames, retypes, makes required or removes a field or an
+option in use, so imported records stay valid. --drop first turns appendOnly off
+and empties uniqueConstraints (Core refuses to delete a relationship on such an
+object, or one whose field sits in a constraint), then tears everything down in
+reverse order (data included).
 
 GEOMETRY fields are wasichai-gis's: caja does not install it, so model.json has none. Adapted from wasichai's
 examples/gis-sample/perene/apply.py. Stdlib only. See README.md.
@@ -138,6 +144,7 @@ def validate(model):
     object_order = []
     seen_objects = set()
     fields_by_object = {}
+    types_by_object = {}
 
     for obj in objects:
         oname = obj.get("name", "")
@@ -186,6 +193,7 @@ def validate(model):
                     errors.append(f"{flabel}: enum '{enum_name}' is not defined in enums")
 
         fields_by_object[oname] = field_names
+        types_by_object[oname] = {f.get("name"): f.get("type") for f in obj.get("fields", [])}
 
     rel_names = set()
     seen_source_field_names = set()
@@ -226,6 +234,32 @@ def validate(model):
             )
         seen_source_field_names.add(source_field_key)
 
+        if "unique" in rel and not isinstance(rel["unique"], bool):
+            errors.append(f"{label}: unique must be true or false")
+
+    # a constraint may name a relationship's field: it is declared once the relationship exists (phase 3)
+    relation_fields = {(r.get("source"), r.get("fieldName")) for r in relationships}
+    for obj in objects:
+        oname = obj.get("name", "")
+        label = f"object {oname}"
+        constraints = obj.get("uniqueConstraints", [])
+        if not isinstance(constraints, list):
+            errors.append(f"{label}: uniqueConstraints must be a list of field lists")
+            continue
+        for fields in constraints:
+            if not isinstance(fields, list) or not all(isinstance(n, str) for n in fields):
+                errors.append(f"{label}: a uniqueConstraints entry must be a list of field names")
+                continue
+            if len(fields) < 2:
+                errors.append(f"{label}: uniqueConstraints {fields} needs at least 2 fields (one field is unique: true)")
+            if len(set(fields)) != len(fields):
+                errors.append(f"{label}: uniqueConstraints {fields} names a field twice")
+            for fname in fields:
+                if fname not in fields_by_object.get(oname, set()) and (oname, fname) not in relation_fields:
+                    errors.append(f"{label}: uniqueConstraints {fields} names '{fname}', which is not a field of {oname}")
+                elif types_by_object.get(oname, {}).get(fname) == "LONG_TEXT":
+                    errors.append(f"{label}: uniqueConstraints {fields} names '{fname}', a LONG_TEXT field cannot be unique")
+
     return errors
 
 
@@ -257,7 +291,20 @@ def object_flags(obj):
     return {flag: obj.get(flag, False) for flag in OBJECT_FLAGS}
 
 
+def unique_constraints(obj):
+    """The field sets model.json makes unique on an object, in its order."""
+    return obj.get("uniqueConstraints", [])
+
+
+def _own_unique_constraints(obj):
+    """The sets whose fields are all the object's own: Core takes those in the POST. One that names a relationship's
+    field waits for the relationship (phase 3)."""
+    own = {f["name"] for f in obj["fields"]}
+    return [fields for fields in unique_constraints(obj) if all(name in own for name in fields)]
+
+
 def object_payload(model, obj):
+    sets = _own_unique_constraints(obj)
     return {
         "name": obj["name"],
         "label": obj["label"],
@@ -265,13 +312,14 @@ def object_payload(model, obj):
         "description": obj.get("description", ""),
         "fields": [field_payload(model, f) for f in obj["fields"]],
         **object_flags(obj),
+        **({"uniqueConstraints": sets} if sets else {}),
     }
 
 
 def object_update_payload(obj, **flags):
     """The body of PUT /api/objects/{name}, which REPLACES the object: what it leaves out reverts (a missing
-    pluralLabel takes the label, a missing description goes null), so the labels go every time. uniqueConstraints is never
-    sent: null keeps the ones Core has."""
+    pluralLabel takes the label, a missing description goes null), so the labels go every time. uniqueConstraints is
+    left out: null keeps the ones Core has (a caller that changes them adds the key)."""
     return {
         "label": obj["label"],
         "pluralLabel": obj["pluralLabel"],
@@ -439,6 +487,22 @@ def sync_object(client, model, obj, current_object=None):
                 return None
             print(f"update field {name}.{field['name']} (label)")
             updated += 1
+    # a field model.json no longer has is reported, never removed (it may hold data); one that is required is relaxed, so
+    # a record written without it is still valid. a relationship's field is not model.json's field list: it is not extra
+    wanted_names = {f["name"] for f in obj["fields"]} | {r["fieldName"] for r in model["relationships"] if r["source"] == name}
+    for field_name, current in existing.items():
+        if field_name in wanted_names or current.get("type") == "RELATION":
+            continue
+        print(f"extra  field {name}.{field_name} (model.json no longer has it)")
+        if current.get("required"):
+            field_path = f"{path}/{field_name}"
+            try:
+                client.put(field_path, {"required": False})
+            except CoreError as e:
+                _fatal("PUT", field_path, e)
+                return None
+            print(f"update field {name}.{field_name} (optional)")
+            updated += 1
     return added, updated
 
 
@@ -489,8 +553,49 @@ def do_apply(client, model):
         if not _apply_required_put(client, rel):
             return 1
 
+    changed = _apply_uniques(client, model)
+    if changed is None:
+        return 1
+    updated += changed
+
     print(f"done: {created} created, {updated} updated, {skipped} skipped")
     return 0
+
+
+def _apply_uniques(client, model):
+    """Phase 3, once the relationships exist: the uniqueConstraints of every object (the full list, so the PUT carries the
+    whole object) and the `unique: true` of a relationship's field. Each only when it differs from what Core has
+    (Core leaves the key out of an object with none). Returns how many it put, or None when Core refused."""
+    changed = 0
+    stored = _existing_objects(client.get("/api/objects"))
+    for obj in model["objects"]:
+        name = obj["name"]
+        wanted = unique_constraints(obj)
+        if name not in stored or stored[name].get("uniqueConstraints", []) == wanted:
+            continue
+        path = f"/api/objects/{name}"
+        try:
+            client.put(path, {**object_update_payload(obj), "uniqueConstraints": wanted})
+        except CoreError as e:
+            _fatal("PUT", path, e)
+            return None
+        print(f"update object {name} (uniqueConstraints={json.dumps(wanted)})")
+        changed += 1
+    for rel in model["relationships"]:
+        if not rel.get("unique"):
+            continue
+        path = f"/api/metadata/objects/{rel['source']}/fields"
+        try:
+            current = _fields_by_name(client.get(path)).get(rel["fieldName"], {})
+            if current.get("unique"):
+                continue
+            client.put(f"{path}/{rel['fieldName']}", {"unique": True})
+        except CoreError as e:
+            _fatal("PUT", f"{path}/{rel['fieldName']}", e)
+            return None
+        print(f"update field {rel['source']}.{rel['fieldName']} (unique)")
+        changed += 1
+    return changed
 
 
 def _delete_one(client, label, path):
@@ -511,15 +616,16 @@ def do_drop(client, model):
     deleted = 0
     skipped = 0
 
-    # an appendOnly object keeps its relationships: Core refuses to delete one whose field sits on it. the rule goes
-    # first, with the labels the PUT replaces; an object already gone has nothing to turn off
+    # an appendOnly object keeps its relationships: Core refuses to delete one whose field sits on it, or sits in a
+    # uniqueConstraints set. the rules go first, with the labels the PUT replaces; an object already gone has nothing to
+    # turn off
     for obj in model["objects"]:
-        if not obj.get("appendOnly"):
+        if not obj.get("appendOnly") and not unique_constraints(obj):
             continue
         path = f"/api/objects/{obj['name']}"
         try:
-            client.put(path, object_update_payload(obj, appendOnly=False))
-            print(f"update object {obj['name']} (appendOnly=false)")
+            client.put(path, {**object_update_payload(obj, appendOnly=False), "uniqueConstraints": []})
+            print(f"update object {obj['name']} (appendOnly=false, uniqueConstraints=[])")
         except CoreError as e:
             if e.status == 404:
                 print(f"skip   object {obj['name']} (not found)")
@@ -552,12 +658,21 @@ def _print_dry_run(model):
     for rel in model["relationships"]:
         print("# POST /api/relationships")
         print(json.dumps(relationship_payload(rel), indent=2, ensure_ascii=False))
+    for obj in model["objects"]:
+        # the sets over the object's own fields went in its POST
+        if unique_constraints(obj) != _own_unique_constraints(obj):
+            print(f"# PUT /api/objects/{obj['name']}")
+            print(json.dumps({**object_update_payload(obj), "uniqueConstraints": unique_constraints(obj)}, indent=2, ensure_ascii=False))
+    for rel in model["relationships"]:
+        if rel.get("unique"):
+            print(f"# PUT /api/metadata/objects/{rel['source']}/fields/{rel['fieldName']}")
+            print(json.dumps({"unique": True}))
 
 
 def _print_drop_dry_run(model):
     for obj in model["objects"]:
-        if obj.get("appendOnly"):
-            print(f"# PUT /api/objects/{obj['name']} (appendOnly=false)")
+        if obj.get("appendOnly") or unique_constraints(obj):
+            print(f"# PUT /api/objects/{obj['name']} (appendOnly=false, uniqueConstraints=[])")
     for rel in reversed(model["relationships"]):
         print(f"# DELETE /api/relationships/{rel['name']}")
     for obj in reversed(model["objects"]):

@@ -16,7 +16,6 @@ import java.time.LocalDate
 data class AnulacionRecibo(
     val id: String? = null,
     val recibo: String? = null,
-    val reciboAnulado: String? = null,
     val caja: String? = null,
     val turno: String? = null,
     val fecha: LocalDate? = null,

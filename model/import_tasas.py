@@ -13,8 +13,8 @@ Reglas:
 - vigenciaDesde es una fecha AAAA-MM-DD; vigenciaHasta va vacía o es una fecha mayor o igual que vigenciaDesde.
 - documentoFuente es obligatorio.
 - codigo se guarda recortado y en mayúsculas (como en caja): es como lo pide la ventanilla.
-- clave_vigencia es <codigo>|<vigenciaDesde>, y la fila se rechaza si core ya tiene esa clave (o el archivo ya la
-  cargó): se comprueba antes de escribir, porque core contesta 500 a un duplicado. El unique del modelo queda de red.
+- la fila se rechaza si core ya tiene una tasa con ese codigo y esa vigenciaDesde (o el archivo ya la cargó): se
+  comprueba antes de escribir, porque core contesta 500 a un duplicado. La uniqueConstraint del modelo queda de red.
 
 Correr: python3 import_tasas.py --archivo tasas.csv [--dry-run]
 Salida: 0 si va bien, 1 si core rechaza algo o no responde.
@@ -86,7 +86,6 @@ def parsear(valores, columnas):
         "importe": str(importe),
         "vigencia_desde": desde.isoformat(),
         "documento_fuente": valores["documentoFuente"],
-        "clave_vigencia": f"{codigo}|{desde.isoformat()}",
     }
     if valores["vigenciaHasta"]:
         hasta, motivo = _fecha(valores["vigenciaHasta"], "la vigencia hasta")
@@ -101,19 +100,20 @@ def parsear(valores, columnas):
 def cargar(client, filas, dry_run=False):
     """Carga las filas una por una y devuelve el Informe. Con dry_run lee core y no escribe."""
     informe = Informe()
-    claves = {r["attributes"].get("clave_vigencia") for r in client.list_all(TASA)}
+    vigencias = {(r["attributes"].get("codigo"), r["attributes"].get("vigencia_desde")) for r in client.list_all(TASA)}
     areas = {r["attributes"].get("codigo"): r["id"] for r in client.list_all(AREA)}
 
     for linea, valores, columnas in filas:
         atributos, codigo_area, motivo = parsear(valores, columnas)
         if motivo is None and codigo_area not in areas:
             motivo = f"el área '{codigo_area}' no existe"
-        if motivo is None and atributos["clave_vigencia"] in claves:
-            motivo = f"ya hay una tasa con la clave de vigencia '{atributos['clave_vigencia']}'"
+        vigencia = (atributos or {}).get("codigo"), (atributos or {}).get("vigencia_desde")
+        if motivo is None and vigencia in vigencias:
+            motivo = f"ya hay una tasa con el código '{vigencia[0]}' y la vigencia desde {vigencia[1]}"
         if motivo is not None:
             informe.rechazadas.append((linea, motivo))
             continue
-        claves.add(atributos["clave_vigencia"])
+        vigencias.add(vigencia)
         try:
             if not dry_run:
                 client.post(f"/api/objects/{TASA}/records", {"attributes": {**atributos, "area": areas[codigo_area]}})
