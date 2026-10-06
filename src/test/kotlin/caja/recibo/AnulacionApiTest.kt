@@ -133,6 +133,24 @@ class AnulacionApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `la observacion de la anulacion es la razon del acta, de la orden devuelta y del PAGO_ANULADO`() {
+        val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
+        val reciboId = registros("recibo", "numero_impreso" to cobro.numero).single()["id"].asString()
+
+        post(anulacion(cobro.numero), PETICION, cuenta("SUPERVISOR_CAJA").token)
+
+        val razon = "el pagador pagó dos veces en ventanilla"
+        val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["id"].asString()
+        val anulado = registros("pago_evento", "recibo" to reciboId, "tipo" to "PAGO_ANULADO").single()["id"].asString()
+        listOf("anulacion_recibo" to acta, "pago_evento" to anulado).forEach { (objeto, id) ->
+            assertEquals(razon, razonDe(objeto, id, "CREATE"), objeto)
+        }
+        // la orden vuelve a PENDIENTE con la razón de la anulación; su pase a PAGADA dijo la del cobro
+        assertEquals(razon, razonDe("orden_de_cobro", cobro.ordenId, "UPDATE", ultima = true))
+        assertEquals("cobro en ventanilla", razonDe("orden_de_cobro", cobro.ordenId, "UPDATE", ultima = false))
+    }
+
+    @Test
     fun `un fallo a mitad de la anulacion no deja acta, ni orden pendiente, ni PAGO_ANULADO`() {
         val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
         val antes = registros("recibo", "numero_impreso" to cobro.numero).single()
@@ -372,6 +390,18 @@ class AnulacionApiTest : CajaApiTest() {
                 cajero.token
             )
         return Cobro(cobro["recibo"]["numero_impreso"].asString(), ordenId, cobro["pago_id"].asString())
+    }
+
+    // la razón de la última o la primera operación de ese tipo (la historia de core viene de la más nueva a la más vieja)
+    private fun razonDe(
+        objeto: String,
+        id: String,
+        operacion: String,
+        ultima: Boolean = true
+    ): String {
+        val historia =
+            tree(send("GET", "/api/objects/$objeto/records/$id/history", null, HttpStatus.OK)).toList().filter { it["operation"].asString() == operacion }
+        return (if (ultima) historia.first() else historia.last())["reason"].asString()
     }
 
     private fun anulacion(numero: String) = "/api/caja/recibos/$numero/anulacion"

@@ -98,6 +98,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                         "pluralLabel" to obj["pluralLabel"].asString(),
                         "apiOnly" to (obj["apiOnly"]?.asBoolean() ?: false),
                         "appendOnly" to (obj["appendOnly"]?.asBoolean() ?: false),
+                        "requiresReason" to (obj["requiresReason"]?.asBoolean() ?: false),
                         "fields" to fields.map(::payload),
                         // en el POST solo las que nombran campos propios: las de una relación esperan a la fase 3
                         "uniqueConstraints" to uniques(obj).filter { set -> set.all { n -> fields.any { it["name"].asString() == n } } }
@@ -177,6 +178,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                     "enabled" to true,
                     "apiOnly" to (obj["apiOnly"]?.asBoolean() ?: false),
                     "appendOnly" to (obj["appendOnly"]?.asBoolean() ?: false),
+                    "requiresReason" to (obj["requiresReason"]?.asBoolean() ?: false),
                     "uniqueConstraints" to queremos
                 ),
                 HttpStatus.OK

@@ -18,7 +18,7 @@ the ENUM options model.json has and Core lacks, declares the actions of each obj
 longer lists and no record uses (a list it changes takes model.json's order, the
 options kept for being in use last), relaxes a field model.json no longer
 requires (and reports it as extra), relabels one labelled differently and puts
-an object's write rules (apiOnly, appendOnly) and its uniqueConstraints when
+an object's write rules (apiOnly, appendOnly, requiresReason) and its uniqueConstraints when
 they differ. It never renames, retypes, makes required or removes a field or an
 option in use, so imported records stay valid. --drop first turns appendOnly off
 and empties uniqueConstraints (Core refuses to delete a relationship on such an
@@ -62,7 +62,7 @@ RESERVED_FIELD_NAMES = frozenset({
 })
 
 # the write rules an object declares (ADR-040): both default to false
-OBJECT_FLAGS = ("apiOnly", "appendOnly")
+OBJECT_FLAGS = ("apiOnly", "appendOnly", "requiresReason")
 
 # an action an object declares (ObjectActions of Core): roles are granted it next to READ, CREATE, UPDATE and DELETE
 ACTION_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,48}$")
@@ -433,7 +433,7 @@ def _fields_by_name(data):
 
 
 def sync_object(client, model, obj, current_object=None):
-    """An object that already exists: put its write rules (apiOnly, appendOnly) when they differ from model.json's, add the fields model.json has and Core lacks, and the ENUM options
+    """An object that already exists: put its write rules (apiOnly, appendOnly, requiresReason) when they differ from model.json's, add the fields model.json has and Core lacks, and the ENUM options
     it lacks, drop the ENUM options model.json no longer lists and no record uses, make optional what model.json no
     longer requires, and relabel what it labels differently. Nothing is renamed, retyped or made required, and no
     field or used option is removed, so imported records stay valid.
@@ -448,7 +448,7 @@ def sync_object(client, model, obj, current_object=None):
         except CoreError as e:
             _fatal("PUT", object_path, e)
             return None
-        print(f"update object {name} (apiOnly={str(wanted['apiOnly']).lower()}, appendOnly={str(wanted['appendOnly']).lower()})")
+        print(f"update object {name} (apiOnly={str(wanted['apiOnly']).lower()}, appendOnly={str(wanted['appendOnly']).lower()}, requiresReason={str(wanted['requiresReason']).lower()})")
         updated += 1
     path = f"/api/metadata/objects/{name}/fields"
     try:

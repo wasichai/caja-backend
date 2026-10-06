@@ -136,11 +136,12 @@ class AnularRecibo(
                     "importe" to recibo.total!!.toPlainString(),
                     "usuario" to usuario.email,
                     "observacion" to pedido.observacion.texto
-                )
+                ),
+                pedido.observacion.texto
             )
 
         // 6. las órdenes vuelven a PENDIENTE y sin recibo
-        devolverAPendiente(recibo)
+        devolverAPendiente(recibo, pedido.observacion.texto)
 
         // 7. PAGO_ANULADO, con el pagoId del PAGO_REGISTRADO que deshace
         val pagoAnuladoId =
@@ -158,7 +159,8 @@ class AnularRecibo(
                         "cuerpo" to cuerpoPagoAnulado(pagoId, original.eventoId!!, recibo, pedido.motivo, hoy),
                         "estado" to EVENTO_PENDIENTE,
                         "intentos" to 0
-                    )
+                    ),
+                    pedido.observacion.texto
                 )
                 pagoId.toString()
             }
@@ -179,7 +181,10 @@ class AnularRecibo(
 
     // las órdenes que cobró el recibo (sus líneas no cambian: se leen sin candado), cada una bajo su candado, en orden
     // de id, y releídas después de tomarlos. replace lee, mezcla y escribe sin control de versión: va bajo el candado
-    private suspend fun devolverAPendiente(recibo: Recibo) {
+    private suspend fun devolverAPendiente(
+        recibo: Recibo,
+        razon: String
+    ) {
         val reciboId = recibo.id!!
         val ids =
             registros
@@ -195,7 +200,7 @@ class AnularRecibo(
             check(orden != null && orden.estado == PAGADA && orden.recibo == reciboId) {
                 "La orden $id del recibo ${recibo.numeroImpreso} no está PAGADA con ese recibo: ${orden?.estado} con ${orden?.recibo}"
             }
-            registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(id), mapOf("estado" to PENDIENTE, "recibo" to null))
+            registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(id), mapOf("estado" to PENDIENTE, "recibo" to null), razon)
         }
     }
 

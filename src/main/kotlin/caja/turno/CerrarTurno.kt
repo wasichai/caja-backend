@@ -158,7 +158,8 @@ class CerrarTurno(
                     "cobrado_sin_evento" to cuadre.sinEvento.toPlainString(),
                     "usuario" to usuario.email,
                     "observacion" to pedido.observacion.texto
-                )
+                ),
+                pedido.observacion.texto
             )
         val cierreId = cierre.id!!
         arqueo.lineas.forEach { linea ->
@@ -172,7 +173,8 @@ class CerrarTurno(
                     "anulado" to linea.anulado.toPlainString(),
                     "neto" to linea.neto.toPlainString(),
                     "declarado" to linea.declarado.toPlainString()
-                )
+                ),
+                pedido.observacion.texto
             )
         }
 
@@ -236,7 +238,8 @@ class CerrarTurno(
                     "registrado_en" to ahora().toString(),
                     "usuario" to usuario.email,
                     "observacion" to pedido.observacion.texto
-                )
+                ),
+                pedido.observacion.texto
             )
         return ReversionRespuesta(
             reversionId = reversion.id!!,

@@ -34,7 +34,7 @@ class OrdenesService(
         }
         val atributos = atributos(body, cuenta)
         return try {
-            OrdenRespuesta.de(registros.create(ORDEN_DE_COBRO, OrdenDeCobro::class.java, atributos), nueva = true)
+            OrdenRespuesta.de(registros.create(ORDEN_DE_COBRO, OrdenDeCobro::class.java, atributos, atributos.getValue("observacion") as String), nueva = true)
         } catch (choque: DataIntegrityViolationException) {
             // DuplicateKeyException incluida. RecordService no abre transacción: la orden que ganó ya está confirmada
             // cuando el motor rechaza esta. si no está, el choque fue otro y sigue su camino

@@ -13,8 +13,6 @@ import caja.comun.Registros
 import caja.comun.Transaccion
 import caja.recibo.sinCamposDesconocidos
 import org.springframework.stereotype.Service
-import wasichai.core.audit.AuditOperation
-import wasichai.core.audit.AuditService
 import wasichai.core.common.Actions
 import wasichai.core.common.ConflictException
 import wasichai.core.common.FieldViolation
@@ -37,7 +35,6 @@ class ExplicarPagoSinEntregar(
     private val candados: Candados,
     private val transaccion: Transaccion,
     private val permisos: Permisos,
-    private val auditoria: AuditService,
     private val currentUser: CurrentUser
 ) {
     suspend fun explicar(
@@ -77,17 +74,13 @@ class ExplicarPagoSinEntregar(
                 )
             }
             val explicado =
-                registros.replace(PAGO_EVENTO, PagoEvento::class.java, UUID.fromString(actual.id), mapOf("estado" to EXPLICADO, "explicacion" to explicacion))
-            // el por qué del acto (regla 10): pago_evento no tiene observación, va en la auditoría, junto a la de core
-            auditoria.record(
-                usuario.organizationId,
-                usuario.userId,
-                PAGO_EVENTO,
-                UUID.fromString(actual.id),
-                AuditOperation.UPDATE,
-                before = mapOf("estado" to actual.estado),
-                after = mapOf("estado" to EXPLICADO, "explicacion" to explicacion, "observacion" to observacion!!.texto)
-            )
+                registros.replace(
+                    PAGO_EVENTO,
+                    PagoEvento::class.java,
+                    UUID.fromString(actual.id),
+                    mapOf("estado" to EXPLICADO, "explicacion" to explicacion),
+                    observacion!!.texto
+                )
             val numero = explicado.recibo?.let { registros.byIds(RECIBO, Recibo::class.java, listOf(it))[it]?.numeroImpreso }
             pagoDelBuzon(explicado, numero)
         }

@@ -63,7 +63,7 @@ class FakeCore:
         self.existing_fields = existing_fields or {}  # object name -> list of {"name", "enumOptions"?}
         self.existing_relationships = set(existing_relationships)
         self.actions = set(existing_actions)  # (object name, action name) already declared; a repeat is a 409
-        self.object_flags = dict(object_flags or {})  # object name -> {"apiOnly"?, "appendOnly"?}, as GET /api/objects tells them
+        self.object_flags = dict(object_flags or {})  # object name -> {"apiOnly"?, "appendOnly"?, "requiresReason"?}, as GET /api/objects tells them
         self.fail_on_post_object = fail_on_post_object  # object name -> triggers 500
         self.fail_put = fail_put  # PUT .../fields/... -> fail_put_status
         self.fail_put_status = fail_put_status
@@ -185,7 +185,7 @@ class FakeCore:
                 return 409, {"message": "exists"}
             # what GET /api/objects tells of it from now on: its write rules and, when it has any, its constraints
             self.existing_objects.add(name)
-            self.object_flags[name] = {k: body[k] for k in ("apiOnly", "appendOnly", "uniqueConstraints") if body.get(k)}
+            self.object_flags[name] = {k: body[k] for k in ("apiOnly", "appendOnly", "requiresReason", "uniqueConstraints") if body.get(k)}
             return 201, {"name": name}
         if OBJECT.match(path) and method == "PUT":
             name = OBJECT.match(path).group(1)
@@ -195,7 +195,7 @@ class FakeCore:
                 return 409, {"detail": "repeats"}
             # Core replaces the object: the flags it was not sent keep their value, as its null does. an empty
             # uniqueConstraints is a key GET leaves out
-            flags = {**self.object_flags.get(name, {}), **{k: v for k, v in body.items() if k in ("apiOnly", "appendOnly", "uniqueConstraints")}}
+            flags = {**self.object_flags.get(name, {}), **{k: v for k, v in body.items() if k in ("apiOnly", "appendOnly", "requiresReason", "uniqueConstraints")}}
             self.object_flags[name] = {k: v for k, v in flags.items() if v != [] or k != "uniqueConstraints"}
             return 200, {"name": name, **self.object_flags[name]}
         if path == "/api/relationships" and method == "POST":

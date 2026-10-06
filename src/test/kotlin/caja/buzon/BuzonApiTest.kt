@@ -703,6 +703,13 @@ class BuzonApiTest : CajaApiTest() {
         assertEquals("EXPLICADO", guardado["estado"].asString())
         assertEquals("rentas borró la orden; se registró a mano", guardado["explicacion"].asString())
 
+        // la observación de la explicación es la razón de la edición, en la auditoría de core: no hay otra fila aparte
+        val id = evento(rechazado.pagoId)["id"].asString()
+        val historia = tree(send("GET", "/api/objects/pago_evento/records/$id/history", null, HttpStatus.OK)).toList()
+        val edicion = historia.single { it["operation"].asString() == "UPDATE" && it["reason"].asString() == "lo explica el supervisor" }
+        assertFalse(edicion["userEmail"].isNull, "la explicó una persona: $edicion")
+        assertTrue(edicion["changes"].toList().any { it["field"].asString() == "explicacion" }, edicion.toString())
+
         // explicado una vez, no se explica otra
         send("POST", explicar(rechazado.pagoId), explicacion, HttpStatus.CONFLICT, supervisor)
     }

@@ -44,7 +44,14 @@ class InmutabilidadDelReciboTest {
 
         val hallazgos =
             fuentes.flatMap { fuente ->
-                fuente.readLines().mapIndexedNotNull { i, linea -> if (cambio.containsMatchIn(linea)) "${fuente.path}:${i + 1}: ${linea.trim()}" else null }
+                // sobre el texto entero: una llamada con la razón al final se parte en varias líneas (ktlint)
+                val texto = fuente.readText()
+                cambio
+                    .findAll(texto)
+                    .map { hallazgo ->
+                        val linea = texto.substring(0, hallazgo.range.first).count { it == '\n' } + 1
+                        "${fuente.path}:$linea: ${hallazgo.value.replace(Regex("\\s+"), "")}"
+                    }.toList()
             }
 
         // las dos únicas ediciones del buzón, cada una bajo el candado de su evento: un pago MUERTO pasa a EXPLICADO, por

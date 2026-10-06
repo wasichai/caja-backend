@@ -39,6 +39,7 @@ def model_flags(model):
     """What GET /api/objects tells of each object's write rules and constraints once model.json is applied (Core leaves
     uniqueConstraints out when an object has none)."""
     return {o["name"]: {"apiOnly": o.get("apiOnly", False), "appendOnly": o.get("appendOnly", False),
+                        "requiresReason": o.get("requiresReason", False),
                         **({"uniqueConstraints": o["uniqueConstraints"]} if o.get("uniqueConstraints") else {})}
             for o in model["objects"]}
 
@@ -103,6 +104,7 @@ class DryRunTests(ApplyCliTestCase):
         # the write rules go in each object's POST
         self.assertIn('"apiOnly": true', out)
         self.assertIn('"appendOnly": false', out)
+        self.assertIn('"requiresReason": true', out)
         # phase 3: the constraints that name a relationship's field, and the unique of the annulment's relation
         self.assertEqual(out.count("# PUT /api/objects/"), len(WAITING))
         self.assertIn("# PUT /api/metadata/objects/anulacion_recibo/fields/recibo", out)
@@ -117,6 +119,8 @@ class HappyPathTests(ApplyCliTestCase):
         self.assertEqual([p["name"] for p in object_posts], OBJECT_ORDER)
         self.assertEqual([p["name"] for p in object_posts if p["apiOnly"]], [n for n in OBJECT_ORDER if n in API_ONLY])
         self.assertEqual([p["name"] for p in object_posts if p["appendOnly"]], [n for n in OBJECT_ORDER if n in APPEND_ONLY])
+        # every write of the ten objects caja writes says why
+        self.assertEqual([p["name"] for p in object_posts if p["requiresReason"]], [n for n in OBJECT_ORDER if n in API_ONLY])
 
         rel_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/relationships" and r[0] == "POST"]
         self.assertEqual(rel_posts, RELATIONSHIP_ORDER)
@@ -149,6 +153,7 @@ class HappyPathTests(ApplyCliTestCase):
             obj = by_name[path.rsplit("/", 1)[1]]
             self.assertEqual(body, {"label": obj["label"], "pluralLabel": obj["pluralLabel"], "description": obj["description"],
                                     "enabled": True, "apiOnly": True, "appendOnly": True,
+                                    "requiresReason": True,
                                     "uniqueConstraints": obj["uniqueConstraints"]})
         last_relationship = max(i for i, r in enumerate(self.core.requests) if r[1] == "/api/relationships")
         first_object_put = min(i for i, r in enumerate(self.core.requests) if r[0] == "PUT" and r[1].startswith("/api/objects/"))
@@ -433,14 +438,14 @@ class ObjectFlagsTests(ApplyCliTestCase):
         recibo = next(o for o in model["objects"] if o["name"] == "recibo")
         caja = next(o for o in model["objects"] if o["name"] == "caja")
 
-        def body(obj, api, append):
+        def body(obj, api, append, reason):
             # labels and enabled go every time, and never the constraints
             return {"label": obj["label"], "pluralLabel": obj["pluralLabel"], "description": obj["description"], "enabled": True,
-                    "apiOnly": api, "appendOnly": append}
-        self.assertEqual(puts, [("/api/objects/caja", body(caja, False, False)), ("/api/objects/recibo", body(recibo, True, True))])
+                    "apiOnly": api, "appendOnly": append, "requiresReason": reason}
+        self.assertEqual(puts, [("/api/objects/caja", body(caja, False, False, False)), ("/api/objects/recibo", body(recibo, True, True, True))])
         self.assertTrue(all("uniqueConstraints" not in b for _, b in puts))
         self.assertIn(f"done: 0 created, 2 updated, {OBJECTS - 2 + RELATIONSHIPS + ACTIONS} skipped", out)
-        self.assertEqual(self.core.object_flags["recibo"], {"apiOnly": True, "appendOnly": True})
+        self.assertEqual(self.core.object_flags["recibo"], {"apiOnly": True, "appendOnly": True, "requiresReason": True})
 
 
 class FailureStopsTests(ApplyCliTestCase):

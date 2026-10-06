@@ -68,7 +68,8 @@ class Ventanilla(
     class Emitido(
         val recibo: Recibo,
         val lineas: List<LineaRecibo>,
-        val turno: String
+        val turno: String,
+        val observacion: String
     )
 
     // preparar: lo propio de cada cobro antes del número (sus candados, sus lecturas y sus 404, 400 y 409), en el lugar
@@ -123,7 +124,8 @@ class Ventanilla(
                         "fecha" to apertura.hoy.toString(),
                         "abierto_en" to OffsetDateTime.now(reloj).toString(),
                         "observacion" to apertura.observacion.texto
-                    )
+                    ),
+                    apertura.observacion.texto
                 )
         val turnoId = turno.id!!
 
@@ -176,7 +178,8 @@ class Ventanilla(
                     "actualizado_a" to apertura.hoy.toString(),
                     "clave_idempotencia" to apertura.clave,
                     "observacion" to apertura.observacion.texto
-                )
+                ),
+                apertura.observacion.texto
             )
         val reciboId = recibo.id!!
         val lineas =
@@ -195,12 +198,13 @@ class Ventanilla(
                         "cantidad" to linea.cantidad,
                         "precio_unitario" to linea.precioUnitario?.toPlainString(),
                         "monto" to linea.monto!!.toPlainString()
-                    )
+                    ),
+                    apertura.observacion.texto
                 )
             }
 
         // 8. lo que el cobro agrega, en la misma transacción
-        return despues(Emitido(recibo, lineas, turnoId), contenido.datos)
+        return despues(Emitido(recibo, lineas, turnoId, apertura.observacion.texto), contenido.datos)
     }
 
     // el reenvío de un intento: la clave es del cajero que la mandó, en esa caja y para ese tipo de cobro (la de otro

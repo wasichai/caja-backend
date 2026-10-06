@@ -49,6 +49,8 @@ class ShippedModelTests(unittest.TestCase):
             name = obj["name"]
             self.assertEqual(obj.get("apiOnly", False), name in api_only, name)
             self.assertEqual(obj.get("appendOnly", False), name in api_only - {"pago_evento", "orden_de_cobro"}, name)
+            # every write of those ten carries its reason (the act's observacion, or a fixed system text)
+            self.assertEqual(obj.get("requiresReason", False), name in api_only, name)
 
     def test_area_has_codigo_nombre_and_activa(self):
         fields = self.fields("area")

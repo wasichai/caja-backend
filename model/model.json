@@ -160,6 +160,7 @@
       "pluralLabel": "Turnos",
       "description": "La apertura de una caja por un cajero en un día (cierre_caja de caja, con el nombre que tiene mientras está viva). No tiene endpoint propio: el primer cobro del día lo abre, de forma implícita e idempotente, y el resto del turno cobra contra él. Lo cierra el arqueo. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "uniqueConstraints": [
         [
@@ -205,6 +206,7 @@
       "pluralLabel": "Recibos",
       "description": "El papel que se entrega en ventanilla. No se edita ni se borra: ningún rol tiene UPDATE ni DELETE sobre él (V29 de caja). Su anulación llega como un registro que se agrega. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "actions": [
         {
@@ -318,6 +320,7 @@
       "pluralLabel": "Órdenes de cobro",
       "description": "Lo único que la caja sabe cobrar: de dónde viene, cómo la llama quien la mandó, qué dice el papel, cuánto, desde cuándo y a qué fecha está esa cifra. No es deuda tributaria: no tiene tributo, ejercicio ni periodo, y si los ganara la caja dejaría de servir para cobrar un puesto de mercado. La da de alta el sistema de origen por POST /api/caja/ordenes-de-cobro. La API genérica no la escribe (apiOnly: solo caja, por su api).",
       "apiOnly": true,
+      "requiresReason": true,
       "uniqueConstraints": [
         [
           "sistema_origen",
@@ -414,6 +417,7 @@
       "pluralLabel": "Líneas de recibo",
       "description": "Lo que cobró un recibo, una línea por orden (o por tasa), congelada. Sale solo de la orden: no lleva tributo, ejercicio, periodo, predio ni vehículo, ni un desglose en insoluto, reajuste, interés y gastos (ADR-0045 de caja no se porta). La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "fields": [
         {
@@ -467,6 +471,7 @@
       "pluralLabel": "Eventos de pago",
       "description": "El buzón de salida: el aviso al sistema de origen de que se cobró (o se anuló) un recibo. Se escribe en la misma transacción que el recibo: si la fila está, el recibo está. Lo entrega un proceso aparte. La API genérica no la escribe (apiOnly: solo caja, por su api).",
       "apiOnly": true,
+      "requiresReason": true,
       "fields": [
         {
           "name": "evento_id",
@@ -537,6 +542,7 @@
       "pluralLabel": "Anulaciones de recibo",
       "description": "La anulación de un recibo el mismo día del pago: se agrega, y el recibo no se toca (recibo_movimiento de caja, tipo ANULACION). Las órdenes del recibo vuelven a PENDIENTE y, si el recibo avisó su pago, sale un PAGO_ANULADO en la misma transacción. Crearla es el privilegio ELIMINACION de caja; nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "fields": [
         {
@@ -594,6 +600,7 @@
       "pluralLabel": "Reimpresiones de recibo",
       "description": "Un duplicado de un recibo ya emitido (recibo_movimiento de caja, tipo DUPLICADO): cada reimpresión deja su fila, y de contarlas sale el «DUPLICADO N.°» del papel. Crearla es el privilegio IMPRESION de caja; nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "fields": [
         {
@@ -632,6 +639,7 @@
       "pluralLabel": "Cierres de turno",
       "description": "El acta del cierre de un turno con su arqueo congelado (cierre_turno de caja, V32, RF-087). Solo se agrega: un cierre no se modifica ni se borra, se reversa con una reversion_cierre, que reabre el turno. El estado del turno no es una columna: se deriva del último movimiento por secuencia. Crearlo es el privilegio REGISTRO de cierre_caja; nadie lo edita ni lo borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "uniqueConstraints": [
         [
@@ -746,6 +754,7 @@
       "pluralLabel": "Líneas de cierre de turno",
       "description": "El arqueo de un cierre, forma de pago por forma de pago (cierre_turno_detalle de caja): lo cobrado, lo anulado, el neto y lo declarado. Se escribe con su cierre y nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "uniqueConstraints": [
         [
@@ -797,6 +806,7 @@
       "pluralLabel": "Reversiones de cierre",
       "description": "Deja sin efecto el cierre vigente de un turno y lo reabre (cierre_turno de caja, tipo REVERSION). El cierre reversado no se toca: sigue diciendo lo que decía, con su arqueo. Crearla es el privilegio ELIMINACION de cierre_caja; nadie la edita ni la borra. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
+      "requiresReason": true,
       "appendOnly": true,
       "uniqueConstraints": [
         [
