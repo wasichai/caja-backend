@@ -21,14 +21,14 @@ class ReciboPdf(
     private val renderer: PdfRenderer,
     private val municipalidad: Municipalidad
 ) {
-    fun original(
+    suspend fun original(
         recibo: Recibo,
         caja: Caja,
         lineas: List<LineaRecibo>
     ): ByteArray = renderer.render("recibo", mapOf("r" to impreso(recibo, caja, lineas, ORIGINAL, null)))
 
     // cual: el número de esta reimpresión, desde 1
-    fun duplicado(
+    suspend fun duplicado(
         recibo: Recibo,
         caja: Caja,
         lineas: List<LineaRecibo>,

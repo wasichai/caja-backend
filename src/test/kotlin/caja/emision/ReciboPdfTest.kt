@@ -4,6 +4,7 @@ import caja.cobro.Caja
 import caja.cobro.LineaRecibo
 import caja.cobro.NORMAL
 import caja.cobro.Recibo
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -20,7 +21,7 @@ class ReciboPdfTest {
 
     @Test
     fun `el original lleva todo lo que el papel tiene que decir`() {
-        val texto = texto(pdf.original(recibo(), caja(), lineas()))
+        val texto = texto(runBlocking { pdf.original(recibo(), caja(), lineas()) })
         listOf(
             "MUNICIPALIDAD DISTRITAL DE PERENÉ",
             "001-0000005",
@@ -44,14 +45,14 @@ class ReciboPdfTest {
 
     @Test
     fun `el original dice que es el original`() {
-        val texto = texto(pdf.original(recibo(), caja(), lineas()))
+        val texto = texto(runBlocking { pdf.original(recibo(), caja(), lineas()) })
         assertTrue("RECIBO DE CAJA · ORIGINAL" in texto, texto)
         assertFalse("DUPLICADO" in texto, texto)
     }
 
     @Test
     fun `el duplicado va marcado y numerado, con las mismas cifras que el original`() {
-        val texto = texto(pdf.duplicado(recibo(), caja(), lineas(), 3, null))
+        val texto = texto(runBlocking { pdf.duplicado(recibo(), caja(), lineas(), 3, null) })
         listOf("RECIBO DE CAJA · DUPLICADO N.° 3", "DUPLICADO N.° 3 · recibo 001-0000005", "S/ 1,163.00", "Importes actualizados al 02/10/2026")
             .forEach { assertTrue(it in texto, "falta «$it» en:\n$texto") }
         assertFalse("ORIGINAL" in texto, texto)
@@ -60,7 +61,7 @@ class ReciboPdfTest {
 
     @Test
     fun `el duplicado de un recibo anulado lo dice, con su fecha y su motivo`() {
-        val texto = texto(pdf.duplicado(recibo(), caja(), lineas(), 1, ReciboPdf.Anulado(LocalDate.of(2026, 10, 2), "DOBLE COBRO")))
+        val texto = texto(runBlocking { pdf.duplicado(recibo(), caja(), lineas(), 1, ReciboPdf.Anulado(LocalDate.of(2026, 10, 2), "DOBLE COBRO")) })
         listOf("RECIBO ANULADO — no acredita pago", "Anulado el 02/10/2026 — DOBLE COBRO").forEach {
             assertTrue(it in texto, "falta «$it» en:\n$texto")
         }
@@ -69,7 +70,7 @@ class ReciboPdfTest {
     @Test
     fun `sin pagador identificado se dice, no se deja en blanco`() {
         val anonimo = recibo().copy(pagadorDocumento = null, pagadorNombre = null, pagadorExternoId = null)
-        val texto = texto(pdf.original(anonimo, caja(), lineas()))
+        val texto = texto(runBlocking { pdf.original(anonimo, caja(), lineas()) })
         assertTrue("— (no se identificó al pagador)" in texto, texto)
     }
 
