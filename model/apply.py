@@ -11,9 +11,11 @@ On a Core that already has the model it syncs instead: it adds the fields and
 the ENUM options model.json has and Core lacks, drops the ENUM options it no
 longer lists and no record uses (a list it changes takes model.json's order, the
 options kept for being in use last), relaxes a field model.json no longer
-requires and relabels one labelled differently. It never renames, retypes, makes
+requires, relabels one labelled differently and puts an object's write rules
+(apiOnly, appendOnly) when they differ. It never renames, retypes, makes
 required or removes a field or an option in use, so imported records stay
-valid. --drop tears everything down in reverse order (data included).
+valid. --drop first turns appendOnly off (Core refuses to delete a relationship
+on such an object), then tears everything down in reverse order (data included).
 
 GEOMETRY fields are wasichai-gis's: caja does not install it, so model.json has none. Adapted from wasichai's
 examples/gis-sample/perene/apply.py. Stdlib only. See README.md.
@@ -48,8 +50,11 @@ SQL_KEYWORDS = frozenset({
 RESERVED_FIELD_NAMES = frozenset({
     "id", "organization_id", "created_at", "updated_at", "created_by",
     "updated_by", "workflow_state", "version",
-    "page", "size", "sort", "dir", "q", "bbox", "geometry", "limit",
+    "page", "size", "sort", "dir", "q", "bbox", "geometry", "limit", "count", "after",
 })
+
+# the write rules an object declares (ADR-040): both default to false
+OBJECT_FLAGS = ("apiOnly", "appendOnly")
 
 VALID_NAME = re.compile(r"^[a-z][a-z0-9_]{0,48}$")
 
@@ -142,6 +147,9 @@ def validate(model):
         seen_objects.add(oname)
         object_order.append(oname)
         errors.extend(_check_identifier(oname, "object", MAX_OBJECT_NAME, label))
+        for flag in OBJECT_FLAGS:
+            if flag in obj and not isinstance(obj[flag], bool):
+                errors.append(f"{label}: {flag} must be true or false")
 
         field_names = set()
         for field in obj.get("fields", []):
@@ -244,6 +252,11 @@ def field_payload(model, f):
     return field
 
 
+def object_flags(obj):
+    """The write rules model.json gives an object, both always present."""
+    return {flag: obj.get(flag, False) for flag in OBJECT_FLAGS}
+
+
 def object_payload(model, obj):
     return {
         "name": obj["name"],
@@ -251,6 +264,20 @@ def object_payload(model, obj):
         "pluralLabel": obj["pluralLabel"],
         "description": obj.get("description", ""),
         "fields": [field_payload(model, f) for f in obj["fields"]],
+        **object_flags(obj),
+    }
+
+
+def object_update_payload(obj, **flags):
+    """The body of PUT /api/objects/{name}, which REPLACES the object: what it leaves out reverts (a missing
+    pluralLabel takes the label, a missing description goes null), so the labels go every time. uniqueConstraints is never
+    sent: null keeps the ones Core has."""
+    return {
+        "label": obj["label"],
+        "pluralLabel": obj["pluralLabel"],
+        "description": obj.get("description", ""),
+        "enabled": True,
+        **{**object_flags(obj), **flags},
     }
 
 
@@ -297,10 +324,11 @@ def relationship_payload(rel):
 # CLI
 # ---------------------------------------------------------------------------
 
-def _existing_names(data):
+def _existing_objects(data):
+    """The objects Core has, by name, with the flags and constraints GET /api/objects already carries."""
     if isinstance(data, dict):
         data = data.get("items", data.get("content", []))
-    return {o["name"] for o in (data or [])}
+    return {o["name"]: o for o in (data or [])}
 
 
 def _fatal(method, path, err):
@@ -330,20 +358,30 @@ def _fields_by_name(data):
     return {f["name"]: f for f in (data or [])}
 
 
-def sync_object(client, model, obj):
-    """An object that already exists: add the fields model.json has and Core lacks, and the ENUM options
+def sync_object(client, model, obj, current_object=None):
+    """An object that already exists: put its write rules (apiOnly, appendOnly) when they differ from model.json's, add the fields model.json has and Core lacks, and the ENUM options
     it lacks, drop the ENUM options model.json no longer lists and no record uses, make optional what model.json no
     longer requires, and relabel what it labels differently. Nothing is renamed, retyped or made required, and no
     field or used option is removed, so imported records stay valid.
     Returns (added, updated), or None when Core refused (already reported)."""
     name = obj["name"]
+    added = updated = 0
+    wanted = object_flags(obj)
+    if current_object is not None and any(bool(current_object.get(f)) != wanted[f] for f in OBJECT_FLAGS):
+        object_path = f"/api/objects/{name}"
+        try:
+            client.put(object_path, object_update_payload(obj))
+        except CoreError as e:
+            _fatal("PUT", object_path, e)
+            return None
+        print(f"update object {name} (apiOnly={str(wanted['apiOnly']).lower()}, appendOnly={str(wanted['appendOnly']).lower()})")
+        updated += 1
     path = f"/api/metadata/objects/{name}/fields"
     try:
         existing = _fields_by_name(client.get(path))
     except CoreError as e:
         _fatal("GET", path, e)
         return None
-    added = updated = 0
     for field in obj["fields"]:
         current = existing.get(field["name"])
         if current is None:
@@ -409,11 +447,11 @@ def do_apply(client, model):
     updated = 0
     skipped = 0
 
-    existing = _existing_names(client.get("/api/objects"))
+    existing = _existing_objects(client.get("/api/objects"))
     for obj in model["objects"]:
         name = obj["name"]
         if name in existing:
-            synced = sync_object(client, model, obj)
+            synced = sync_object(client, model, obj, existing[name])
             if synced is None:
                 return 1
             added, changed = synced
@@ -473,6 +511,22 @@ def do_drop(client, model):
     deleted = 0
     skipped = 0
 
+    # an appendOnly object keeps its relationships: Core refuses to delete one whose field sits on it. the rule goes
+    # first, with the labels the PUT replaces; an object already gone has nothing to turn off
+    for obj in model["objects"]:
+        if not obj.get("appendOnly"):
+            continue
+        path = f"/api/objects/{obj['name']}"
+        try:
+            client.put(path, object_update_payload(obj, appendOnly=False))
+            print(f"update object {obj['name']} (appendOnly=false)")
+        except CoreError as e:
+            if e.status == 404:
+                print(f"skip   object {obj['name']} (not found)")
+                continue
+            _fatal("PUT", path, e)
+            return 1
+
     to_delete = [
         (f"relationship {rel['name']}", f"/api/relationships/{rel['name']}")
         for rel in reversed(model["relationships"])
@@ -501,6 +555,9 @@ def _print_dry_run(model):
 
 
 def _print_drop_dry_run(model):
+    for obj in model["objects"]:
+        if obj.get("appendOnly"):
+            print(f"# PUT /api/objects/{obj['name']} (appendOnly=false)")
     for rel in reversed(model["relationships"]):
         print(f"# DELETE /api/relationships/{rel['name']}")
     for obj in reversed(model["objects"]):

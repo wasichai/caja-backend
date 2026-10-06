@@ -40,6 +40,16 @@ class ShippedModelTests(unittest.TestCase):
         obj = next(o for o in self.model["objects"] if o["name"] == name)
         return {f["name"]: f for f in obj["fields"]}
 
+    def test_the_write_rules_of_each_object(self):
+        # the ten objects caja writes are apiOnly (the generic record api never writes them); all but pago_evento and
+        # orden_de_cobro, which caja changes, are appendOnly. the catalogues are neither
+        api_only = {"turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento", "anulacion_recibo",
+                    "reimpresion_recibo", "cierre_turno", "cierre_turno_linea", "reversion_cierre"}
+        for obj in self.model["objects"]:
+            name = obj["name"]
+            self.assertEqual(obj.get("apiOnly", False), name in api_only, name)
+            self.assertEqual(obj.get("appendOnly", False), name in api_only - {"pago_evento", "orden_de_cobro"}, name)
+
     def test_area_has_codigo_nombre_and_activa(self):
         fields = self.fields("area")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {"codigo": "TEXT", "nombre": "TEXT", "activa": "BOOLEAN"})

@@ -9,6 +9,7 @@ import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+OBJECT = re.compile(r"^/api/objects/([a-z0-9_]+)$")
 RECORDS = re.compile(r"^/api/objects/([a-z0-9_]+)/records$")
 RECORD = re.compile(r"^/api/objects/([a-z0-9_]+)/records/([0-9a-f-]+)$")
 FIELDS = re.compile(r"^/api/metadata/objects/([a-z0-9_]+)/fields$")
@@ -55,10 +56,11 @@ class FakeCore:
 
     def __init__(self, existing_objects=(), existing_relationships=(), fail_on_post_object=None,
                  fail_put=False, fail_put_status=500, login_response=None, fail_on_record=None, existing_fields=None,
-                 fail_on_update=None, fail_on_delete=None, fail_on_role=None):
+                 fail_on_update=None, fail_on_delete=None, fail_on_role=None, object_flags=None):
         self.existing_objects = set(existing_objects)
         self.existing_fields = existing_fields or {}  # object name -> list of {"name", "enumOptions"?}
         self.existing_relationships = set(existing_relationships)
+        self.object_flags = dict(object_flags or {})  # object name -> {"apiOnly"?, "appendOnly"?}, as GET /api/objects tells them
         self.fail_on_post_object = fail_on_post_object  # object name -> triggers 500
         self.fail_put = fail_put  # PUT .../fields/... -> fail_put_status
         self.fail_put_status = fail_put_status
@@ -170,7 +172,7 @@ class FakeCore:
         if RECORD.match(path) and method == "DELETE":
             return self._delete(path)
         if path == "/api/objects" and method == "GET":
-            return 200, [{"name": n} for n in self.existing_objects]
+            return 200, [{"name": n, **self.object_flags.get(n, {})} for n in self.existing_objects]
         if path == "/api/objects" and method == "POST":
             name = body["name"]
             if self.fail_on_post_object and name == self.fail_on_post_object:
@@ -178,6 +180,14 @@ class FakeCore:
             if name in self.existing_objects:
                 return 409, {"message": "exists"}
             return 201, {"name": name}
+        if OBJECT.match(path) and method == "PUT":
+            name = OBJECT.match(path).group(1)
+            if name not in self.existing_objects:
+                return 404, {"detail": "not found"}
+            # Core replaces the object: the flags it was not sent keep their value, as its null does
+            self.object_flags[name] = {**self.object_flags.get(name, {}),
+                                       **{k: v for k, v in body.items() if k in ("apiOnly", "appendOnly")}}
+            return 200, {"name": name, **self.object_flags[name]}
         if path == "/api/relationships" and method == "POST":
             name = body["name"]
             if name in self.existing_relationships:

@@ -33,7 +33,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
 
     protected val json: JsonMapper get() = JSON
 
-    // por debajo de la guarda: el almacén de wasichai sin GuardiaDeEscrituras, y la metadata que da su definición
+    // por debajo de las guardas (que viven en RecordService, no en el almacén): el almacén de wasichai, y la metadata que da su definición
     @Autowired
     private lateinit var conexion: DatabaseClient
 
@@ -92,6 +92,8 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                         "name" to name,
                         "label" to obj["label"].asString(),
                         "pluralLabel" to obj["pluralLabel"].asString(),
+                        "apiOnly" to (obj["apiOnly"]?.asBoolean() ?: false),
+                        "appendOnly" to (obj["appendOnly"]?.asBoolean() ?: false),
                         "fields" to fields.map(::payload)
                     ),
                     HttpStatus.CREATED
@@ -422,6 +424,9 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     }
 
     private fun almacen() = PhysicalTableRecordStore(conexion, esquemas, tipos)
+
+    // la organización del admin sembrado: la de todo lo que escribe una prueba
+    protected fun organizacion(): UUID = admin().first
 
     // la organización y el id del admin sembrado
     private fun admin(): Pair<UUID, UUID> {

@@ -67,7 +67,7 @@ class Registros(
                 )
             rows += result.content
             page++
-        } while (page < result.totalPages)
+        } while (result.content.size >= PageRequest.MAX_SIZE)
         return enOrden(rows, sort, descending).map { read(type, it) }
     }
 
@@ -126,7 +126,7 @@ class Registros(
         objectName: String,
         filters: Map<String, String> = emptyMap(),
         criteria: List<RecordCriterion> = emptyList()
-    ): Long = records.list(objectName, RecordQuery(page = PageRequest.of(0, 1), filters = filters, criteria = criteria)).totalElements
+    ): Long = records.list(objectName, RecordQuery(page = PageRequest.of(0, 1), filters = filters, criteria = criteria)).totalElements ?: 0
 
     suspend fun <T : Any> create(
         objectName: String,

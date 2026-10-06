@@ -34,6 +34,16 @@ def load_model():
         return json.load(f)
 
 
+def model_flags(model):
+    """What GET /api/objects tells of each object's write rules once model.json is applied."""
+    return {o["name"]: {"apiOnly": o.get("apiOnly", False), "appendOnly": o.get("appendOnly", False)} for o in model["objects"]}
+
+
+APPEND_ONLY = ["turno", "recibo", "linea_recibo", "anulacion_recibo", "reimpresion_recibo", "cierre_turno",
+               "cierre_turno_linea", "reversion_cierre"]
+API_ONLY = APPEND_ONLY + ["orden_de_cobro", "pago_evento"]
+
+
 def core_fields(model, obj_name, drop=(), options=None):
     """What Core answers for an object that has model.json's fields, minus `drop`; `options` overrides enum options."""
     obj = next(o for o in model["objects"] if o["name"] == obj_name)
@@ -74,6 +84,9 @@ class DryRunTests(ApplyCliTestCase):
         self.assertEqual(self.core.requests, [])
         self.assertEqual(out.count("# POST /api/objects"), OBJECTS)
         self.assertEqual(out.count("# POST /api/relationships"), RELATIONSHIPS)
+        # the write rules go in each object's POST
+        self.assertIn('"apiOnly": true', out)
+        self.assertIn('"appendOnly": false', out)
 
 
 class HappyPathTests(ApplyCliTestCase):
@@ -81,8 +94,10 @@ class HappyPathTests(ApplyCliTestCase):
         code, out, err = self.run_cli([])
         self.assertEqual(code, 0, msg=err)
 
-        object_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
-        self.assertEqual(object_posts, OBJECT_ORDER)
+        object_posts = [r[3] for r in self.core.requests if r[1] == "/api/objects" and r[0] == "POST"]
+        self.assertEqual([p["name"] for p in object_posts], OBJECT_ORDER)
+        self.assertEqual([p["name"] for p in object_posts if p["apiOnly"]], [n for n in OBJECT_ORDER if n in API_ONLY])
+        self.assertEqual([p["name"] for p in object_posts if p["appendOnly"]], [n for n in OBJECT_ORDER if n in APPEND_ONLY])
 
         rel_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/relationships" and r[0] == "POST"]
         self.assertEqual(rel_posts, RELATIONSHIP_ORDER)
@@ -113,6 +128,7 @@ class IdempotencyTests(ApplyCliTestCase):
             existing_objects=[o["name"] for o in model["objects"]],
             existing_relationships=[r["name"] for r in model["relationships"]],
             existing_fields={o["name"]: core_fields(model, o["name"]) for o in model["objects"]},
+            object_flags=model_flags(model),
         )
         self.addCleanup(self.core.stop)
 
@@ -143,6 +159,7 @@ def existing_core(model, fields):
         existing_objects=[o["name"] for o in model["objects"]],
         existing_relationships=[r["name"] for r in model["relationships"]],
         existing_fields=fields,
+        object_flags=model_flags(model),
     )
 
 
@@ -261,10 +278,41 @@ class RelabelTests(ApplyCliTestCase):
     def test_relabels_only_what_differs(self):
         code, out, err = self.run_cli([])
         self.assertEqual(code, 0, msg=err)
-        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and "label" in (r[3] or {})]
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and "/fields/" in r[1] and "label" in (r[3] or {})]
         self.assertEqual(puts, [("/api/metadata/objects/caja/fields/nombre", {"label": "Nombre"})])
         self.assertIn("update field caja.nombre (label)", out)
         self.assertIn(f"done: 0 created, 1 updated, {OTHERS} skipped", out)
+
+
+class ObjectFlagsTests(ApplyCliTestCase):
+    """An object Core has with other write rules gets them from model.json by a PUT that replaces the object."""
+
+    def setUp(self):
+        model = load_model()
+        fields = {o["name"]: core_fields(model, o["name"]) for o in model["objects"]}
+        flags = model_flags(model)
+        flags["recibo"] = {"apiOnly": False, "appendOnly": False}
+        flags["caja"] = {"apiOnly": True, "appendOnly": False}  # a catalogue is neither
+        self.core = existing_core(model, fields)
+        self.core.object_flags = flags
+        self.addCleanup(self.core.stop)
+
+    def test_puts_the_objects_that_differ_only(self):
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and r[1].startswith("/api/objects/")]
+        model = load_model()
+        recibo = next(o for o in model["objects"] if o["name"] == "recibo")
+        caja = next(o for o in model["objects"] if o["name"] == "caja")
+
+        def body(obj, api, append):
+            # labels and enabled go every time, and never the constraints
+            return {"label": obj["label"], "pluralLabel": obj["pluralLabel"], "description": obj["description"], "enabled": True,
+                    "apiOnly": api, "appendOnly": append}
+        self.assertEqual(puts, [("/api/objects/caja", body(caja, False, False)), ("/api/objects/recibo", body(recibo, True, True))])
+        self.assertTrue(all("uniqueConstraints" not in b for _, b in puts))
+        self.assertIn(f"done: 0 created, 2 updated, {OBJECTS - 2 + RELATIONSHIPS} skipped", out)
+        self.assertEqual(self.core.object_flags["recibo"], {"apiOnly": True, "appendOnly": True})
 
 
 class FailureStopsTests(ApplyCliTestCase):
@@ -338,6 +386,25 @@ class DropTests(ApplyCliTestCase):
         self.assertEqual(code, 0, msg=err)
         self.assertEqual(self.core.requests, [])
         self.assertEqual(out.count("# DELETE "), OBJECTS + RELATIONSHIPS)
+        self.assertEqual(out.count("# PUT /api/objects/"), len(APPEND_ONLY))
+
+    def test_drop_turns_append_only_off_before_deleting_relationships_and_objects(self):
+        model = load_model()
+        self.core = FakeCore(existing_objects=[o["name"] for o in model["objects"]], object_flags=model_flags(model))
+        self.addCleanup(self.core.stop)
+        code, out, err = self.run_cli(["--drop"])
+        self.assertEqual(code, 0, msg=err)
+        calls = [(r[0], r[1]) for r in self.core.requests if r[0] in ("PUT", "DELETE")]
+        puts = [(m, p) for m, p in calls if m == "PUT"]
+        self.assertEqual(puts, [("PUT", f"/api/objects/{n}") for n in OBJECT_ORDER if n in APPEND_ONLY])
+        # the PUTs come first, then the relationships, then the objects
+        self.assertEqual(calls[:len(puts)], puts)
+        self.assertEqual([p for m, p in calls[len(puts):]], [f"/api/relationships/{n}" for n in reversed(RELATIONSHIP_ORDER)]
+                         + [f"/api/objects/{n}" for n in reversed(OBJECT_ORDER)])
+        for _, body in [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT"]:
+            self.assertIs(body["appendOnly"], False)
+            self.assertNotIn("uniqueConstraints", body)
+        self.assertIn(f"done: {TOTAL} deleted, 0 skipped", out)
 
 
 class ValidateOnlyTests(ApplyCliTestCase):
