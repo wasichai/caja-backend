@@ -1,5 +1,6 @@
 package caja.cobro
 
+import caja.comun.sinCamposDesconocidos
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -128,10 +129,13 @@ class ReglasTest {
 
     // la frontera: una orden no lleva tributo, ejercicio ni periodo, ni nada que la caja no conozca
 
+    // la frontera: una orden no lleva tributo, ejercicio ni periodo, y los que vengan se nombran todos en el mismo 400
     @Test
     fun `un campo desconocido se rechaza con su nombre`() {
-        sinCamposDesconocidos(emptyList())
-        assertEquals("tributo", rechazado { sinCamposDesconocidos(listOf("tributo", "ejercicio")) })
+        sinCamposDesconocidos(emptyList(), "una orden de cobro")
+        val error = assertThrows<ValidationException> { sinCamposDesconocidos(listOf("tributo", "ejercicio"), "una orden de cobro") }
+        assertEquals(listOf("tributo", "ejercicio"), error.violations.map { it.field })
+        assertEquals("una orden de cobro no lleva este campo", error.violations.first().message)
     }
 
     private fun rechazado(regla: () -> Unit): String =

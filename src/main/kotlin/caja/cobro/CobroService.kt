@@ -9,6 +9,7 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.FieldViolation
@@ -63,7 +64,7 @@ class CobroService(
         permisos.exigir(usuario, "La vista previa", "lee las órdenes que se cobrarían", Actions.READ to ORDEN_DE_COBRO)
         val hoy = LocalDate.now(reloj)
         val errores = mutableListOf<FieldViolation>()
-        campo(errores) { sinCamposDesconocidos(body.desconocidos) }
+        campo(errores) { sinCamposDesconocidos(body.desconocidos, "una vista previa") }
         val ids = campo(errores) { ordenesMarcadas(body.ordenes) }
         campo(errores) { fechaDePago(body.fechaDePago, hoy) }
         if (errores.isNotEmpty()) throw ValidationException("La vista previa no es válida", errores)
@@ -146,7 +147,7 @@ class CobroService(
         hoy: LocalDate
     ): Pedido {
         val errores = mutableListOf<FieldViolation>()
-        campo(errores) { sinCamposDesconocidos(body.desconocidos) }
+        campo(errores) { sinCamposDesconocidos(body.desconocidos, "un cobro") }
         val clave = campo(errores) { claveDeIdempotencia(idempotencia) }
         val caja = campo(errores) { codigoDeCaja(body.caja) }
         val forma = campo(errores) { formaDePago(body.formaPago) }

@@ -133,13 +133,6 @@ fun estadoOrden(valor: String?): String {
     return estado
 }
 
-// la frontera se defiende en la entrada: una orden no lleva tributo, ejercicio ni periodo, ni nada que la caja no
-// conozca. callarlo dejaría creer al sistema de origen que la caja lo guardó
-fun sinCamposDesconocidos(nombres: Collection<String>) {
-    val nombre = nombres.firstOrNull() ?: return
-    throw ValidationException("Campo desconocido", nombre, "una orden de cobro no lleva este campo")
-}
-
 private fun obligatorio(
     valor: String?,
     campo: String

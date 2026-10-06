@@ -4,6 +4,7 @@ import caja.comun.ORDEN_DE_COBRO
 import caja.comun.Observacion
 import caja.comun.Registros
 import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import wasichai.core.common.FieldViolation
@@ -63,7 +64,9 @@ class OrdenesService(
     // las reglas sobre el cuerpo, con todos los campos que fallan en un solo 400
     private fun atributos(body: NuevaOrden): Map<String, Any?> {
         val errores = mutableListOf<FieldViolation>()
-        campo(errores) { sinCamposDesconocidos(body.desconocidos) }
+        // la frontera se defiende en la entrada: una orden no lleva tributo, ejercicio ni periodo, ni nada que la caja no
+        // conozca. callarlo dejaría creer al sistema de origen que la caja lo guardó
+        campo(errores) { sinCamposDesconocidos(body.desconocidos, "una orden de cobro") }
         val sistema = campo(errores) { sistemaOrigen(body.sistemaOrigen) }
         val referencia = campo(errores) { referenciaExterna(body.referenciaExterna) }
         val concepto = campo(errores) { concepto(body.concepto) }
