@@ -46,7 +46,8 @@ class CuerpoEstrictoTest {
     }
 
     // la clave conocida de cada cuerpo es snake_case (de dos palabras donde las hay): si su @JsonNaming se perdiera, se
-    // anotaría como desconocida
+    // anotaría como desconocida. el orden de las desconocidas no se fija: con un constructor como creador, Jackson las
+    // guarda en una lista que encabeza la última (PropertyValueBuffer.bufferAnyProperty) y las entrega al revés
     @Test
     fun `una clave desconocida se anota, y una conocida no`() {
         mapOf(
@@ -63,7 +64,7 @@ class CuerpoEstrictoTest {
             PeticionDeExplicacion::class.java to "explicacion"
         ).forEach { (tipo, conocida) ->
             val cuerpo: CuerpoEstricto = json.readerFor(tipo).readValue("""{"$conocida": "x", "tributo": "PREDIAL", "precio": "1.00"}""")
-            assertEquals(listOf("tributo", "precio"), cuerpo.desconocidos, tipo.simpleName)
+            assertEquals(listOf("precio", "tributo"), cuerpo.desconocidos.sorted(), tipo.simpleName)
         }
     }
 }
