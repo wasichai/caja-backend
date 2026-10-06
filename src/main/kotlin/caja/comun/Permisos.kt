@@ -25,7 +25,8 @@ class Permisos(
         if (faltan.isNotEmpty()) throw ForbiddenException("$que exige permiso de ${faltan.joinToString(" y de ")}: $porque")
     }
 
-    private suspend fun puede(
+    // si el usuario tiene la acción sobre el objeto, con el objectId: sin él solo valen las filas de toda la organización
+    suspend fun puede(
         usuario: AuthenticatedUser,
         accion: String,
         objeto: String

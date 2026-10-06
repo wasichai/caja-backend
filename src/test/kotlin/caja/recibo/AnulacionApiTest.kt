@@ -304,27 +304,42 @@ class AnulacionApiTest : CajaApiTest() {
     }
 
     @Test
-    fun `el recibo de otro cajero exige SUPERVISOR_CAJA, y el propio se anula con el permiso`() {
-        // un rol que cobra y anula, sin llamarse SUPERVISOR_CAJA
-        val rol =
-            rolPropio(
-                listOf("area", "caja", "tasa", "orden_de_cobro", "turno", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo")
-                    .flatMap { listOf(permiso(it, "READ"), permiso(it, "CREATE")) } + permiso("orden_de_cobro", "UPDATE") +
-                    // el cobro y la anulación leen la historia del turno: con el turno cerrado no se cobra ni se anula
-                    listOf(permiso("cierre_turno", "READ"), permiso("reversion_cierre", "READ"))
-            )
-        val ana = cuenta(rol)
-        val luis = cuenta(rol)
+    fun `el recibo de otro cajero exige la accion ANULAR_AJENO, y el propio se anula con el permiso`() {
+        // roles propios que cobran y anulan, sin llamarse SUPERVISOR_CAJA: uno con la acción y otro sin ella
+        val base =
+            listOf("area", "caja", "tasa", "orden_de_cobro", "turno", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo")
+                .flatMap { listOf(permiso(it, "READ"), permiso(it, "CREATE")) } + permiso("orden_de_cobro", "UPDATE") +
+                // el cobro y la anulación leen la historia del turno: con el turno cerrado no se cobra ni se anula
+                listOf(permiso("cierre_turno", "READ"), permiso("reversion_cierre", "READ"))
+        val sinLaAccion = rolPropio(base)
+        val conLaAccion = rolPropio(base + permiso("recibo", "ANULAR_AJENO"))
+        val ana = cuenta(sinLaAccion)
+        val luis = cuenta(sinLaAccion)
+        val jefe = cuenta(conLaAccion)
         val caja = nuevaCaja()
         val deAna = cobrar(caja, ana)
         val deLuis = cobrar(caja, luis)
 
         val problema = tree(send("POST", anulacion(deLuis.numero), PETICION, HttpStatus.FORBIDDEN, ana.token))
-        assertTrue(problema["detail"].asString().contains("SUPERVISOR_CAJA"), problema.toString())
+        assertTrue(problema["detail"].asString().contains("ANULAR_AJENO"), problema.toString())
         assertEquals("PAGADA", estadoDe(deLuis.ordenId))
 
+        // el propio se anula sin la acción
         post(anulacion(deAna.numero), PETICION, ana.token)
         assertEquals("PENDIENTE", estadoDe(deAna.ordenId))
+
+        // el ajeno, con ella
+        post(anulacion(deLuis.numero), PETICION, jefe.token)
+        assertEquals("PENDIENTE", estadoDe(deLuis.ordenId))
+    }
+
+    @Test
+    fun `la lista de permisos propios trae ANULAR_AJENO para el supervisor, y no para el cajero`() {
+        fun acciones(token: String) =
+            tree(send("GET", "/api/auth/me/permissions", null, HttpStatus.OK, token))["objects"]["recibo"].toList().map { it.asString() }
+
+        assertTrue("ANULAR_AJENO" in acciones(funcionario("SUPERVISOR_CAJA")))
+        assertTrue("ANULAR_AJENO" !in acciones(funcionario("CAJERO")))
     }
 
     @Test

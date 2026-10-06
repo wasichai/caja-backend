@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 OBJECT = re.compile(r"^/api/objects/([a-z0-9_]+)$")
 RECORDS = re.compile(r"^/api/objects/([a-z0-9_]+)/records$")
 RECORD = re.compile(r"^/api/objects/([a-z0-9_]+)/records/([0-9a-f-]+)$")
+ACTIONS = re.compile(r"^/api/metadata/objects/([a-z0-9_]+)/actions$")
 FIELDS = re.compile(r"^/api/metadata/objects/([a-z0-9_]+)/fields$")
 ROLE = re.compile(r"^/api/roles/([A-Z0-9_]+)$")
 ROLE_PERMISSIONS = re.compile(r"^/api/roles/([A-Z0-9_]+)/permissions$")
@@ -56,10 +57,12 @@ class FakeCore:
 
     def __init__(self, existing_objects=(), existing_relationships=(), fail_on_post_object=None,
                  fail_put=False, fail_put_status=500, login_response=None, fail_on_record=None, existing_fields=None,
-                 fail_on_update=None, fail_on_delete=None, fail_on_role=None, object_flags=None, fail_put_object=None):
+                 fail_on_update=None, fail_on_delete=None, fail_on_role=None, object_flags=None, fail_put_object=None,
+                 existing_actions=()):
         self.existing_objects = set(existing_objects)
         self.existing_fields = existing_fields or {}  # object name -> list of {"name", "enumOptions"?}
         self.existing_relationships = set(existing_relationships)
+        self.actions = set(existing_actions)  # (object name, action name) already declared; a repeat is a 409
         self.object_flags = dict(object_flags or {})  # object name -> {"apiOnly"?, "appendOnly"?}, as GET /api/objects tells them
         self.fail_on_post_object = fail_on_post_object  # object name -> triggers 500
         self.fail_put = fail_put  # PUT .../fields/... -> fail_put_status
@@ -200,6 +203,15 @@ class FakeCore:
             if name in self.existing_relationships:
                 return 409, {"message": "exists"}
             return 201, {"name": name}
+        actions = ACTIONS.match(path)
+        if actions and method == "POST":
+            if actions.group(1) not in self.existing_objects:
+                return 404, {"detail": "not found"}
+            key = (actions.group(1), body["name"])
+            if key in self.actions:
+                return 409, {"detail": "repeats"}
+            self.actions.add(key)
+            return 201, {"name": body["name"], "label": body.get("label")}
         fields = FIELDS.match(path)
         if fields and method == "GET":
             return 200, self.existing_fields.get(fields.group(1), [])

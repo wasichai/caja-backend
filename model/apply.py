@@ -7,12 +7,14 @@ the REST API, in file order (so relationship targets already exist), marking
 each required relationship's field required. A third phase, after the
 relationships, puts what needs them: each object's uniqueConstraints (a set may
 name a relationship's field) and the `unique: true` of a relationship's field.
-Today that is 13 objects and 18 relationships: "done: 31 created, 5 updated" on
-an empty Core (the four objects whose constraints name a relationship, and that
-one field), "31 skipped" on a second run.
+An object may declare actions of its own (POST .../actions, a 409 is "already
+there"): roles are granted them next to READ, CREATE, UPDATE and DELETE.
+Today that is 13 objects, 18 relationships and 1 action: "done: 32 created,
+5 updated" on an empty Core (the four objects whose constraints name a
+relationship, and that one field), "32 skipped" on a second run.
 
 On a Core that already has the model it syncs instead: it adds the fields and
-the ENUM options model.json has and Core lacks, drops the ENUM options it no
+the ENUM options model.json has and Core lacks, declares the actions of each object (409 = already there), drops the ENUM options it no
 longer lists and no record uses (a list it changes takes model.json's order, the
 options kept for being in use last), relaxes a field model.json no longer
 requires (and reports it as extra), relabels one labelled differently and puts
@@ -61,6 +63,10 @@ RESERVED_FIELD_NAMES = frozenset({
 
 # the write rules an object declares (ADR-040): both default to false
 OBJECT_FLAGS = ("apiOnly", "appendOnly")
+
+# an action an object declares (ObjectActions of Core): roles are granted it next to READ, CREATE, UPDATE and DELETE
+ACTION_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,48}$")
+CRUD_ACTIONS = ("READ", "CREATE", "UPDATE", "DELETE")
 
 VALID_NAME = re.compile(r"^[a-z][a-z0-9_]{0,48}$")
 
@@ -236,6 +242,26 @@ def validate(model):
 
         if "unique" in rel and not isinstance(rel["unique"], bool):
             errors.append(f"{label}: unique must be true or false")
+
+    for obj in objects:
+        label = f"object {obj.get('name', '')}"
+        actions = obj.get("actions", [])
+        if not isinstance(actions, list):
+            errors.append(f"{label}: actions must be a list of {{name, label}}")
+            continue
+        seen_actions = set()
+        for action in actions:
+            aname = action.get("name") if isinstance(action, dict) else None
+            if not isinstance(aname, str) or not ACTION_NAME.fullmatch(aname):
+                errors.append(f"{label}: action name {aname!r} must match {ACTION_NAME.pattern}")
+                continue
+            if aname in CRUD_ACTIONS:
+                errors.append(f"{label}: action {aname} is one of Core's own")
+            if aname in seen_actions:
+                errors.append(f"{label}: duplicate action {aname}")
+            seen_actions.add(aname)
+            if not action.get("label"):
+                errors.append(f"{label}: action {aname} has no label")
 
     # a constraint may name a relationship's field: it is declared once the relationship exists (phase 3)
     relation_fields = {(r.get("source"), r.get("fieldName")) for r in relationships}
@@ -537,6 +563,12 @@ def do_apply(client, model):
                 _fatal("POST", "/api/objects", e)
                 return 1
 
+    declared = _apply_actions(client, model)
+    if declared is None:
+        return 1
+    created += declared[0]
+    skipped += declared[1]
+
     for rel in model["relationships"]:
         name = rel["name"]
         try:
@@ -560,6 +592,28 @@ def do_apply(client, model):
 
     print(f"done: {created} created, {updated} updated, {skipped} skipped")
     return 0
+
+
+def _apply_actions(client, model):
+    """The declared actions of every object (POST /api/metadata/objects/{o}/actions): a role can be granted one only
+    once it is declared. A repeat is a 409 and counts as already there. Returns (created, skipped), or None when Core
+    refused."""
+    created = skipped = 0
+    for obj in model["objects"]:
+        for action in obj.get("actions", []):
+            path = f"/api/metadata/objects/{obj['name']}/actions"
+            label = f"action {obj['name']}.{action['name']}"
+            try:
+                status, _ = client.post(path, {"name": action["name"], "label": action["label"]})
+                print(f"create {label} ({status})")
+                created += 1
+            except CoreError as e:
+                if e.status != 409:
+                    _fatal("POST", path, e)
+                    return None
+                print(f"skip   {label} (exists)")
+                skipped += 1
+    return created, skipped
 
 
 def _apply_uniques(client, model):
@@ -655,6 +709,10 @@ def _print_dry_run(model):
     for obj in model["objects"]:
         print("# POST /api/objects")
         print(json.dumps(object_payload(model, obj), indent=2, ensure_ascii=False))
+    for obj in model["objects"]:
+        for action in obj.get("actions", []):
+            print(f"# POST /api/metadata/objects/{obj['name']}/actions")
+            print(json.dumps({"name": action["name"], "label": action["label"]}, indent=2, ensure_ascii=False))
     for rel in model["relationships"]:
         print("# POST /api/relationships")
         print(json.dumps(relationship_payload(rel), indent=2, ensure_ascii=False))

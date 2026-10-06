@@ -4,6 +4,7 @@ import caja.cobro.LineaRecibo
 import caja.cobro.Recibo
 import caja.cobro.lineasEnOrden
 import caja.cobro.numeroImpreso
+import caja.comun.RECIBO
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.FieldViolation
@@ -30,9 +31,8 @@ val ESTADOS_DE_RECIBO = listOf(EMITIDO, ANULADO)
 
 const val PAGO_ANULADO = "PAGO_ANULADO"
 
-// el rol que anula el recibo de otro cajero (el privilegio ESPECIAL de caja). wasichai no tiene acciones propias: se
-// comprueba por el nombre del rol, un hueco declarado
-const val SUPERVISOR_CAJA = "SUPERVISOR_CAJA"
+// la acción declarada de recibo (model.json) que anula el recibo de otro cajero: el privilegio ESPECIAL de caja
+const val ANULAR_AJENO = "ANULAR_AJENO"
 
 // los largos de recibo_movimiento de caja: wasichai guarda TEXT sin largo
 const val LARGO_MOTIVO = 80
@@ -156,17 +156,19 @@ fun delMismoDia(
     if (delTurno != hoy) throw FueraDelDiaDePago(numero, delTurno, hoy)
 }
 
-// el recibo de otro cajero lo anula SUPERVISOR_CAJA (o ADMIN): toca el arqueo de un turno que no es el suyo. es el
-// privilegio ESPECIAL de caja, comprobado por el nombre del rol porque wasichai no tiene acciones propias
+// el recibo de otro cajero lo anula quien tiene ANULAR_AJENO sobre recibo (el supervisor, y ADMIN): toca el arqueo de un
+// turno que no es el suyo. la función es pura: quien llama le dice si el usuario tiene la acción, que se comprueba con
+// el objectId del recibo
 fun puedeAnular(
     cajeroDelRecibo: String,
     usuario: AuthenticatedUser,
-    numero: String
+    numero: String,
+    tieneAnularAjeno: Boolean
 ) {
-    if (cajeroDelRecibo == usuario.email || usuario.isAdmin || SUPERVISOR_CAJA in usuario.roles) return
+    if (cajeroDelRecibo == usuario.email || tieneAnularAjeno) return
     throw ForbiddenException(
-        "El recibo $numero lo cobró otro cajero ($cajeroDelRecibo): anularlo exige el rol $SUPERVISOR_CAJA, porque toca el arqueo de " +
-            "su turno"
+        "El recibo $numero lo cobró otro cajero ($cajeroDelRecibo): anularlo exige el permiso $ANULAR_AJENO sobre $RECIBO, que " +
+            "tiene el supervisor de caja, porque toca el arqueo de su turno"
     )
 }
 

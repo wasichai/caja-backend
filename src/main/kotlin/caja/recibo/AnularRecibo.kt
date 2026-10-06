@@ -103,8 +103,8 @@ class AnularRecibo(
             throw ConflictException("El recibo $numero ya se anuló el ${it.fecha}: las órdenes que cobró ya volvieron a PENDIENTE")
         }
 
-        // 4. ESPECIAL: el recibo de otro cajero exige SUPERVISOR_CAJA (403)
-        puedeAnular(recibo.cajero!!, usuario, numero)
+        // 4. ESPECIAL: el recibo de otro cajero exige la acción ANULAR_AJENO sobre recibo (403)
+        puedeAnular(recibo.cajero!!, usuario, numero, permisos.puede(usuario, ANULAR_AJENO, RECIBO))
 
         // no se anula lo que no avisó: un recibo NORMAL sin su PAGO_REGISTRADO pediría al origen deshacer un pago que no
         // conoce. un recibo de tasas no avisa a nadie

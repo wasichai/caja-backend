@@ -206,6 +206,12 @@
       "description": "El papel que se entrega en ventanilla. No se edita ni se borra: ningún rol tiene UPDATE ni DELETE sobre él (V29 de caja). Su anulación llega como un registro que se agrega. La API genérica no la escribe (apiOnly: solo caja, por su api). Wasichai tampoco la cambia ni la borra (appendOnly).",
       "apiOnly": true,
       "appendOnly": true,
+      "actions": [
+        {
+          "name": "ANULAR_AJENO",
+          "label": "Anular el recibo de otro cajero"
+        }
+      ],
       "fields": [
         {
           "name": "serie",

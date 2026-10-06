@@ -17,6 +17,7 @@ MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.json")
 
 OBJECTS = 13
 RELATIONSHIPS = 18
+ACTIONS = 1
 OBJECT_ORDER = ["area", "caja", "tasa", "turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento",
                 "anulacion_recibo", "reimpresion_recibo", "cierre_turno", "cierre_turno_linea", "reversion_cierre"]
 RELATIONSHIP_ORDER = ["caja_area", "tasa_area", "turno_caja", "recibo_caja", "recibo_turno", "orden_recibo",
@@ -24,8 +25,8 @@ RELATIONSHIP_ORDER = ["caja_area", "tasa_area", "turno_caja", "recibo_caja", "re
                       "pago_evento_turno", "anulacion_recibo_recibo", "anulacion_recibo_caja", "anulacion_recibo_turno",
                       "reimpresion_recibo_recibo", "cierre_turno_turno", "cierre_turno_linea_cierre_turno",
                       "reversion_cierre_turno"]
-# what apply.py prints: every object and relationship, and all but the one a test touches
-TOTAL = OBJECTS + RELATIONSHIPS
+# what apply.py prints: every object, relationship and declared action, and all but the one a test touches
+TOTAL = OBJECTS + RELATIONSHIPS + ACTIONS
 OTHERS = TOTAL - 1
 
 
@@ -40,6 +41,11 @@ def model_flags(model):
     return {o["name"]: {"apiOnly": o.get("apiOnly", False), "appendOnly": o.get("appendOnly", False),
                         **({"uniqueConstraints": o["uniqueConstraints"]} if o.get("uniqueConstraints") else {})}
             for o in model["objects"]}
+
+
+def model_actions(model):
+    """The (object, action) pairs a Core that already has model.json declares."""
+    return [(o["name"], a["name"]) for o in model["objects"] for a in o.get("actions", [])]
 
 
 APPEND_ONLY = ["turno", "recibo", "linea_recibo", "anulacion_recibo", "reimpresion_recibo", "cierre_turno",
@@ -115,6 +121,11 @@ class HappyPathTests(ApplyCliTestCase):
         rel_posts = [r[3]["name"] for r in self.core.requests if r[1] == "/api/relationships" and r[0] == "POST"]
         self.assertEqual(rel_posts, RELATIONSHIP_ORDER)
 
+        # the action of recibo is declared once the object exists, with its label
+        action_posts = [(r[1], r[3]) for r in self.core.requests if r[0] == "POST" and r[1].endswith("/actions")]
+        self.assertEqual(action_posts, [("/api/metadata/objects/recibo/actions",
+                                         {"name": "ANULAR_AJENO", "label": "Anular el recibo de otro cajero"})])
+
         # the required relationships, each made required right after its POST. caja_area is not (the cajas tributarias
         # have no area), nor orden_recibo (a PENDIENTE orden has no recibo), nor a linea's orden or tasa
         puts = [(r[1], r[3]) for r in self.core.requests if r[0] == "PUT" and r[1].startswith("/api/metadata/")]
@@ -152,6 +163,26 @@ class HappyPathTests(ApplyCliTestCase):
         self.assertIn(f"done: {TOTAL} created, {len(WAITING) + 1} updated, 0 skipped", out)
 
 
+class DeclaredActionsTests(ApplyCliTestCase):
+    def test_an_action_already_declared_counts_as_there(self):
+        self.core = FakeCore(existing_actions=[("recibo", "ANULAR_AJENO")])
+        self.addCleanup(self.core.stop)
+        code, out, err = self.run_cli([])
+        self.assertEqual(code, 0, msg=err)
+        self.assertIn("skip   action recibo.ANULAR_AJENO (exists)", out)
+        self.assertIn(f"done: {TOTAL - 1} created", out)
+
+    def test_dry_run_prints_the_action(self):
+        code, out, err = self.run_cli(["--dry-run"])
+        self.assertEqual(code, 0, msg=err)
+        self.assertIn("# POST /api/metadata/objects/recibo/actions", out)
+
+    def test_a_bad_action_name_is_rejected(self):
+        model = load_model()
+        next(o for o in model["objects"] if o["name"] == "recibo")["actions"][0]["name"] = "anular"
+        self.assertTrue(any("anular" in e for e in apply.validate(model)))
+
+
 class IdempotencyTests(ApplyCliTestCase):
     def setUp(self):
         model = load_model()
@@ -160,6 +191,7 @@ class IdempotencyTests(ApplyCliTestCase):
             existing_relationships=[r["name"] for r in model["relationships"]],
             existing_fields={o["name"]: core_fields(model, o["name"]) for o in model["objects"]},
             object_flags=model_flags(model),
+            existing_actions=model_actions(model),
         )
         self.addCleanup(self.core.stop)
 
@@ -194,6 +226,7 @@ def existing_core(model, fields):
         existing_relationships=[r["name"] for r in model["relationships"]],
         existing_fields=fields,
         object_flags=model_flags(model),
+        existing_actions=model_actions(model),
     )
 
 
@@ -406,7 +439,7 @@ class ObjectFlagsTests(ApplyCliTestCase):
                     "apiOnly": api, "appendOnly": append}
         self.assertEqual(puts, [("/api/objects/caja", body(caja, False, False)), ("/api/objects/recibo", body(recibo, True, True))])
         self.assertTrue(all("uniqueConstraints" not in b for _, b in puts))
-        self.assertIn(f"done: 0 created, 2 updated, {OBJECTS - 2 + RELATIONSHIPS} skipped", out)
+        self.assertIn(f"done: 0 created, 2 updated, {OBJECTS - 2 + RELATIONSHIPS + ACTIONS} skipped", out)
         self.assertEqual(self.core.object_flags["recibo"], {"apiOnly": True, "appendOnly": True})
 
 
@@ -474,7 +507,7 @@ class DropTests(ApplyCliTestCase):
         deletes = [r[1] for r in self.core.requests if r[0] == "DELETE"]
         self.assertEqual(deletes, [f"/api/relationships/{n}" for n in reversed(RELATIONSHIP_ORDER)]
                          + [f"/api/objects/{n}" for n in reversed(OBJECT_ORDER)])
-        self.assertIn(f"done: {TOTAL} deleted, 0 skipped", out)
+        self.assertIn(f"done: {OBJECTS + RELATIONSHIPS} deleted, 0 skipped", out)
 
     def test_drop_dry_run_makes_no_requests(self):
         code, out, err = self.run_cli(["--drop", "--dry-run"])
@@ -500,7 +533,7 @@ class DropTests(ApplyCliTestCase):
             self.assertIs(body["appendOnly"], False)
             # Core refuses to delete a relationship whose field sits in a constraint: they are emptied too
             self.assertEqual(body["uniqueConstraints"], [])
-        self.assertIn(f"done: {TOTAL} deleted, 0 skipped", out)
+        self.assertIn(f"done: {OBJECTS + RELATIONSHIPS} deleted, 0 skipped", out)
 
 
 class ValidateOnlyTests(ApplyCliTestCase):

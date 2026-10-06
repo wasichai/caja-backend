@@ -2,6 +2,7 @@ package caja
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpHeaders
@@ -56,7 +57,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     protected fun modelo(): JsonNode = json.readTree(File("model/model.json"))
 
     // model/apply.py en kotlin: se crea lo que falta (objetos, campos, opciones de enum, relaciones obligatorias), un
-    // campo que model.json ya no exige se relaja, lo demás se deja. la fase 3, ya con las relaciones: las
+    // campo que model.json ya no exige se relaja, lo demás se deja; las acciones declaradas de cada objeto. la fase 3, ya con las relaciones: las
     // uniqueConstraints de cada objeto y el unique de las relaciones que lo piden, solo si difieren
     private fun applyModel() {
         val model = modelo()
@@ -128,6 +129,14 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                 }
                 if (current["required"].asBoolean() && !required(field)) change["required"] = false
                 if (change.isNotEmpty()) send("PUT", "/api/metadata/objects/$name/fields/${field["name"].asString()}", change, HttpStatus.OK)
+            }
+        }
+        // las acciones declaradas de cada objeto: un 409 es que ya estaba (la base se vacía al empezar, pero se repite en una corrida)
+        for (obj in model["objects"]) {
+            for (accion in obj["actions"]?.toList() ?: emptyList()) {
+                val cuerpo = mapOf("name" to accion["name"].asString(), "label" to accion["label"].asString())
+                val (estado, respuesta) = exchange("POST", "/api/metadata/objects/${obj["name"].asString()}/actions", cuerpo)
+                assertTrue(estado == HttpStatus.CREATED || estado == HttpStatus.CONFLICT, "acción ${accion["name"]}: $estado $respuesta")
             }
         }
         val relationships: Set<String> = tree(send("GET", "/api/relationships", null, HttpStatus.OK)).names()
