@@ -1,8 +1,6 @@
 package caja.recaudacion
 
 import caja.buzon.ClienteDelSistemaDeOrigen
-import caja.cobro.PagoEvento
-import caja.cobro.Turno
 import caja.comun.Importe
 import caja.comun.PAGO_EVENTO
 import caja.comun.Permisos
@@ -10,6 +8,8 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.modelo.PagoEvento
+import caja.modelo.Turno
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.identity.CurrentUser

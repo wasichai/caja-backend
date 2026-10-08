@@ -1,10 +1,5 @@
 package caja.recaudacion
 
-import caja.cobro.Area
-import caja.cobro.Caja
-import caja.cobro.Tasa
-import caja.cobro.Turno
-import caja.cobro.claveDelTurno
 import caja.comun.ANULACION_RECIBO
 import caja.comun.AREA
 import caja.comun.CAJA
@@ -16,7 +11,12 @@ import caja.comun.Registros
 import caja.comun.TASA
 import caja.comun.TURNO
 import caja.comun.Transaccion
-import caja.recibo.AnulacionRecibo
+import caja.modelo.AnulacionRecibo
+import caja.modelo.Area
+import caja.modelo.Caja
+import caja.modelo.Tasa
+import caja.modelo.Turno
+import caja.modelo.claveDelTurno
 import caja.turno.ArqueoDelTurno
 import caja.turno.ArqueoRespuesta
 import caja.turno.EstadoDelTurno

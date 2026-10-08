@@ -1,8 +1,8 @@
 package caja.turno
 
-import caja.cobro.NORMAL
-import caja.cobro.PAGO_DE_TASA
-import caja.cobro.produceEvento
+import caja.modelo.NORMAL
+import caja.modelo.PAGO_DE_TASA
+import caja.modelo.produceEvento
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull

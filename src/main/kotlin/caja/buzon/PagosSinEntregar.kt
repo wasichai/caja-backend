@@ -1,12 +1,13 @@
 package caja.buzon
 
-import caja.cobro.PagoEvento
-import caja.cobro.Recibo
 import caja.comun.PAGO_EVENTO
 import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
+import caja.modelo.EVENTO_MUERTO
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.identity.CurrentUser
@@ -31,7 +32,7 @@ class PagosSinEntregar(
             Actions.READ to RECIBO
         )
         return transaccion.lectura {
-            val muertos = registros.all(PAGO_EVENTO, PagoEvento::class.java, filters = mapOf("estado" to BuzonStore.MUERTO), sort = "created_at")
+            val muertos = registros.all(PAGO_EVENTO, PagoEvento::class.java, filters = mapOf("estado" to EVENTO_MUERTO), sort = "created_at")
             val recibos = registros.byIds(RECIBO, Recibo::class.java, muertos.mapNotNull { it.recibo })
             muertos.map { pagoDelBuzon(it, recibos[it.recibo]?.numeroImpreso) }
         }

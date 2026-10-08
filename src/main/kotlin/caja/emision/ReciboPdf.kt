@@ -1,11 +1,11 @@
 package caja.emision
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.cobro.lineasEnOrden
 import caja.cobro.nombreImpreso
 import caja.comun.LIMA
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
 import org.springframework.stereotype.Component
 import java.math.BigDecimal
 import java.time.LocalDate
@@ -21,14 +21,14 @@ class ReciboPdf(
     private val renderer: PdfRenderer,
     private val municipalidad: Municipalidad
 ) {
-    fun original(
+    suspend fun original(
         recibo: Recibo,
         caja: Caja,
         lineas: List<LineaRecibo>
     ): ByteArray = renderer.render("recibo", mapOf("r" to impreso(recibo, caja, lineas, ORIGINAL, null)))
 
     // cual: el número de esta reimpresión, desde 1
-    fun duplicado(
+    suspend fun duplicado(
         recibo: Recibo,
         caja: Caja,
         lineas: List<LineaRecibo>,

@@ -8,6 +8,17 @@ import caja.comun.PAGO_EVENTO
 import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
+import caja.comun.campo
+import caja.comun.codigoDeCaja
+import caja.comun.sinCamposDesconocidos
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.LineaRecibo
+import caja.modelo.NORMAL
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PAGADA
+import caja.modelo.PAGO_REGISTRADO
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.FieldViolation
@@ -62,7 +73,7 @@ class CobroService(
         permisos.exigir(usuario, "La vista previa", "lee las órdenes que se cobrarían", Actions.READ to ORDEN_DE_COBRO)
         val hoy = LocalDate.now(reloj)
         val errores = mutableListOf<FieldViolation>()
-        campo(errores) { sinCamposDesconocidos(body.desconocidos) }
+        campo(errores) { sinCamposDesconocidos(body.desconocidos, "una vista previa") }
         val ids = campo(errores) { ordenesMarcadas(body.ordenes) }
         campo(errores) { fechaDePago(body.fechaDePago, hoy) }
         if (errores.isNotEmpty()) throw ValidationException("La vista previa no es válida", errores)
@@ -145,7 +156,7 @@ class CobroService(
         hoy: LocalDate
     ): Pedido {
         val errores = mutableListOf<FieldViolation>()
-        campo(errores) { sinCamposDesconocidos(body.desconocidos) }
+        campo(errores) { sinCamposDesconocidos(body.desconocidos, "un cobro") }
         val clave = campo(errores) { claveDeIdempotencia(idempotencia) }
         val caja = campo(errores) { codigoDeCaja(body.caja) }
         val forma = campo(errores) { formaDePago(body.formaPago) }
@@ -161,15 +172,3 @@ class CobroService(
         val ordenes: List<UUID>
     )
 }
-
-// una regla sobre la petición: su valor, o su 400 anotado en errores para juntarlos todos en uno
-internal fun <T> campo(
-    errores: MutableList<FieldViolation>,
-    regla: () -> T
-): T? =
-    try {
-        regla()
-    } catch (e: ValidationException) {
-        errores += e.violations
-        null
-    }

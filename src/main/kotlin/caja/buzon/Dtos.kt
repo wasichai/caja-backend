@@ -1,7 +1,6 @@
 package caja.buzon
 
-import com.fasterxml.jackson.annotation.JsonAnySetter
-import com.fasterxml.jackson.annotation.JsonIgnore
+import caja.comun.CuerpoEstricto
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 
@@ -29,15 +28,4 @@ data class PagoDelBuzon(
 class PeticionDeExplicacion(
     val explicacion: String? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()

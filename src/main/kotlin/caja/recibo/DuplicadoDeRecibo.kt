@@ -1,9 +1,5 @@
 package caja.recibo
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
-import caja.cobro.campo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.CAJA
 import caja.comun.Candado
@@ -15,7 +11,13 @@ import caja.comun.RECIBO
 import caja.comun.REIMPRESION_RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
 import caja.emision.ReciboPdf
+import caja.modelo.AnulacionRecibo
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.ConflictException
@@ -34,7 +36,11 @@ import java.util.UUID
 //
 // y no se afirma que sale igual: se comprueba. cada reimpresión guarda el SHA-256 de lo congelado (resumenDelRecibo);
 // la siguiente lo vuelve a calcular y, si no coincide con el de alguna anterior, falla con 409 en vez de entregar un
-// papel distinto con el mismo número
+// papel distinto con el mismo número.
+//
+// el pdf se dibuja DENTRO de la transacción, con el candado del recibo tomado, a propósito: la reimpresion_recibo queda
+// si y solo si el papel se dibujó. dibujado después del commit, un fallo al dibujar dejaría contado un «DUPLICADO N.° n»
+// que nadie recibió. se dibuja en Dispatchers.Default (PdfRenderer), no en el hilo de la petición
 @Service
 class DuplicadoDeRecibo(
     private val registros: Registros,

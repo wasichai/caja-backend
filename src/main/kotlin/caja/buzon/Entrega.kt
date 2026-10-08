@@ -1,11 +1,13 @@
 package caja.buzon
 
-import caja.cobro.NORMAL
-import caja.cobro.OrdenDeCobro
-import caja.cobro.PAGO_REGISTRADO
-import caja.cobro.Recibo
 import caja.cobro.cuerpoPagoRegistrado
-import caja.recibo.PAGO_ANULADO
+import caja.modelo.EVENTO_ENTREGADO
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.NORMAL
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PAGO_ANULADO
+import caja.modelo.PAGO_REGISTRADO
+import caja.modelo.Recibo
 import caja.recibo.cuerpoPagoAnulado
 import tools.jackson.core.JacksonException
 import tools.jackson.databind.JsonNode
@@ -326,8 +328,8 @@ fun salida(
         registradoDelCobro(recibo)
             ?: return Salida.NoSale("el recibo ${recibo.recibo.numeroImpreso} no tiene el PAGO_REGISTRADO de su cobro, que esta anulación deshace")
     return when (registrado.estado) {
-        BuzonStore.ENTREGADO -> Salida.Sale
-        BuzonStore.PENDIENTE -> Salida.Espera("espera a su PAGO_REGISTRADO ${registrado.eventoId}, que todavía no llegó a su sistema de origen")
+        EVENTO_ENTREGADO -> Salida.Sale
+        EVENTO_PENDIENTE -> Salida.Espera("espera a su PAGO_REGISTRADO ${registrado.eventoId}, que todavía no llegó a su sistema de origen")
         else ->
             Salida.NoSale(
                 "su PAGO_REGISTRADO ${registrado.eventoId} no llegó a su sistema de origen (está ${enUnaLinea(registrado.estado)}): esta " +

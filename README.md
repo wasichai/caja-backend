@@ -1186,7 +1186,11 @@ turno abierto (con el turno cerrado, 409), sin reimpresiones y mientras no esté
 otro recibe 409, que remite al duplicado (`POST .../duplicados`), que dice «DUPLICADO N.° n» y, si se anuló, que está
 anulado. Lo dibuja `caja.emision.PdfRenderer`, copiado de `srtm-backend` sin su cabecera
 institucional: la plantilla `templates/emision/recibo.html` (Thymeleaf, standalone) a PDF con openhtmltopdf, A4, con
-DejaVu Sans incrustada (`fonts/`, con su licencia) para que las tildes y la ñ salgan igual en todas partes.
+DejaVu Sans incrustada (`fonts/`, con su licencia) para que las tildes y la ñ salgan igual en todas partes. **Se dibuja
+fuera del hilo de la petición** (`Dispatchers.Default`): dibujar es CPU sin pausas, y un handler `suspend` de WebFlux
+corre en el bucle de eventos de reactor-netty o de r2dbc, que mientras tanto dejaba de atender a las demás peticiones y
+conexiones. El duplicado se dibuja dentro de su transacción, a propósito: su `reimpresion_recibo` queda si y solo si el
+papel se dibujó.
 
 El papel lleva el nombre de la municipalidad (`caja.municipalidad.nombre` / `CAJA_MUNICIPALIDAD_NOMBRE`, obligatorio:
 la app no arranca sin él), el número impreso, la fecha y hora en **America/Lima**, la caja, el cajero, el pagador (su
@@ -1207,7 +1211,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, el importe roto que no se cobra, las claves del
   cuerpo de `PAGO_REGISTRADO` y lo que llega en la petición); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
   la tarifa vigente, `12.30 × 3 = 36.90` y `0.10 × 7 = 0.70`, la vigencia al revés, la cantidad y el precio en la
-  petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF (el original y el duplicado, con y sin anulación);
+  petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF (el original y el duplicado, con y sin anulación, y que no se dibuja en el
+  hilo que lo pide);
   `RecibosTest`, las del recibo después de emitido (el resumen estable que cambia con una cifra, los largos de motivo,
   autorizado y memorando, el número del papel, los filtros, el mismo día, el recibo ajeno y el cuerpo de
   `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
@@ -1216,7 +1221,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   llame), salvo la de la guarda, que la cierra. `GuardiaDeEscriturasTest` fija la guarda con un almacén de prueba: sin
   la marca nada de caja llega al almacén, con ella caja da de alta lo suyo y cambia solo lo que no se agrega, nada de
   caja se borra, lo demás y las lecturas pasan, y el `RecordStore` de wasichai tiene los métodos que la guarda conoce
-  (uno nuevo pasaría por la delegación sin mirar la marca). `EntregaTest` fija las reglas del publicador: la clasificación de cada
+  (uno nuevo pasaría por la delegación sin mirar la marca). `CuerpoEstrictoTest` falla si un `@RequestBody` de caja no
+  es un `CuerpoEstricto`, el cuerpo que anota cada clave que no conoce para rechazarla con su nombre.
+  `DependenciasEntrePaquetesTest` lee los imports de `src/main` y falla si aparece un ciclo entre paquetes o si `comun` o
+  `modelo` importan uno de negocio (ver «Los paquetes»). `EntregaTest` fija las reglas del publicador: la clasificación de cada
   respuesta, el recorte de `ultimo_error`, la marca de cada intento, la coherencia del evento con su recibo y la salida
   de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`;
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
@@ -1294,6 +1302,23 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   obligatoria.
 - Con un Docker remoto no corren en local tal cual (Testcontainers no llega a sus puertos): ver
   [docs/develop/README.md](docs/develop/README.md#6-tests).
+
+## Los paquetes
+
+Un paquete por parte del negocio, y las dependencias en una sola dirección (`DependenciasEntrePaquetesTest`):
+
+| Paquete | Qué tiene | Importa de caja |
+|---|---|---|
+| `comun` | Lo técnico (`Registros`, `Transaccion`, `Candados`, `GuardiaDeEscrituras`, `Permisos`), los valores (`Importe`, `Observacion`, la hora de Lima), los nombres de los objetos y las reglas de cualquier petición (`CuerpoEstricto`, `campo`, `sinCamposDesconocidos`) | nada |
+| `modelo` | Los registros que leen o escriben varios paquetes, como los guarda core (`Recibo`, `LineaRecibo`, `Turno`, `PagoEvento`, `AnulacionRecibo`, `OrdenDeCobro`, `Caja`, `Area`, `Tasa`), y los valores de los enumerados de `model.json` | nada |
+| `turno` | El turno, su arqueo, su cierre y su reversión | `comun`, `modelo` |
+| `cobro` | El alta de órdenes, los dos cobros, la vista previa y las tasas | `comun`, `modelo`, `turno` |
+| `emision` | El PDF del recibo y su original | `comun`, `modelo`, `turno`, `cobro` |
+| `recibo` | La consulta, el duplicado y la anulación | `comun`, `modelo`, `turno`, `cobro`, `emision` |
+| `buzon` | El publicador, los pagos sin entregar y su explicación | `comun`, `modelo`, `cobro`, `recibo` |
+| `recaudacion` | El avance, la recaudación por área y la conciliación | `comun`, `modelo`, `turno`, `buzon` |
+
+Un registro que solo usa un paquete vive en él (el cierre y su reversión en `turno`, la reimpresión en `recibo`).
 
 ## Siguientes pasos (fuera de este alcance)
 
