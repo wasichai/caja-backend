@@ -1,20 +1,19 @@
 package caja.recibo
 
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
 import caja.cobro.lineasEnOrden
 import caja.cobro.numeroImpreso
 import caja.comun.RECIBO
+import caja.modelo.LineaRecibo
+import caja.modelo.PAGO_ANULADO
+import caja.modelo.Recibo
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.json.JsonMapper
-import wasichai.core.common.FieldViolation
 import wasichai.core.common.ForbiddenException
 import wasichai.core.common.ValidationException
 import wasichai.core.common.WasichaiException
 import wasichai.core.identity.AuthenticatedUser
 import java.security.MessageDigest
 import java.time.LocalDate
-import java.time.format.DateTimeParseException
 import java.util.HexFormat
 import java.util.Locale
 import java.util.UUID
@@ -28,8 +27,6 @@ import java.util.UUID
 const val EMITIDO = "EMITIDO"
 const val ANULADO = "ANULADO"
 val ESTADOS_DE_RECIBO = listOf(EMITIDO, ANULADO)
-
-const val PAGO_ANULADO = "PAGO_ANULADO"
 
 // la acción declarada de recibo (model.json) que anula el recibo de otro cajero: el privilegio ESPECIAL de caja
 const val ANULAR_AJENO = "ANULAR_AJENO"
@@ -77,29 +74,6 @@ fun estadoPedido(valor: String?): String? {
     return estado
 }
 
-// un día del rango, en Lima, o ninguno
-fun diaPedido(
-    valor: String?,
-    campo: String
-): LocalDate? {
-    val texto = valor?.trim()?.ifEmpty { null } ?: return null
-    return try {
-        LocalDate.parse(texto)
-    } catch (_: DateTimeParseException) {
-        throw ValidationException("Fecha inválida", campo, "una fecha AAAA-MM-DD")
-    }
-}
-
-// el rango va de desde a hasta, los dos incluidos: al revés no hay ningún día que buscar
-fun rangoDeDias(
-    desde: LocalDate?,
-    hasta: LocalDate?
-) {
-    if (desde != null && hasta != null && desde.isAfter(hasta)) {
-        throw ValidationException("Rango al revés", "hasta", "el rango de fechas está al revés: desde $desde hasta $hasta")
-    }
-}
-
 // lo que llega en la anulación y en el duplicado
 
 // el sustento del acto, que se imprime en el duplicado: obligatorio, no en blanco, de hasta 80
@@ -115,15 +89,6 @@ fun autorizadoPor(valor: String?): String? = opcional(valor, "autorizado_por", L
 
 // el memorando o la resolución que la sustenta
 fun documentoDeAutorizacion(valor: String?): String? = opcional(valor, "documento_autorizacion", LARGO_DOCUMENTO_AUTORIZACION)
-
-// una clave que el cuerpo no lleva es un 400 que las nombra todas: callarla dejaría creer que se guardó
-fun sinCamposDesconocidos(
-    nombres: Collection<String>,
-    que: String
-) {
-    if (nombres.isEmpty()) return
-    throw ValidationException("Campo desconocido", nombres.map { FieldViolation(it, "$que no lleva este campo") })
-}
 
 private fun opcional(
     valor: String?,

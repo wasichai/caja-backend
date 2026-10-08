@@ -7,6 +7,11 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TASA
+import caja.comun.campo
+import caja.comun.codigoDeCaja
+import caja.modelo.Area
+import caja.modelo.PAGO_DE_TASA
+import caja.modelo.Tasa
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions

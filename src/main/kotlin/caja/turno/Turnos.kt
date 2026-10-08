@@ -1,7 +1,9 @@
 package caja.turno
 
-import caja.cobro.ENTEROS_DEL_IMPORTE
-import caja.cobro.FORMAS_DE_PAGO
+import caja.comun.ENTEROS_DEL_IMPORTE
+import caja.modelo.EVENTO_MUERTO
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.FORMAS_DE_PAGO
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
@@ -23,7 +25,7 @@ const val LARGO_MOTIVO_REVERSION = 80
 
 // los estados de un pago_evento que impiden cerrar: el sistema de origen todavía no sabe que existe (PENDIENTE), o se
 // dejó de intentar (MUERTO). ENTREGADO y EXPLICADO dejan cerrar
-val PAGOS_SIN_ENTREGAR = setOf("PENDIENTE", "MUERTO")
+val PAGOS_SIN_ENTREGAR = setOf(EVENTO_PENDIENTE, EVENTO_MUERTO)
 
 // decimal llano: sin signo, sin exponente, sin punto suelto. [0-9] y no \d, que acepta dígitos de otros alfabetos
 private val DECIMAL = Regex("[0-9]+(\\.[0-9]+)?")

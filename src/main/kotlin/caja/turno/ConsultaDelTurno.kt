@@ -1,13 +1,13 @@
 package caja.turno
 
-import caja.cobro.Caja
-import caja.cobro.Turno
 import caja.comun.CAJA
 import caja.comun.Importe
-import caja.comun.LIMA
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.comun.enLima
+import caja.modelo.Caja
+import caja.modelo.Turno
 import org.springframework.stereotype.Service
 import wasichai.core.common.NotFoundException
 import wasichai.core.identity.CurrentUser
@@ -47,11 +47,7 @@ class ConsultaDelTurno(
                             cajaNombre = caja?.nombre,
                             cajero = turno.cajero!!,
                             fecha = turno.fecha.toString(),
-                            abiertoEn =
-                                turno.abiertoEn!!
-                                    .atZone(LIMA)
-                                    .toOffsetDateTime()
-                                    .toString(),
+                            abiertoEn = enLima(turno.abiertoEn!!),
                             estadoDelTurno = EstadoDelTurno.de(historias.getValue(turno.id))
                         )
                     }.sortedWith(compareBy({ it.caja }, { it.turnoId }))
@@ -81,14 +77,7 @@ class ConsultaDelTurno(
             val vigente =
                 cierreVigente(historia)?.let { movimiento ->
                     val (acta, lineas) = libro.acta(movimiento.id)
-                    CierreVigente.de(
-                        acta,
-                        lineas,
-                        acta.registradoEn!!
-                            .atZone(LIMA)
-                            .toOffsetDateTime()
-                            .toString()
-                    )
+                    CierreVigente.de(acta, lineas, enLima(acta.registradoEn!!))
                 }
             ArqueoDelTurnoRespuesta(
                 turnoId = id,

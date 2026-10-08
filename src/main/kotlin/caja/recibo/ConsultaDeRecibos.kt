@@ -1,10 +1,5 @@
 package caja.recibo
 
-import caja.cobro.Caja
-import caja.cobro.LineaRecibo
-import caja.cobro.Recibo
-import caja.cobro.Tasa
-import caja.cobro.campo
 import caja.cobro.lineaRespuesta
 import caja.cobro.lineasEnOrden
 import caja.comun.ANULACION_RECIBO
@@ -17,6 +12,15 @@ import caja.comun.REIMPRESION_RECIBO
 import caja.comun.Registros
 import caja.comun.TASA
 import caja.comun.Transaccion
+import caja.comun.campo
+import caja.comun.diaPedido
+import caja.comun.enLima
+import caja.comun.rangoDeDias
+import caja.modelo.AnulacionRecibo
+import caja.modelo.Caja
+import caja.modelo.LineaRecibo
+import caja.modelo.Recibo
+import caja.modelo.Tasa
 import org.springframework.stereotype.Service
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.NotFoundException
@@ -29,7 +33,6 @@ import wasichai.core.metadata.MetadataService
 import wasichai.core.metadata.ObjectDefinition
 import wasichai.core.platform.SqlIdentifier
 import wasichai.core.platform.WasichaiSchemas
-import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -233,7 +236,5 @@ class ConsultaDeRecibos(
     private companion object {
         // la medianoche de Lima de ese día, como instante: el día de Lima, no el de la máquina ni el de la sesión
         fun inicioDe(dia: LocalDate): OffsetDateTime = dia.atStartOfDay(LIMA).toOffsetDateTime()
-
-        fun enLima(instante: Instant): String = instante.atZone(LIMA).toOffsetDateTime().toString()
     }
 }

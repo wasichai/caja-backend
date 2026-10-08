@@ -1,11 +1,12 @@
 package caja.recaudacion
 
-import caja.buzon.EXPLICADO
 import caja.buzon.Lectura
 import caja.buzon.contestado
-import caja.cobro.EVENTO_PENDIENTE
-import caja.cobro.PAGO_REGISTRADO
-import caja.recibo.PAGO_ANULADO
+import caja.modelo.EVENTO_EXPLICADO
+import caja.modelo.EVENTO_MUERTO
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.PAGO_ANULADO
+import caja.modelo.PAGO_REGISTRADO
 import tools.jackson.core.JacksonException
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
@@ -32,8 +33,6 @@ private val JSON: JsonMapper = JsonMapper.builder().build()
 
 // decimal llano, sin signo ni exponente: lo aplicado no es negativo. [0-9] y no \d
 private val DECIMAL = Regex("[0-9]+(\\.[0-9]+)?")
-
-private const val MUERTO = "MUERTO"
 
 // un pago_evento de un turno del día, con el total de su recibo: un evento no lleva importe propio, y sumar cifras de un
 // JSON sería componer dinero fuera del sitio donde vive. lo cobrado y lo anulado salen del recibo
@@ -72,8 +71,8 @@ fun recuentosDe(eventos: List<EventoDelDia>): List<RecuentoDelDia> =
                 registrados = registrados.size,
                 anulados = anulados.size,
                 enTransito = suyos.count { it.estado == EVENTO_PENDIENTE },
-                muertos = suyos.count { it.estado == MUERTO },
-                explicados = suyos.count { it.estado == EXPLICADO },
+                muertos = suyos.count { it.estado == EVENTO_MUERTO },
+                explicados = suyos.count { it.estado == EVENTO_EXPLICADO },
                 cobrado = registrados.fold(CERO) { total, it -> total.add(it.totalDelRecibo) },
                 anulado = anulados.fold(CERO) { total, it -> total.add(it.totalDelRecibo) }
             )

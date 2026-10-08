@@ -3,6 +3,10 @@ package caja.cobro
 import caja.comun.ORDEN_DE_COBRO
 import caja.comun.Observacion
 import caja.comun.Registros
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PENDIENTE
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import wasichai.core.common.FieldViolation
@@ -78,25 +82,19 @@ class OrdenesService(
         cuenta: String?
     ): Map<String, Any?> {
         val errores = mutableListOf<FieldViolation>()
-
-        fun <T> campo(regla: () -> T): T? =
-            try {
-                regla()
-            } catch (e: ValidationException) {
-                errores += e.violations
-                null
-            }
-
-        campo { sinCamposDesconocidos(body.desconocidos) }
-        val sistema = if (cuenta == null) campo { sistemaOrigen(body.sistemaOrigen) } else campo { sistemaDeLaCuenta(cuenta, body.sistemaOrigen) }
-        val referencia = campo { referenciaExterna(body.referenciaExterna) }
-        val concepto = campo { concepto(body.concepto) }
-        val detalle = campo { detalle(body.detalle) }
-        val importe = campo { importe(body.importe) }
-        val exigible = campo { fecha(body.fechaExigibilidad, "fecha_exigibilidad") }
-        val actualizado = campo { fecha(body.actualizadoA, "actualizado_a") }
-        val pagador = campo { pagador(body.pagadorDocumento, body.pagadorNombre, body.pagadorExternoId) }
-        val observacion = campo { Observacion.de(body.observacion) }
+        // la frontera se defiende en la entrada: una orden no lleva tributo, ejercicio ni periodo, ni nada que la caja no
+        // conozca. callarlo dejaría creer al sistema de origen que la caja lo guardó
+        campo(errores) { sinCamposDesconocidos(body.desconocidos, "una orden de cobro") }
+        val sistema =
+            if (cuenta == null) campo(errores) { sistemaOrigen(body.sistemaOrigen) } else campo(errores) { sistemaDeLaCuenta(cuenta, body.sistemaOrigen) }
+        val referencia = campo(errores) { referenciaExterna(body.referenciaExterna) }
+        val concepto = campo(errores) { concepto(body.concepto) }
+        val detalle = campo(errores) { detalle(body.detalle) }
+        val importe = campo(errores) { importe(body.importe) }
+        val exigible = campo(errores) { fecha(body.fechaExigibilidad, "fecha_exigibilidad") }
+        val actualizado = campo(errores) { fecha(body.actualizadoA, "actualizado_a") }
+        val pagador = campo(errores) { pagador(body.pagadorDocumento, body.pagadorNombre, body.pagadorExternoId) }
+        val observacion = campo(errores) { Observacion.de(body.observacion) }
         if (errores.isNotEmpty()) throw ValidationException("La orden de cobro no es válida", errores)
 
         return mapOf(

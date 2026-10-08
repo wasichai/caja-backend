@@ -1,15 +1,11 @@
 package caja.cobro
 
+import caja.comun.CuerpoEstricto
 import caja.comun.Importe
-import com.fasterxml.jackson.annotation.JsonAnySetter
-import com.fasterxml.jackson.annotation.JsonIgnore
+import caja.modelo.OrdenDeCobro
 import com.fasterxml.jackson.annotation.JsonInclude
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
-import wasichai.core.common.ConflictException
-import java.math.BigDecimal
-import java.time.Instant
-import java.time.LocalDate
 
 // las formas de la api de caja. las claves json son snake_case, las de los campos del modelo: un 400 de core o de las
 // reglas (field = nombre del campo) cae sobre la misma clave que mandó el cliente
@@ -30,40 +26,7 @@ class NuevaOrden(
     val pagadorNombre: String? = null,
     val pagadorExternoId: String? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
-
-// una orden de cobro como la guarda core. recibo es el id del que la cobró: PAGADA lo nombra (orden_recibo_ck)
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class OrdenDeCobro(
-    val id: String? = null,
-    val sistemaOrigen: String? = null,
-    val referenciaExterna: String? = null,
-    val concepto: String? = null,
-    val detalle: String? = null,
-    val importe: BigDecimal? = null,
-    val fechaExigibilidad: LocalDate? = null,
-    val actualizadoA: LocalDate? = null,
-    val pagadorDocumento: String? = null,
-    val pagadorNombre: String? = null,
-    val pagadorExternoId: Long? = null,
-    val estado: String? = null,
-    val observacion: String? = null,
-    val recibo: String? = null
-) {
-    // OrdenDeCobro.cobrableA de caja: pendiente y ya exigible a la fecha de pago
-    fun cobrableA(fecha: LocalDate): Boolean = estado == PENDIENTE && fechaExigibilidad != null && !fecha.isBefore(fechaExigibilidad)
-}
+) : CuerpoEstricto()
 
 // una orden como sale por la api: el importe con su fecha (regla 9). nueva solo en el alta: true si se creó ahora,
 // false si ya estaba. va en el cuerpo además de en el código (201 o 200), para quien solo mire el cuerpo
@@ -106,25 +69,6 @@ data class OrdenRespuesta(
     }
 }
 
-// area y caja como las guarda core. area es el id del área de la caja
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class Area(
-    val id: String? = null,
-    val codigo: String? = null,
-    val nombre: String? = null,
-    val activa: Boolean? = null
-)
-
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class Caja(
-    val id: String? = null,
-    val codigo: String? = null,
-    val nombre: String? = null,
-    val serie: String? = null,
-    val activa: Boolean? = null,
-    val area: String? = null
-)
-
 // una ventanilla del catálogo. la de baja sale también (activa false): el filtro de los recibos tiene que poder
 // nombrarla. sin área, area_codigo y area_nombre van null: las cajas tributarias no tienen
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
@@ -137,52 +81,13 @@ data class CajaEnLista(
     val activa: Boolean?
 )
 
-// una tasa del TUPA en una vigencia, como la guarda core. area es el id de su área. su importe es un dato registrado
-// con su documento fuente, nunca un literal (regla 5)
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class Tasa(
-    val id: String? = null,
-    val codigo: String? = null,
-    val descripcion: String? = null,
-    val partidaPresupuestal: String? = null,
-    val importe: BigDecimal? = null,
-    val vigenciaDesde: LocalDate? = null,
-    val vigenciaHasta: LocalDate? = null,
-    val documentoFuente: String? = null,
-    val area: String? = null
-) {
-    // Tasa.vigenteA de caja: rige ese día, ambos extremos incluidos; sin vigencia_hasta, no caduca. una vigencia que
-    // termina antes de empezar es un dato mal cargado (import_tasas.py la rechaza, el admin no): 409, no se adivina
-    fun vigenteA(fecha: LocalDate): Boolean {
-        val desde = vigenciaDesde!!
-        if (vigenciaHasta != null && vigenciaHasta.isBefore(desde)) {
-            throw ConflictException(
-                "La vigencia de la tasa $codigo termina antes de empezar ($vigenciaHasta < $desde): es un dato mal " +
-                    "cargado, corríjalo en el admin"
-            )
-        }
-        return !fecha.isBefore(desde) && (vigenciaHasta == null || !fecha.isAfter(vigenciaHasta))
-    }
-}
-
 // un concepto que marca el cajero: el código de la tasa y cuántas veces. sin precio: una clave que no esté aquí se
 // anota y se rechaza, y un precio o un importe dicen por qué
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class ConceptoPedido(
     val codigo: String? = null,
     val cantidad: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que manda la ventanilla para cobrar. el cajero y el día salen de la sesión: cajero y fecha_de_pago son opcionales
 // y solo se admiten iguales a los de la sesión. todo en cadena, para que las reglas rechacen sobre su campo, y una
@@ -195,18 +100,7 @@ class NuevoCobro(
     val fechaDePago: String? = null,
     val ordenes: List<String>? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que manda la ventanilla para cobrar tasas. sin precio ni importe: el precio sale de la tarifa vigente (regla 5),
 // y un importe o un precio en el cuerpo es un 400 que lo dice. el pagador puede ser anónimo: los tres opcionales. el
@@ -222,54 +116,21 @@ class NuevoCobroDeTasas(
     val pagadorExternoId: String? = null,
     val conceptos: List<ConceptoPedido>? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // la vista previa de un cobro de órdenes: las mismas órdenes y la misma fecha que el cobro
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class VistaPreviaDeOrdenes(
     val ordenes: List<String>? = null,
     val fechaDePago: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // la vista previa de un cobro de tasas: los mismos conceptos y la misma fecha que el cobro
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class VistaPreviaDeTasas(
     val conceptos: List<ConceptoPedido>? = null,
     val fechaDeCobro: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que costaría el cobro, sin cobrarlo: las líneas y el total como saldrían en el recibo (null si no hay ninguna
 // línea), si se puede cobrar y, si no, por qué. un problema no es un error: va en motivos
@@ -290,72 +151,6 @@ data class TasaVigente(
     val area: String?,
     val partidaPresupuestal: String?,
     val precio: Importe
-)
-
-// el turno, el recibo, su línea y el evento como los guarda core. caja y turno son ids de relación
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class Turno(
-    val id: String? = null,
-    val caja: String? = null,
-    val cajero: String? = null,
-    val fecha: LocalDate? = null,
-    val abiertoEn: Instant? = null,
-    val observacion: String? = null
-)
-
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class Recibo(
-    val id: String? = null,
-    val serie: String? = null,
-    val numero: Long? = null,
-    val numeroImpreso: String? = null,
-    val caja: String? = null,
-    val turno: String? = null,
-    val cajero: String? = null,
-    val pagadorDocumento: String? = null,
-    val pagadorNombre: String? = null,
-    val pagadorExternoId: Long? = null,
-    val emitidoEn: Instant? = null,
-    val formaPago: String? = null,
-    val tipoPago: String? = null,
-    val total: BigDecimal? = null,
-    val actualizadoA: LocalDate? = null,
-    val claveIdempotencia: String? = null,
-    val observacion: String? = null
-)
-
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class LineaRecibo(
-    val id: String? = null,
-    val recibo: String? = null,
-    val orden: String? = null,
-    val tasa: String? = null,
-    val sistemaOrigen: String? = null,
-    val concepto: String? = null,
-    val detalle: String? = null,
-    val referenciaExterna: String? = null,
-    val cantidad: Long? = null,
-    val precioUnitario: BigDecimal? = null,
-    val monto: BigDecimal? = null
-)
-
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class PagoEvento(
-    val id: String? = null,
-    val eventoId: String? = null,
-    val tipo: String? = null,
-    val sistemaDestino: String? = null,
-    val recibo: String? = null,
-    val turno: String? = null,
-    val cuerpo: String? = null,
-    val estado: String? = null,
-    val intentos: Long? = null,
-    val ultimoError: String? = null,
-    val entregadoEn: Instant? = null,
-    val explicacion: String? = null,
-    // la hora en que se encoló, que es la del cobro: lo que lleva ese dinero en tránsito (no es un campo del modelo: es el
-    // created_at de core, y una escritura no lo manda)
-    val createdAt: Instant? = null
 )
 
 // lo que contesta el cobro: el recibo, el pagoId con el que el sistema de origen deduplicará, en qué está su entrega

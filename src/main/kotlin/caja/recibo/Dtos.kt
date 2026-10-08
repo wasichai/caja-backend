@@ -1,32 +1,15 @@
 package caja.recibo
 
 import caja.cobro.LineaRespuesta
+import caja.comun.CuerpoEstricto
 import caja.comun.Importe
-import com.fasterxml.jackson.annotation.JsonAnySetter
-import com.fasterxml.jackson.annotation.JsonIgnore
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
-import java.math.BigDecimal
 import java.time.LocalDate
 
 // las formas del recibo después de emitido. claves snake_case, las de los campos del modelo
 
-// la anulación y la reimpresión como las guarda core. recibo, caja y turno son ids de relación
-@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
-data class AnulacionRecibo(
-    val id: String? = null,
-    val recibo: String? = null,
-    val caja: String? = null,
-    val turno: String? = null,
-    val fecha: LocalDate? = null,
-    val motivo: String? = null,
-    val autorizadoPor: String? = null,
-    val documentoAutorizacion: String? = null,
-    val importe: BigDecimal? = null,
-    val usuario: String? = null,
-    val observacion: String? = null
-)
-
+// la reimpresión como la guarda core. recibo es el id de relación
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class ReimpresionRecibo(
     val id: String? = null,
@@ -45,35 +28,13 @@ class PeticionDeAnulacion(
     val autorizadoPor: String? = null,
     val documentoAutorizacion: String? = null,
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // lo que manda la ventanilla para un duplicado: por qué se reimprime (regla 10)
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 class PeticionDeDuplicado(
     val observacion: String? = null
-) {
-    @JsonIgnore
-    val desconocidos: MutableList<String> = mutableListOf()
-
-    @JsonAnySetter
-    fun desconocido(
-        nombre: String,
-        @Suppress("UNUSED_PARAMETER") valor: Any?
-    ) {
-        desconocidos += nombre
-    }
-}
+) : CuerpoEstricto()
 
 // una fila del listado: sin el desglose (quien lo quiere abre la ficha). el total con su fecha (regla 9); el estado y
 // los duplicados se derivan de la anulación y de las reimpresiones

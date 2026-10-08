@@ -1,16 +1,5 @@
 package caja.recibo
 
-import caja.cobro.EVENTO_PENDIENTE
-import caja.cobro.LineaRecibo
-import caja.cobro.OrdenDeCobro
-import caja.cobro.PAGADA
-import caja.cobro.PAGO_REGISTRADO
-import caja.cobro.PENDIENTE
-import caja.cobro.PagoEvento
-import caja.cobro.Recibo
-import caja.cobro.Turno
-import caja.cobro.campo
-import caja.cobro.produceEvento
 import caja.comun.ANULACION_RECIBO
 import caja.comun.Candado
 import caja.comun.Candados
@@ -24,6 +13,20 @@ import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
+import caja.modelo.AnulacionRecibo
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.LineaRecibo
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PAGADA
+import caja.modelo.PAGO_ANULADO
+import caja.modelo.PAGO_REGISTRADO
+import caja.modelo.PENDIENTE
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
+import caja.modelo.Turno
+import caja.modelo.produceEvento
 import caja.turno.LibroDelTurno
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service

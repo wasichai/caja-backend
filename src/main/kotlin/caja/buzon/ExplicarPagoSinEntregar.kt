@@ -1,8 +1,5 @@
 package caja.buzon
 
-import caja.cobro.PagoEvento
-import caja.cobro.Recibo
-import caja.cobro.campo
 import caja.comun.Candado
 import caja.comun.Candados
 import caja.comun.Observacion
@@ -11,7 +8,14 @@ import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
 import caja.comun.Transaccion
-import caja.recibo.sinCamposDesconocidos
+import caja.comun.campo
+import caja.comun.sinCamposDesconocidos
+import caja.modelo.EVENTO_ENTREGADO
+import caja.modelo.EVENTO_EXPLICADO
+import caja.modelo.EVENTO_MUERTO
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.ConflictException
@@ -63,12 +67,12 @@ class ExplicarPagoSinEntregar(
             candados.bloquear(Candado.PAGO, id)
             // bajo el candado, lo que hay ahora
             val actual = registros.get(PAGO_EVENTO, PagoEvento::class.java, UUID.fromString(leido.id))
-            if (actual.estado != BuzonStore.MUERTO) {
+            if (actual.estado != EVENTO_MUERTO) {
                 throw ConflictException(
                     "Solo se explica un pago MUERTO, y el $id está ${actual.estado}: " +
                         when (actual.estado) {
-                            BuzonStore.PENDIENTE -> "todavía se está intentando entregar, y explicarlo lo sacaría de la cola"
-                            BuzonStore.ENTREGADO -> "su sistema de origen ya lo tiene"
+                            EVENTO_PENDIENTE -> "todavía se está intentando entregar, y explicarlo lo sacaría de la cola"
+                            EVENTO_ENTREGADO -> "su sistema de origen ya lo tiene"
                             else -> "alguien ya se hizo cargo de él"
                         }
                 )
@@ -78,7 +82,7 @@ class ExplicarPagoSinEntregar(
                     PAGO_EVENTO,
                     PagoEvento::class.java,
                     UUID.fromString(actual.id),
-                    mapOf("estado" to EXPLICADO, "explicacion" to explicacion),
+                    mapOf("estado" to EVENTO_EXPLICADO, "explicacion" to explicacion),
                     observacion!!.texto
                 )
             val numero = explicado.recibo?.let { registros.byIds(RECIBO, Recibo::class.java, listOf(it))[it]?.numeroImpreso }

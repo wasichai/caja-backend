@@ -1,7 +1,17 @@
 package caja.cobro
 
 import caja.comun.Importe
-import caja.comun.LIMA
+import caja.comun.defectoDelImporte
+import caja.comun.enLima
+import caja.modelo.ANULADA
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.FORMAS_DE_PAGO
+import caja.modelo.LineaRecibo
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PAGADA
+import caja.modelo.PAGO_REGISTRADO
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.ConflictException
 import wasichai.core.common.ForbiddenException
@@ -16,11 +26,6 @@ import java.util.UUID
 
 // las reglas puras de la cobranza (CobrarOrdenes de caja): el servicio las aplica dentro de la transacción, las pruebas
 // las fijan. las de la petición lanzan un 400 sobre su campo, o el 403 del cajero
-
-val FORMAS_DE_PAGO = listOf("EFECTIVO", "CHEQUE", "DEPOSITO", "TARJETA", "TRANSFERENCIA")
-const val NORMAL = "NORMAL"
-const val PAGO_REGISTRADO = "PAGO_REGISTRADO"
-const val EVENTO_PENDIENTE = "PENDIENTE"
 
 // lo que la ventanilla ve de un evento pendiente: cobrado, sin imputar todavía en el origen
 const val EN_TRANSITO = "EN_TRANSITO"
@@ -45,22 +50,6 @@ fun numeroImpreso(
     require(numero > 0) { "El correlativo de un recibo empieza en 1; llegó $numero" }
     return String.format(Locale.ROOT, FORMATO_NUMERO, limpia, numero)
 }
-
-// la clave del candado TURNO_CLAVE: un cajero tiene un solo turno al día por caja. el cobro lo busca o lo crea bajo ese
-// candado, y la garantía es la uniqueConstraint (caja, cajero, fecha) del turno; no se guarda en ningún campo
-fun claveDelTurno(
-    cajaId: String,
-    cajero: String,
-    fecha: LocalDate
-): String = "$cajaId|$cajero|$fecha"
-
-// los filtros que encuentran el turno de un cajero en una caja un día: los tres campos de su uniqueConstraint. el cobro,
-// el cierre, la reversión y la consulta lo buscan así
-fun filtroDelTurno(
-    cajaId: String,
-    cajero: String,
-    fecha: LocalDate
-): Map<String, String> = mapOf("caja" to cajaId, "cajero" to cajero, "fecha" to fecha.toString())
 
 // el total es la suma de las líneas, exacta, nunca una cifra aparte: el papel y su desglose no pueden discrepar
 fun totalDe(montos: List<BigDecimal>): BigDecimal {
@@ -191,11 +180,7 @@ fun respuestaDelCobro(
                 pagadorExternoId = recibo.pagadorExternoId,
                 formaPago = recibo.formaPago!!,
                 tipoPago = recibo.tipoPago!!,
-                emitidoEn =
-                    recibo.emitidoEn!!
-                        .atZone(LIMA)
-                        .toOffsetDateTime()
-                        .toString(),
+                emitidoEn = enLima(recibo.emitidoEn!!),
                 total = Importe.de(recibo.total!!, fecha),
                 lineas = lineasEnOrden(lineas).map { lineaRespuesta(it, fecha, codigos) }
             ),
@@ -273,9 +258,6 @@ fun cuerpoPagoRegistrado(
     )
 
 // lo que llega en la petición
-
-fun codigoDeCaja(valor: String?): String =
-    valor?.trim()?.ifEmpty { null } ?: throw ValidationException("Falta un dato", "caja", "el código de la caja que cobra")
 
 fun formaDePago(valor: String?): String {
     val forma = valor?.trim()?.uppercase(Locale.ROOT)

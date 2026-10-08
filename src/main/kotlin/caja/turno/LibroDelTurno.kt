@@ -1,8 +1,5 @@
 package caja.turno
 
-import caja.cobro.PagoEvento
-import caja.cobro.Recibo
-import caja.cobro.Turno
 import caja.comun.ANULACION_RECIBO
 import caja.comun.CIERRE_TURNO
 import caja.comun.CIERRE_TURNO_LINEA
@@ -10,7 +7,10 @@ import caja.comun.PAGO_EVENTO
 import caja.comun.RECIBO
 import caja.comun.REVERSION_CIERRE
 import caja.comun.Registros
-import caja.recibo.AnulacionRecibo
+import caja.modelo.AnulacionRecibo
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
+import caja.modelo.Turno
 import org.springframework.stereotype.Component
 import wasichai.core.common.ConflictException
 import java.math.BigDecimal

@@ -1,6 +1,5 @@
 package caja.comun
 
-import caja.cobro.defectoDelImporte
 import kotlinx.coroutines.currentCoroutineContext
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component

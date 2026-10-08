@@ -1,9 +1,5 @@
 package caja.buzon
 
-import caja.cobro.LineaRecibo
-import caja.cobro.OrdenDeCobro
-import caja.cobro.PagoEvento
-import caja.cobro.Recibo
 import caja.comun.ANULACION_RECIBO
 import caja.comun.Candado
 import caja.comun.Candados
@@ -13,7 +9,14 @@ import caja.comun.ORDEN_DE_COBRO
 import caja.comun.PAGO_EVENTO
 import caja.comun.RECIBO
 import caja.comun.Records
-import caja.recibo.AnulacionRecibo
+import caja.modelo.AnulacionRecibo
+import caja.modelo.EVENTO_ENTREGADO
+import caja.modelo.EVENTO_MUERTO
+import caja.modelo.EVENTO_PENDIENTE
+import caja.modelo.LineaRecibo
+import caja.modelo.OrdenDeCobro
+import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import kotlinx.coroutines.withContext
 import org.springframework.stereotype.Component
 import wasichai.core.common.NotFoundException
@@ -63,7 +66,7 @@ class BuzonStore(
         cuantos: Int
     ): List<EventoDelBuzon> =
         records.asPlatform(buzon.organizacion) {
-            leer(PAGO_EVENTO, mapOf("estado" to PENDIENTE), cuantos).map { fila ->
+            leer(PAGO_EVENTO, mapOf("estado" to EVENTO_PENDIENTE), cuantos).map { fila ->
                 val evento = Records.read<PagoEvento>(fila.id, fila.attributes)
                 EventoDelBuzon(
                     id = UUID.fromString(fila.id),
@@ -129,7 +132,7 @@ class BuzonStore(
         marcar(
             buzon,
             evento,
-            mapOf("estado" to ENTREGADO, "intentos" to evento.intentos + 1, "entregado_en" to cuando.toString(), "ultimo_error" to null),
+            mapOf("estado" to EVENTO_ENTREGADO, "intentos" to evento.intentos + 1, "entregado_en" to cuando.toString(), "ultimo_error" to null),
             RAZON_ENTREGADO
         )
 
@@ -143,7 +146,7 @@ class BuzonStore(
         marcar(
             buzon,
             evento,
-            mapOf("estado" to if (muere) MUERTO else PENDIENTE, "intentos" to evento.intentos + 1, "ultimo_error" to error),
+            mapOf("estado" to if (muere) EVENTO_MUERTO else EVENTO_PENDIENTE, "intentos" to evento.intentos + 1, "ultimo_error" to error),
             if (muere) RAZON_MUERTO else RAZON_FALLIDO
         )
 
@@ -167,7 +170,7 @@ class BuzonStore(
                         return@withXactLock false
                     }
                 val intentos = (actual.attributes["intentos"] as Number?)?.toLong() ?: 0L
-                if (actual.attributes["estado"] != PENDIENTE || intentos != evento.intentos) return@withXactLock false
+                if (actual.attributes["estado"] != EVENTO_PENDIENTE || intentos != evento.intentos) return@withXactLock false
                 withContext(EscrituraDeCaja) { records.update(PAGO_EVENTO, evento.id, RecordRequest(actual.attributes + cambios), razon) }
                 true
             }
@@ -209,10 +212,6 @@ class BuzonStore(
     )
 
     companion object {
-        const val PENDIENTE = "PENDIENTE"
-        const val ENTREGADO = "ENTREGADO"
-        const val MUERTO = "MUERTO"
-
         private const val POR_CREACION = "created_at"
 
         // la razón de cada marca en su auditoría: un texto fijo. nunca el error ni lo que contestó el destino (eso va en

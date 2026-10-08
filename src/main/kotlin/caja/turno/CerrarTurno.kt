@@ -1,24 +1,24 @@
 package caja.turno
 
-import caja.cobro.Caja
-import caja.cobro.Turno
-import caja.cobro.campo
-import caja.cobro.codigoDeCaja
-import caja.cobro.filtroDelTurno
 import caja.comun.CAJA
 import caja.comun.CIERRE_TURNO
 import caja.comun.CIERRE_TURNO_LINEA
 import caja.comun.Candado
 import caja.comun.Candados
 import caja.comun.Importe
-import caja.comun.LIMA
 import caja.comun.Observacion
 import caja.comun.Permisos
 import caja.comun.REVERSION_CIERRE
 import caja.comun.Registros
 import caja.comun.TURNO
 import caja.comun.Transaccion
-import caja.recibo.sinCamposDesconocidos
+import caja.comun.campo
+import caja.comun.codigoDeCaja
+import caja.comun.enLima
+import caja.comun.sinCamposDesconocidos
+import caja.modelo.Caja
+import caja.modelo.Turno
+import caja.modelo.filtroDelTurno
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
@@ -31,7 +31,6 @@ import wasichai.core.identity.AuthenticatedUser
 import wasichai.core.identity.CurrentUser
 import java.math.BigDecimal
 import java.time.Clock
-import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 
@@ -278,8 +277,6 @@ class CerrarTurno(
     }
 
     private fun ahora(): OffsetDateTime = OffsetDateTime.now(reloj)
-
-    private fun enLima(instante: Instant): String = instante.atZone(LIMA).toOffsetDateTime().toString()
 
     // las reglas sobre la petición, con todos los campos que fallan en un solo 400
     private fun pedidoDeCierre(
