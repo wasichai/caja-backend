@@ -45,7 +45,7 @@ import java.util.UUID
 // anulacion_recibo, y el número, las líneas y el total siguen donde estaban, porque el pagador tiene ese papel en la
 // mano. todo en UNA transacción, bajo el candado del turno del recibo (el mismo que toman el cobro y el cierre) y
 // después los de sus órdenes, por id: el orden de siempre, turno → órdenes. cada decisión se toma con lo leído después
-// de tomar su candado; el unique de recibo_anulado es la red, y si salta no se relee nada dentro.
+// de tomar su candado; el unique de la relación recibo es la red, y si salta no se relee nada dentro.
 //
 // las órdenes vuelven a PENDIENTE y sin recibo, no ANULADA: el dinero volvió y la deuda sigue, así que tienen que poder
 // cobrarse otra vez. y si el recibo avisó su pago (NORMAL), sale PAGO_ANULADO en el buzón, en la misma transacción
@@ -71,7 +71,7 @@ class AnularRecibo(
         return try {
             transaccion.en { anularEnLaTransaccion(pedido, usuario) }
         } catch (choque: DuplicateKeyException) {
-            // la red del unique de recibo_anulado (o de evento_id): otra anulación se confirmó a la vez. la transacción
+            // la red del unique de recibo (o de evento_id): otra anulación se confirmó a la vez. la transacción
             // ya se revirtió entera
             throw ConflictException("El recibo ${pedido.numero} se anuló a la vez desde otra petición: ya está anulado")
                 .apply { initCause(choque) }
@@ -101,13 +101,13 @@ class AnularRecibo(
         // curso lo encuentra cerrado
         libro.exigirAbierto(turno, "no se anula ninguno de sus recibos: el acta ya congeló el $numero como cobrado")
 
-        // 3. anular dos veces no anula dos veces: 409. el unique de recibo_anulado es la red
+        // 3. anular dos veces no anula dos veces: 409. el unique de la relación recibo es la red
         registros.primero(ANULACION_RECIBO, AnulacionRecibo::class.java, mapOf("recibo" to reciboId))?.let {
             throw ConflictException("El recibo $numero ya se anuló el ${it.fecha}: las órdenes que cobró ya volvieron a PENDIENTE")
         }
 
-        // 4. ESPECIAL: el recibo de otro cajero exige SUPERVISOR_CAJA (403)
-        puedeAnular(recibo.cajero!!, usuario, numero)
+        // 4. ESPECIAL: el recibo de otro cajero exige la acción ANULAR_AJENO sobre recibo (403)
+        puedeAnular(recibo.cajero!!, usuario, numero, permisos.puede(usuario, ANULAR_AJENO, RECIBO))
 
         // no se anula lo que no avisó: un recibo NORMAL sin su PAGO_REGISTRADO pediría al origen deshacer un pago que no
         // conoce. un recibo de tasas no avisa a nadie
@@ -130,7 +130,6 @@ class AnularRecibo(
                 AnulacionRecibo::class.java,
                 mapOf(
                     "recibo" to reciboId,
-                    "recibo_anulado" to reciboId,
                     "caja" to recibo.caja,
                     "turno" to recibo.turno,
                     "fecha" to hoy.toString(),
@@ -140,11 +139,12 @@ class AnularRecibo(
                     "importe" to recibo.total!!.toPlainString(),
                     "usuario" to usuario.email,
                     "observacion" to pedido.observacion.texto
-                )
+                ),
+                pedido.observacion.texto
             )
 
         // 6. las órdenes vuelven a PENDIENTE y sin recibo
-        devolverAPendiente(recibo)
+        devolverAPendiente(recibo, pedido.observacion.texto)
 
         // 7. PAGO_ANULADO, con el pagoId del PAGO_REGISTRADO que deshace
         val pagoAnuladoId =
@@ -162,7 +162,8 @@ class AnularRecibo(
                         "cuerpo" to cuerpoPagoAnulado(pagoId, original.eventoId!!, recibo, pedido.motivo, hoy),
                         "estado" to EVENTO_PENDIENTE,
                         "intentos" to 0
-                    )
+                    ),
+                    pedido.observacion.texto
                 )
                 pagoId.toString()
             }
@@ -183,7 +184,10 @@ class AnularRecibo(
 
     // las órdenes que cobró el recibo (sus líneas no cambian: se leen sin candado), cada una bajo su candado, en orden
     // de id, y releídas después de tomarlos. replace lee, mezcla y escribe sin control de versión: va bajo el candado
-    private suspend fun devolverAPendiente(recibo: Recibo) {
+    private suspend fun devolverAPendiente(
+        recibo: Recibo,
+        razon: String
+    ) {
         val reciboId = recibo.id!!
         val ids =
             registros
@@ -199,7 +203,7 @@ class AnularRecibo(
             check(orden != null && orden.estado == PAGADA && orden.recibo == reciboId) {
                 "La orden $id del recibo ${recibo.numeroImpreso} no está PAGADA con ese recibo: ${orden?.estado} con ${orden?.recibo}"
             }
-            registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(id), mapOf("estado" to PENDIENTE, "recibo" to null))
+            registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(id), mapOf("estado" to PENDIENTE, "recibo" to null), razon)
         }
     }
 

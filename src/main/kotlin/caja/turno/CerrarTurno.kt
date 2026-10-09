@@ -18,7 +18,7 @@ import caja.comun.enLima
 import caja.comun.sinCamposDesconocidos
 import caja.modelo.Caja
 import caja.modelo.Turno
-import caja.modelo.claveDelTurno
+import caja.modelo.filtroDelTurno
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
@@ -45,7 +45,7 @@ import java.time.OffsetDateTime
 // nada de ese turno entra ni sale, y el arqueo que congela no se queda corto entre leerlo y escribirlo; el cobro o la
 // anulación que esperaban encuentran el turno cerrado (409). es el ÚNICO candado que toma, así que no se cruza con el
 // orden turno-clave → turno → órdenes → serie. la secuencia es común al cierre y a la reversión y la serializa ese
-// candado; los unique de clave_secuencia, de la clave de cada línea y de cierre_revertido son la red: si uno salta
+// candado; las uniqueConstraints de (turno, secuencia), de (cierre_turno, forma_pago) y de cierre_revertido son la red: si uno salta
 // (DuplicateKeyException), todo se revierte y se contesta 409, sin releer dentro.
 //
 // EL DESCUADRE SE GUARDA, NO SE RECHAZA. que lo declarado no coincida con el neto no impide cerrar: es justo lo que hay
@@ -156,9 +156,9 @@ class CerrarTurno(
                     "cobrado_con_evento" to cuadre.conEvento.toPlainString(),
                     "cobrado_sin_evento" to cuadre.sinEvento.toPlainString(),
                     "usuario" to usuario.email,
-                    "observacion" to pedido.observacion.texto,
-                    "clave_secuencia" to "$turnoId|$secuencia"
-                )
+                    "observacion" to pedido.observacion.texto
+                ),
+                pedido.observacion.texto
             )
         val cierreId = cierre.id!!
         arqueo.lineas.forEach { linea ->
@@ -171,9 +171,9 @@ class CerrarTurno(
                     "cobrado" to linea.cobrado.toPlainString(),
                     "anulado" to linea.anulado.toPlainString(),
                     "neto" to linea.neto.toPlainString(),
-                    "declarado" to linea.declarado.toPlainString(),
-                    "clave" to "$cierreId|${linea.formaPago}"
-                )
+                    "declarado" to linea.declarado.toPlainString()
+                ),
+                pedido.observacion.texto
             )
         }
 
@@ -236,9 +236,9 @@ class CerrarTurno(
                     "fecha" to pedido.fecha.toString(),
                     "registrado_en" to ahora().toString(),
                     "usuario" to usuario.email,
-                    "observacion" to pedido.observacion.texto,
-                    "clave_secuencia" to "$turnoId|$secuencia"
-                )
+                    "observacion" to pedido.observacion.texto
+                ),
+                pedido.observacion.texto
             )
         return ReversionRespuesta(
             reversionId = reversion.id!!,
@@ -268,7 +268,7 @@ class CerrarTurno(
             registros.primero(CAJA, Caja::class.java, mapOf("codigo" to codigo))
                 ?: throw NotFoundException("No hay ninguna caja con el código '$codigo'")
         val turno =
-            registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveDelTurno(caja.id!!, cajero, fecha)))
+            registros.primero(TURNO, Turno::class.java, filtroDelTurno(caja.id!!, cajero, fecha))
                 ?: throw NotFoundException(
                     "El cajero $cajero no abrió turno en la caja $codigo el $fecha: no hay nada que arquear. El turno lo abre el primer cobro del día"
                 )

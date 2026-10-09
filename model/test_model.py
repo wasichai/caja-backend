@@ -40,6 +40,18 @@ class ShippedModelTests(unittest.TestCase):
         obj = next(o for o in self.model["objects"] if o["name"] == name)
         return {f["name"]: f for f in obj["fields"]}
 
+    def test_the_write_rules_of_each_object(self):
+        # the ten objects caja writes are apiOnly (the generic record api never writes them); all but pago_evento and
+        # orden_de_cobro, which caja changes, are appendOnly. the catalogues are neither
+        api_only = {"turno", "recibo", "orden_de_cobro", "linea_recibo", "pago_evento", "anulacion_recibo",
+                    "reimpresion_recibo", "cierre_turno", "cierre_turno_linea", "reversion_cierre"}
+        for obj in self.model["objects"]:
+            name = obj["name"]
+            self.assertEqual(obj.get("apiOnly", False), name in api_only, name)
+            self.assertEqual(obj.get("appendOnly", False), name in api_only - {"pago_evento", "orden_de_cobro"}, name)
+            # every write of those ten carries its reason (the act's observacion, or a fixed system text)
+            self.assertEqual(obj.get("requiresReason", False), name in api_only, name)
+
     def test_area_has_codigo_nombre_and_activa(self):
         fields = self.fields("area")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {"codigo": "TEXT", "nombre": "TEXT", "activa": "BOOLEAN"})
@@ -57,13 +69,16 @@ class ShippedModelTests(unittest.TestCase):
         fields = self.fields("tasa")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
             "codigo": "TEXT", "descripcion": "TEXT", "partida_presupuestal": "TEXT", "importe": "DECIMAL",
-            "vigencia_desde": "DATE", "vigencia_hasta": "DATE", "documento_fuente": "TEXT", "clave_vigencia": "TEXT"})
+            "vigencia_desde": "DATE", "vigencia_hasta": "DATE", "documento_fuente": "TEXT"})
         self.assertEqual({n for n, f in fields.items() if not f.get("required")}, {"vigencia_hasta"})
 
-    def test_tasa_is_unique_by_clave_vigencia_and_not_by_codigo(self):
-        # wasichai has no composite unique: clave_vigencia (<codigo>|<vigencia_desde>) stands for (codigo, vigencia_desde)
+    def unique_constraints(self, name):
+        return next(o for o in self.model["objects"] if o["name"] == name).get("uniqueConstraints", [])
+
+    def test_tasa_is_unique_by_codigo_and_vigencia_desde_and_not_by_codigo(self):
         fields = self.fields("tasa")
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_vigencia"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], [])
+        self.assertEqual(self.unique_constraints("tasa"), [["codigo", "vigencia_desde"]])
 
     def test_the_area_of_a_caja_is_optional_and_the_one_of_a_tasa_is_required(self):
         # the cajas tributarias have no area
@@ -78,7 +93,7 @@ class ShippedModelTests(unittest.TestCase):
     def test_orden_de_cobro_has_what_it_takes_to_charge_it(self):
         fields = self.fields("orden_de_cobro")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
-            "sistema_origen": "TEXT", "referencia_externa": "TEXT", "clave_origen": "TEXT", "concepto": "TEXT",
+            "sistema_origen": "TEXT", "referencia_externa": "TEXT", "concepto": "TEXT",
             "detalle": "TEXT", "importe": "DECIMAL", "fecha_exigibilidad": "DATE", "actualizado_a": "DATE",
             "pagador_documento": "TEXT", "pagador_nombre": "TEXT", "pagador_externo_id": "INTEGER", "estado": "ENUM",
             "observacion": "LONG_TEXT"})
@@ -90,12 +105,12 @@ class ShippedModelTests(unittest.TestCase):
         return {(r["source"], r["fieldName"]): (r["target"], r["required"]) for r in self.model["relationships"]}
 
     def test_turno_is_one_per_caja_cajero_and_fecha(self):
-        # clave_turno (<caja id>|<cajero>|<fecha>) stands for cierre_uq: no composite unique
         fields = self.fields("turno")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
-            "cajero": "TEXT", "fecha": "DATE", "abierto_en": "DATETIME", "observacion": "LONG_TEXT", "clave_turno": "TEXT"})
+            "cajero": "TEXT", "fecha": "DATE", "abierto_en": "DATETIME", "observacion": "LONG_TEXT"})
         self.assertTrue(all(f["required"] for f in fields.values()))
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_turno"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], [])
+        self.assertEqual(self.unique_constraints("turno"), [["caja", "cajero", "fecha"]])
         self.assertEqual(self.relationships()[("turno", "caja")], ("caja", True))
 
     def test_recibo_has_its_number_its_pagador_and_its_total_with_its_date(self):
@@ -138,14 +153,16 @@ class ShippedModelTests(unittest.TestCase):
         self.assertEqual((rels[("pago_evento", "recibo")], rels[("pago_evento", "turno")]), (("recibo", True), ("turno", True)))
 
     def test_anulacion_recibo_is_appended_once_per_recibo(self):
-        # recibo_movimiento of caja, split in two: annulling adds this row, the recibo is never touched. recibo_anulado
-        # (the recibo id) stands for recibo_movimiento_anulacion_uq: a recibo is annulled once
+        # recibo_movimiento of caja, split in two: annulling adds this row, the recibo is never touched. the relation
+        # to the recibo is unique: a recibo is annulled once
         fields = self.fields("anulacion_recibo")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
-            "recibo_anulado": "TEXT", "fecha": "DATE", "motivo": "TEXT", "autorizado_por": "TEXT",
+            "fecha": "DATE", "motivo": "TEXT", "autorizado_por": "TEXT",
             "documento_autorizacion": "TEXT", "importe": "DECIMAL", "usuario": "TEXT", "observacion": "LONG_TEXT"})
         self.assertEqual({n for n, f in fields.items() if not f.get("required")}, {"autorizado_por", "documento_autorizacion"})
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["recibo_anulado"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], [])
+        unique_relations = [r["fieldName"] for r in self.model["relationships"] if r["source"] == "anulacion_recibo" and r.get("unique")]
+        self.assertEqual(unique_relations, ["recibo"])
         rels = self.relationships()
         self.assertEqual((rels[("anulacion_recibo", "recibo")], rels[("anulacion_recibo", "caja")], rels[("anulacion_recibo", "turno")]),
                          (("recibo", True), ("caja", True), ("turno", True)))
@@ -159,27 +176,28 @@ class ShippedModelTests(unittest.TestCase):
         self.assertEqual(self.relationships()[("reimpresion_recibo", "recibo")], ("recibo", True))
 
     def test_cierre_turno_freezes_the_arqueo_of_its_turno(self):
-        # cierre_turno of caja (V32), without its tipo: the reversion is its own object. clave_secuencia
-        # (<turno>|<secuencia>) is the net under the turno lock: wasichai has no composite unique
+        # cierre_turno of caja (V32), without its tipo: the reversion is its own object. (turno, secuencia) is unique:
+        # the net under the turno lock
         fields = self.fields("cierre_turno")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
             "secuencia": "INTEGER", "fecha": "DATE", "registrado_en": "DATETIME", "total_cobrado": "DECIMAL",
             "total_anulado": "DECIMAL", "neto": "DECIMAL", "total_declarado": "DECIMAL", "diferencia": "DECIMAL",
             "recibos_emitidos": "INTEGER", "recibos_anulados": "INTEGER", "cobrado_con_evento": "DECIMAL",
-            "cobrado_sin_evento": "DECIMAL", "usuario": "TEXT", "observacion": "LONG_TEXT", "clave_secuencia": "TEXT"})
+            "cobrado_sin_evento": "DECIMAL", "usuario": "TEXT", "observacion": "LONG_TEXT"})
         self.assertTrue(all(f["required"] for f in fields.values()))
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_secuencia"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], [])
+        self.assertEqual(self.unique_constraints("cierre_turno"), [["turno", "secuencia"]])
         self.assertEqual(self.relationships()[("cierre_turno", "turno")], ("turno", True))
 
     def test_cierre_turno_linea_is_one_per_forma_de_pago(self):
-        # cierre_turno_detalle of caja: clave (<cierre>|<forma_pago>) stands for its composite primary key
+        # cierre_turno_detalle of caja: (cierre_turno, forma_pago) is its composite primary key
         fields = self.fields("cierre_turno_linea")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
-            "forma_pago": "ENUM", "cobrado": "DECIMAL", "anulado": "DECIMAL", "neto": "DECIMAL", "declarado": "DECIMAL",
-            "clave": "TEXT"})
+            "forma_pago": "ENUM", "cobrado": "DECIMAL", "anulado": "DECIMAL", "neto": "DECIMAL", "declarado": "DECIMAL"})
         self.assertTrue(all(f["required"] for f in fields.values()))
         self.assertEqual(fields["forma_pago"]["enum"], "forma_pago")
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], [])
+        self.assertEqual(self.unique_constraints("cierre_turno_linea"), [["cierre_turno", "forma_pago"]])
         self.assertEqual(self.relationships()[("cierre_turno_linea", "cierre_turno")], ("cierre_turno", True))
 
     def test_reversion_cierre_is_appended_once_per_cierre(self):
@@ -187,9 +205,10 @@ class ShippedModelTests(unittest.TestCase):
         fields = self.fields("reversion_cierre")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
             "cierre_revertido": "TEXT", "secuencia": "INTEGER", "motivo": "TEXT", "fecha": "DATE", "registrado_en": "DATETIME",
-            "usuario": "TEXT", "observacion": "LONG_TEXT", "clave_secuencia": "TEXT"})
+            "usuario": "TEXT", "observacion": "LONG_TEXT"})
         self.assertTrue(all(f["required"] for f in fields.values()))
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["cierre_revertido", "clave_secuencia"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["cierre_revertido"])
+        self.assertEqual(self.unique_constraints("reversion_cierre"), [["turno", "secuencia"]])
         self.assertEqual(self.relationships()[("reversion_cierre", "turno")], ("turno", True))
 
     def test_the_cobranza_enums(self):
@@ -206,10 +225,17 @@ class ShippedModelTests(unittest.TestCase):
                 self.assertFalse(name.startswith(("tributo", "ejercicio", "periodo", "predio", "vehiculo", "insoluto",
                                                   "reajuste", "interes", "gasto")), f"{obj}.{name}")
 
-    def test_orden_de_cobro_is_unique_by_clave_origen_only(self):
-        # clave_origen (<sistema_origen>|<referencia_externa>) stands for orden_referencia_uq: no composite unique
+    def test_orden_de_cobro_is_unique_by_its_origin_only(self):
         fields = self.fields("orden_de_cobro")
-        self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["clave_origen"])
+        self.assertEqual([n for n, f in fields.items() if f.get("unique")], [])
+        self.assertEqual(self.unique_constraints("orden_de_cobro"), [["sistema_origen", "referencia_externa"]])
+
+    def test_no_synthetic_key_is_left(self):
+        # the clave_* fields were stand-ins for what uniqueConstraints now says
+        for obj in self.model["objects"]:
+            for name in self.fields(obj["name"]):
+                self.assertFalse(name.startswith("clave_") and name != "clave_idempotencia", f"{obj['name']}.{name}")
+            self.assertNotIn("clave", self.fields(obj["name"]))
 
     def test_orden_de_cobro_knows_no_tributo(self):
         # caja's frontier: the day an orden gains a tributo, an ejercicio or a periodo, it no longer charges a market stall
@@ -260,6 +286,14 @@ class PayloadTests(unittest.TestCase):
             "fieldName": "area",
         })
 
+    def test_a_constraint_over_own_fields_goes_in_the_post_and_one_over_a_relation_waits(self):
+        by_name = {o["name"]: o for o in self.model["objects"]}
+        self.assertEqual(object_payload(self.model, by_name["orden_de_cobro"])["uniqueConstraints"],
+                         [["sistema_origen", "referencia_externa"]])
+        self.assertEqual(object_payload(self.model, by_name["tasa"])["uniqueConstraints"], [["codigo", "vigencia_desde"]])
+        self.assertNotIn("uniqueConstraints", object_payload(self.model, by_name["turno"]))
+        self.assertNotIn("uniqueConstraints", object_payload(self.model, by_name["caja"]))
+
 
 class ValidationTests(unittest.TestCase):
     def setUp(self):
@@ -301,6 +335,40 @@ class ValidationTests(unittest.TestCase):
     def test_unknown_enum_is_refused(self):
         errors = self.mutate(lambda m: m["objects"][0]["fields"].append({"name": "x", "label": "X", "type": "ENUM", "enum": "nope"}))
         self.assertTrue(any("enum 'nope' is not defined" in e for e in errors))
+
+    def obj(self, model, name):
+        return next(o for o in model["objects"] if o["name"] == name)
+
+    def test_a_constraint_needs_two_known_fields_none_of_them_long_text(self):
+        def one(m):
+            self.obj(m, "caja")["uniqueConstraints"] = [["codigo"]]
+        self.assertTrue(any("at least 2 fields" in e for e in self.mutate(one)))
+
+        def unknown(m):
+            self.obj(m, "caja")["uniqueConstraints"] = [["codigo", "nope"]]
+        self.assertTrue(any("'nope', which is not a field of caja" in e for e in self.mutate(unknown)))
+
+        def long_text(m):
+            self.obj(m, "turno")["uniqueConstraints"] = [["cajero", "observacion"]]
+        self.assertTrue(any("LONG_TEXT" in e for e in self.mutate(long_text)))
+
+        def twice(m):
+            self.obj(m, "caja")["uniqueConstraints"] = [["codigo", "codigo"]]
+        self.assertTrue(any("names a field twice" in e for e in self.mutate(twice)))
+
+        def not_a_list(m):
+            self.obj(m, "caja")["uniqueConstraints"] = "codigo"
+        self.assertTrue(any("must be a list" in e for e in self.mutate(not_a_list)))
+
+    def test_a_constraint_may_name_a_relationship_field(self):
+        def relation(m):
+            self.obj(m, "caja")["uniqueConstraints"] = [["codigo", "area"]]
+        self.assertEqual(self.mutate(relation), [])
+
+    def test_unique_on_a_relationship_is_a_boolean(self):
+        def text(m):
+            m["relationships"][0]["unique"] = "yes"
+        self.assertTrue(any("unique must be true or false" in e for e in self.mutate(text)))
 
 
 if __name__ == "__main__":

@@ -89,7 +89,7 @@ fun cotizar(
                 impedimentos +=
                     ConflictException(
                         "La tarifa vigente del concepto '${pedida.codigo}' es ${tasa.importe.toPlainString()}: tarifa en cero, un dato mal " +
-                            "cargado. Un recibo por cero no documenta un cobro; corrija la tarifa (${tasa.claveVigencia})"
+                            "cargado. Un recibo por cero no documenta un cobro; corrija la tarifa (desde ${tasa.vigenciaDesde})"
                     )
             else -> lineas += TasaCotizada(tasa, pedida.cantidad)
         }

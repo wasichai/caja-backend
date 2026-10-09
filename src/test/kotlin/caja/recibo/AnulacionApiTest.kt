@@ -4,11 +4,13 @@ import caja.CajaApiTest
 import caja.comun.LIMA
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Primary
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import wasichai.core.data.RecordChange
 import wasichai.core.data.RecordChangeKind
@@ -108,7 +110,7 @@ class AnulacionApiTest : CajaApiTest() {
 
         // el acta, con la caja y el turno del recibo y su total congelado
         val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["attributes"]
-        assertEquals(reciboId, acta["recibo_anulado"].asString())
+        assertEquals(reciboId, acta["recibo"].asString())
         assertEquals(caja.id, acta["caja"].asString())
         assertEquals(antes["attributes"]["turno"].asString(), acta["turno"].asString())
         assertEquals(hoy.toString(), acta["fecha"].asString())
@@ -128,6 +130,24 @@ class AnulacionApiTest : CajaApiTest() {
                 funcionario("CAJERO")
             )
         assertEquals("${caja.serie}-0000002", otraVez["recibo"]["numero_impreso"].asString())
+    }
+
+    @Test
+    fun `la observacion de la anulacion es la razon del acta, de la orden devuelta y del PAGO_ANULADO`() {
+        val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
+        val reciboId = registros("recibo", "numero_impreso" to cobro.numero).single()["id"].asString()
+
+        post(anulacion(cobro.numero), PETICION, cuenta("SUPERVISOR_CAJA").token)
+
+        val razon = "el pagador pagó dos veces en ventanilla"
+        val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["id"].asString()
+        val anulado = registros("pago_evento", "recibo" to reciboId, "tipo" to "PAGO_ANULADO").single()["id"].asString()
+        listOf("anulacion_recibo" to acta, "pago_evento" to anulado).forEach { (objeto, id) ->
+            assertEquals(razon, razonDe(objeto, id, "CREATE"), objeto)
+        }
+        // la orden vuelve a PENDIENTE con la razón de la anulación; su pase a PAGADA dijo la del cobro
+        assertEquals(razon, razonDe("orden_de_cobro", cobro.ordenId, "UPDATE", ultima = true))
+        assertEquals("cobro en ventanilla", razonDe("orden_de_cobro", cobro.ordenId, "UPDATE", ultima = false))
     }
 
     @Test
@@ -210,6 +230,20 @@ class AnulacionApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `una segunda acta forjada en la base para el mismo recibo choca`() {
+        val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
+        post(anulacion(cobro.numero), PETICION, funcionario("SUPERVISOR_CAJA"))
+        val reciboId = registros("recibo", "numero_impreso" to cobro.numero).single()["id"].asString()
+        val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["attributes"]
+
+        // el unique de la relación recibo es la red: la API genérica no escribe el acta (apiOnly), y la base no la repite
+        @Suppress("UNCHECKED_CAST")
+        val otra = json.convertValue(acta, Map::class.java) as Map<String, Any?>
+        assertThrows(DataIntegrityViolationException::class.java) { forjarEnLaBase("anulacion_recibo", otra) }
+        assertEquals(1, registros("anulacion_recibo", "recibo" to reciboId).size)
+    }
+
+    @Test
     fun `diez anulaciones simultaneas del mismo recibo dan una`() {
         val cobro = cobrar(nuevaCaja(), cuenta("CAJERO"))
         val supervisores = (1..10).map { funcionario("SUPERVISOR_CAJA") }
@@ -288,27 +322,42 @@ class AnulacionApiTest : CajaApiTest() {
     }
 
     @Test
-    fun `el recibo de otro cajero exige SUPERVISOR_CAJA, y el propio se anula con el permiso`() {
-        // un rol que cobra y anula, sin llamarse SUPERVISOR_CAJA
-        val rol =
-            rolPropio(
-                listOf("area", "caja", "tasa", "orden_de_cobro", "turno", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo")
-                    .flatMap { listOf(permiso(it, "READ"), permiso(it, "CREATE")) } + permiso("orden_de_cobro", "UPDATE") +
-                    // el cobro y la anulación leen la historia del turno: con el turno cerrado no se cobra ni se anula
-                    listOf(permiso("cierre_turno", "READ"), permiso("reversion_cierre", "READ"))
-            )
-        val ana = cuenta(rol)
-        val luis = cuenta(rol)
+    fun `el recibo de otro cajero exige la accion ANULAR_AJENO, y el propio se anula con el permiso`() {
+        // roles propios que cobran y anulan, sin llamarse SUPERVISOR_CAJA: uno con la acción y otro sin ella
+        val base =
+            listOf("area", "caja", "tasa", "orden_de_cobro", "turno", "recibo", "linea_recibo", "pago_evento", "anulacion_recibo")
+                .flatMap { listOf(permiso(it, "READ"), permiso(it, "CREATE")) } + permiso("orden_de_cobro", "UPDATE") +
+                // el cobro y la anulación leen la historia del turno: con el turno cerrado no se cobra ni se anula
+                listOf(permiso("cierre_turno", "READ"), permiso("reversion_cierre", "READ"))
+        val sinLaAccion = rolPropio(base)
+        val conLaAccion = rolPropio(base + permiso("recibo", "ANULAR_AJENO"))
+        val ana = cuenta(sinLaAccion)
+        val luis = cuenta(sinLaAccion)
+        val jefe = cuenta(conLaAccion)
         val caja = nuevaCaja()
         val deAna = cobrar(caja, ana)
         val deLuis = cobrar(caja, luis)
 
         val problema = tree(send("POST", anulacion(deLuis.numero), PETICION, HttpStatus.FORBIDDEN, ana.token))
-        assertTrue(problema["detail"].asString().contains("SUPERVISOR_CAJA"), problema.toString())
+        assertTrue(problema["detail"].asString().contains("ANULAR_AJENO"), problema.toString())
         assertEquals("PAGADA", estadoDe(deLuis.ordenId))
 
+        // el propio se anula sin la acción
         post(anulacion(deAna.numero), PETICION, ana.token)
         assertEquals("PENDIENTE", estadoDe(deAna.ordenId))
+
+        // el ajeno, con ella
+        post(anulacion(deLuis.numero), PETICION, jefe.token)
+        assertEquals("PENDIENTE", estadoDe(deLuis.ordenId))
+    }
+
+    @Test
+    fun `la lista de permisos propios trae ANULAR_AJENO para el supervisor, y no para el cajero`() {
+        fun acciones(token: String) =
+            tree(send("GET", "/api/auth/me/permissions", null, HttpStatus.OK, token))["objects"]["recibo"].toList().map { it.asString() }
+
+        assertTrue("ANULAR_AJENO" in acciones(funcionario("SUPERVISOR_CAJA")))
+        assertTrue("ANULAR_AJENO" !in acciones(funcionario("CAJERO")))
     }
 
     @Test
@@ -341,6 +390,18 @@ class AnulacionApiTest : CajaApiTest() {
                 cajero.token
             )
         return Cobro(cobro["recibo"]["numero_impreso"].asString(), ordenId, cobro["pago_id"].asString())
+    }
+
+    // la razón de la última o la primera operación de ese tipo (la historia de core viene de la más nueva a la más vieja)
+    private fun razonDe(
+        objeto: String,
+        id: String,
+        operacion: String,
+        ultima: Boolean = true
+    ): String {
+        val historia =
+            tree(send("GET", "/api/objects/$objeto/records/$id/history", null, HttpStatus.OK)).toList().filter { it["operation"].asString() == operacion }
+        return (if (ultima) historia.first() else historia.last())["reason"].asString()
     }
 
     private fun anulacion(numero: String) = "/api/caja/recibos/$numero/anulacion"

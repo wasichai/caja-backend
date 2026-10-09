@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Crea o sincroniza en un wasichai Core los roles de caja que declara model/roles.json.
 
-Cada rol dice, por objeto del modelo, sus acciones (READ, CREATE, UPDATE o DELETE). Un rol que falta se crea
-(POST /api/roles) y recibe sus permisos (PUT /api/roles/{name}/permissions). Uno que ya existe queda con los permisos
-de roles.json, ni uno más ni uno menos: un permiso que se le dio a mano en el admin se pierde en la siguiente corrida.
+Cada rol dice, por objeto del modelo, sus acciones: READ, CREATE, UPDATE, DELETE o una que el modelo declare para ese
+objeto (ANULAR_AJENO sobre recibo). Un rol que falta se crea (POST /api/roles) y recibe sus permisos (PUT
+/api/roles/{name}/permissions); la acción declarada la da apply.py antes. Uno que ya existe queda con los permisos de
+roles.json, ni uno más ni uno menos: un permiso que se le dio a mano en el admin se pierde en la siguiente corrida.
 Su etiqueta se rehace si difiere. Es idempotente: la segunda corrida no escribe nada ("done: 0 created, 0 updated,
 4 skipped").
 
@@ -32,7 +33,8 @@ ROLE_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,48}$")
 def validate(roles, model):
     """Los errores de roles.json frente a model.json; vacía si es válido."""
     errors = []
-    objects = {o["name"] for o in model.get("objects", [])}
+    # las acciones que cada objeto acepta: las de core y las que el modelo declara para él
+    objects = {o["name"]: ACTIONS + tuple(a["name"] for a in o.get("actions", [])) for o in model.get("objects", [])}
     seen = set()
     for role in roles.get("roles", []):
         name = role.get("name", "")
@@ -47,8 +49,8 @@ def validate(roles, model):
             if obj not in objects:
                 errors.append(f"role {name}: object '{obj}' is not in model.json")
             for action in actions:
-                if action not in ACTIONS:
-                    errors.append(f"role {name}: action '{action}' on {obj} must be one of {', '.join(ACTIONS)}")
+                if obj in objects and action not in objects[obj]:
+                    errors.append(f"role {name}: action '{action}' on {obj} must be one of {', '.join(objects[obj])}")
     return errors
 
 

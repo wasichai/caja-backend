@@ -16,7 +16,7 @@ import caja.modelo.Area
 import caja.modelo.Caja
 import caja.modelo.Tasa
 import caja.modelo.Turno
-import caja.modelo.claveDelTurno
+import caja.modelo.filtroDelTurno
 import caja.turno.ArqueoDelTurno
 import caja.turno.ArqueoRespuesta
 import caja.turno.EstadoDelTurno
@@ -242,7 +242,7 @@ class ConsultaDeRecaudacion(
         hoy: LocalDate
     ): TurnoDelAvance {
         val turno =
-            registros.primero(TURNO, Turno::class.java, mapOf("clave_turno" to claveDelTurno(caja.id!!, cajero, hoy)))
+            registros.primero(TURNO, Turno::class.java, filtroDelTurno(caja.id!!, cajero, hoy))
                 ?: throw NotFoundException(
                     "El cajero '$cajero' no abrió turno en la caja '$codigo' el $hoy: no hay nada que arquear, y un arqueo en ceros " +
                         "haría pensar que abrió y no cobró"

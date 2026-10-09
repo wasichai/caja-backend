@@ -147,7 +147,7 @@ class RechazoPorFilaTests(ImportCajasTestCase):
         self.assertEqual(sorted(self.cajas()), ["C-40", "C-41"])
         self.assertEqual(self.cajas()["C-40"]["nombre"], "Ya estaba")
         self.assertIn("rechazada línea 2: ya hay una caja con el código 'C-40' o con la serie '041'", out)
-        # se comprueba antes de escribir: core contesta 500 a un duplicado
+        # se comprueba antes de escribir: el 409 de core a un duplicado sería un rechazo de core, sin el motivo de la fila
         self.assertEqual(self.writes(), [("POST", "/api/objects/caja/records")])
 
     def test_una_serie_repetida_se_rechaza(self):

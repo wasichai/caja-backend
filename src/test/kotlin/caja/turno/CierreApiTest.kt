@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.JsonNode
 import wasichai.core.data.RecordChange
@@ -133,10 +134,9 @@ class CierreApiTest : CajaApiTest() {
         ).forEach { (campo, valor) -> assertEquals(0, guardado[campo].decimalValue().compareTo(valor.toBigDecimal()), "$campo: $guardado") }
         assertEquals(4L, guardado["recibos_emitidos"].asLong())
         assertEquals(1L, guardado["recibos_anulados"].asLong())
-        assertEquals("$turnoId|1", guardado["clave_secuencia"].asString())
+        assertEquals(1L, guardado["secuencia"].asLong())
         val lineas = registros("cierre_turno_linea", "cierre_turno" to acta["id"].asString()).map { it["attributes"] }
         assertEquals(setOf("EFECTIVO", "TARJETA", "TRANSFERENCIA"), lineas.map { it["forma_pago"].asString() }.toSet())
-        lineas.forEach { assertEquals("${acta["id"].asString()}|${it["forma_pago"].asString()}", it["clave"].asString()) }
     }
 
     // del turno cerrado
@@ -179,7 +179,7 @@ class CierreApiTest : CajaApiTest() {
         assertEquals(cierre["cierre_id"].asString(), reversion["cierre_revertido"].asString())
         assertEquals("ARQUEO MAL CONTADO", reversion["motivo"].asString())
         val guardada = registros("reversion_cierre", "turno" to turnoId).single()["attributes"]
-        assertEquals("$turnoId|2", guardada["clave_secuencia"].asString())
+        assertEquals(2L, guardada["secuencia"].asLong())
         assertEquals(cajero.email, guardada["usuario"].asString())
 
         // y se sigue cobrando en el mismo turno: el cierre nuevo lo incluye, con la secuencia siguiente
@@ -323,6 +323,33 @@ class CierreApiTest : CajaApiTest() {
         assertEquals(listOf(roto), cerrado["recibos_con_datos_rotos"].toList().map { it["numero_impreso"].asString() })
     }
 
+    // de las uniqueConstraints: un turno por (caja, cajero, fecha), un cierre por (turno, secuencia) y una línea por
+    // (cierre_turno, forma_pago). lo que caja escribe lo cuida su candado; lo forjado en la base, el motor
+
+    @Test
+    fun `un turno, un cierre y una linea forjados en la base con la misma clave chocan`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val codigo = codigoDeTasa()
+        nuevaTasa(codigo, "12.30", hoy.minusDays(1))
+        cobrarTasa(caja, cajero, codigo, 1, "EFECTIVO")
+        val cierre = post(CIERRE, cierreDe(caja, "EFECTIVO" to "12.30"), cajero.token)
+        val cierreId = cierre["cierre_id"].asString()
+        val turnoId = cierre["turno_id"].asString()
+        val linea = registros("cierre_turno_linea", "cierre_turno" to cierreId).single()["id"].asString()
+
+        listOf("turno" to turnoId, "cierre_turno" to cierreId, "cierre_turno_linea" to linea).forEach { (objeto, id) ->
+            val guardado = tree(send("GET", "/api/objects/$objeto/records/$id", null, HttpStatus.OK))["attributes"]
+
+            @Suppress("UNCHECKED_CAST")
+            val copia = json.convertValue(guardado, Map::class.java) as Map<String, Any?>
+            assertThrows(DataIntegrityViolationException::class.java, { forjarEnLaBase(objeto, copia) }, objeto)
+        }
+        assertEquals(1, registros("turno", "caja" to caja.id).size)
+        assertEquals(1, registros("cierre_turno", "turno" to turnoId).size)
+        assertEquals(1, registros("cierre_turno_linea", "cierre_turno" to cierreId).size)
+    }
+
     // de la inmutabilidad
 
     @Test
@@ -367,8 +394,7 @@ class CierreApiTest : CajaApiTest() {
                 "fecha" to hoy.toString(),
                 "registrado_en" to OffsetDateTime.now(LIMA).toString(),
                 "usuario" to "admin",
-                "observacion" to "escrita por fuera de caja",
-                "clave_secuencia" to "$turnoId|9"
+                "observacion" to "escrita por fuera de caja"
             )
         // por la API genérica, ni el ADMIN: la guarda (caja-backend#20)
         val (estado, cuerpo) = exchange("POST", "/api/objects/reversion_cierre/records", mapOf("attributes" to otra))
@@ -390,7 +416,7 @@ class CierreApiTest : CajaApiTest() {
         cobrarTasa(caja, cajero, codigo, 1, "EFECTIVO")
 
         // el primero escribe su acta y se queda dentro, con el candado del turno; el segundo llega entonces. sin el
-        // candado, el segundo leería un turno abierto y chocaría con el unique de clave_secuencia («a la vez»): la red,
+        // candado, el segundo leería un turno abierto y chocaría con la uniqueConstraint de (turno, secuencia) («a la vez»): la red,
         // no el candado
         val retencion = Retencion().also { retenido.set(it) }
         val hilos = Executors.newFixedThreadPool(2)
@@ -428,7 +454,7 @@ class CierreApiTest : CajaApiTest() {
         assertEquals(1, estados.count { it == HttpStatus.CREATED }, respuestas.toString())
         assertEquals(7, estados.count { it == HttpStatus.CONFLICT }, respuestas.toString())
         // los que esperaban al candado del turno leyeron el cierre ya confirmado: «ya está cerrado», no un choque del
-        // unique de clave_secuencia, que sería la red y no el candado
+        // unique de (turno, secuencia), que sería la red y no el candado
         respuestas.filter { it.first == HttpStatus.CONFLICT }.forEach {
             assertTrue(
                 tree(it.second)["detail"].asString().contains("ya está cerrado"),

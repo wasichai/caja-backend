@@ -3,7 +3,7 @@
     {
       "name": "SISTEMA_ORIGEN",
       "label": "Sistema de origen",
-      "description": "El usuario técnico de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor.",
+      "description": "El rol de la cuenta de servicio de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor. Su nombre es el sistema de origen de sus órdenes. Una persona con este rol no da de alta.",
       "permisos": {
         "orden_de_cobro": ["READ", "CREATE"]
       }
@@ -31,14 +31,14 @@
     {
       "name": "SUPERVISOR_CAJA",
       "label": "Supervisor de caja",
-      "description": "Supervisa las ventanillas: cobra como el cajero y, además, anula recibos del día (también los de otro cajero), reimprime duplicados y reversa el cierre de su propio turno, que lo reabre. Explica por escrito un pago que no se pudo entregar (MUERTO a EXPLICADO): es la única edición del buzón. Nunca edita ni borra un recibo, su anulación, sus reimpresiones, un cierre ni su reversión.",
+      "description": "Supervisa las ventanillas: cobra como el cajero y, además, anula recibos del día (también los de otro cajero: ANULAR_AJENO sobre recibo), reimprime duplicados y reversa el cierre de su propio turno, que lo reabre. Explica por escrito un pago que no se pudo entregar (MUERTO a EXPLICADO): es la única edición del buzón. Nunca edita ni borra un recibo, su anulación, sus reimpresiones, un cierre ni su reversión.",
       "permisos": {
         "area": ["READ"],
         "caja": ["READ"],
         "tasa": ["READ"],
         "orden_de_cobro": ["READ", "UPDATE"],
         "turno": ["READ", "CREATE"],
-        "recibo": ["READ", "CREATE"],
+        "recibo": ["READ", "CREATE", "ANULAR_AJENO"],
         "linea_recibo": ["READ", "CREATE"],
         "pago_evento": ["READ", "CREATE", "UPDATE"],
         "anulacion_recibo": ["READ", "CREATE"],

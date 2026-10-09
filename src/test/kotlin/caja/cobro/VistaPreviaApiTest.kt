@@ -208,7 +208,6 @@ class VistaPreviaApiTest : CajaApiTest() {
             mapOf(
                 "sistema_origen" to "rentas",
                 "referencia_externa" to referencia,
-                "clave_origen" to "rentas|$referencia",
                 "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
                 "importe" to importe,
                 "fecha_exigibilidad" to hoy.minusDays(1).toString(),

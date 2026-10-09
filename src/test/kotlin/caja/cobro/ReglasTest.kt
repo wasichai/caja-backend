@@ -36,13 +36,6 @@ class ReglasTest {
     }
 
     @Test
-    fun `la clave de origen une sistema y referencia con una barra`() {
-        assertEquals("rentas|2026-000123", claveDeOrigen("rentas", "2026-000123"))
-        // el sistema no puede llevar barra: la primera barra parte la clave sin ambigüedad
-        assertEquals("rentas|a|b", claveDeOrigen("rentas", "a|b"))
-    }
-
-    @Test
     fun `el concepto no puede faltar y el detalle si`() {
         assertEquals("IMPUESTO PREDIAL", concepto(" IMPUESTO PREDIAL "))
         assertEquals("concepto", rechazado { concepto(" ") })

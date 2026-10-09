@@ -42,7 +42,6 @@ data class Tasa(
     val vigenciaDesde: LocalDate? = null,
     val vigenciaHasta: LocalDate? = null,
     val documentoFuente: String? = null,
-    val claveVigencia: String? = null,
     val area: String? = null
 ) {
     // Tasa.vigenteA de caja: rige ese día, ambos extremos incluidos; sin vigencia_hasta, no caduca. una vigencia que
@@ -51,7 +50,7 @@ data class Tasa(
         val desde = vigenciaDesde!!
         if (vigenciaHasta != null && vigenciaHasta.isBefore(desde)) {
             throw ConflictException(
-                "La vigencia de la tasa $codigo ($claveVigencia) termina antes de empezar ($vigenciaHasta < $desde): es un dato mal " +
+                "La vigencia de la tasa $codigo termina antes de empezar ($vigenciaHasta < $desde): es un dato mal " +
                     "cargado, corríjalo en el admin"
             )
         }

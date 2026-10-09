@@ -19,7 +19,6 @@ data class OrdenDeCobro(
     val id: String? = null,
     val sistemaOrigen: String? = null,
     val referenciaExterna: String? = null,
-    val claveOrigen: String? = null,
     val concepto: String? = null,
     val detalle: String? = null,
     val importe: BigDecimal? = null,

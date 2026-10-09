@@ -66,7 +66,7 @@ class TasasApiTest : CajaApiTest() {
         // una tasa no produce evento
         assertEquals(0, registros("pago_evento", "recibo" to guardado["id"].asString()).size)
         // y abrió el turno del cajero
-        assertEquals(1, registros("turno", "clave_turno" to "${caja.id}|${cajero.email}|$hoy").size)
+        assertEquals(1, registros("turno", "caja" to caja.id, "cajero" to cajero.email, "fecha" to hoy.toString()).size)
     }
 
     @Test

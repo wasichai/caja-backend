@@ -138,7 +138,7 @@ class RecibosTest {
         assertEquals("hasta", alReves.violations.single().field)
     }
 
-    // la anulación: solo el mismo día, y el recibo ajeno exige SUPERVISOR_CAJA
+    // la anulación: solo el mismo día, y el recibo ajeno exige ANULAR_AJENO
 
     @Test
     fun `un recibo de otro dia no se anula, y es un 422`() {
@@ -149,12 +149,12 @@ class RecibosTest {
     }
 
     @Test
-    fun `el recibo de otro cajero lo anula SUPERVISOR_CAJA o ADMIN`() {
-        puedeAnular("ana@muni.test", usuario("ana@muni.test", "CAJERO"), "001-0000001")
-        puedeAnular("ana@muni.test", usuario("jefe@muni.test", SUPERVISOR_CAJA), "001-0000001")
-        puedeAnular("ana@muni.test", usuario("admin@muni.test", AuthenticatedUser.ADMIN_ROLE), "001-0000001")
-        val error = assertThrows<ForbiddenException> { puedeAnular("ana@muni.test", usuario("luis@muni.test", "OTRO"), "001-0000001") }
-        assertTrue(error.message.contains(SUPERVISOR_CAJA), error.message)
+    fun `el recibo de otro cajero lo anula quien tiene ANULAR_AJENO`() {
+        // el propio se anula sin la acción; el ajeno, solo con ella (quien llama la calcula con el objectId del recibo)
+        puedeAnular("ana@muni.test", usuario("ana@muni.test", "CAJERO"), "001-0000001", false)
+        puedeAnular("ana@muni.test", usuario("jefe@muni.test", "CUALQUIERA"), "001-0000001", true)
+        val error = assertThrows<ForbiddenException> { puedeAnular("ana@muni.test", usuario("luis@muni.test", "OTRO"), "001-0000001", false) }
+        assertTrue(error.message.contains(ANULAR_AJENO), error.message)
     }
 
     // el cuerpo de PAGO_ANULADO (ComponedorDeEventosJson.pagoAnulado de caja)

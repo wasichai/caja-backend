@@ -103,7 +103,8 @@ class DuplicadoDeRecibo(
                     "resumen" to resumen,
                     "usuario" to usuario.email,
                     "observacion" to observacion!!.texto
-                )
+                ),
+                observacion.texto
             )
             Duplicado(numero, cual, documento)
         }

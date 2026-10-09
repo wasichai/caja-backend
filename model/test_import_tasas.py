@@ -57,13 +57,13 @@ class ImportTasasTestCase(unittest.TestCase):
 
 
 class CargaTests(ImportTasasTestCase):
-    def test_una_fila_valida_entra_con_su_area_y_su_clave_de_vigencia(self):
+    def test_una_fila_valida_entra_con_su_area(self):
         code, out, err = self.run_main(self.csv(FILA))
         self.assertEqual(code, 0, err)
         self.assertEqual(self.tasas(), [{
             "codigo": "T-01", "descripcion": "Copia certificada", "partida_presupuestal": "1.3.2.1.1", "importe": "12.50",
             "vigencia_desde": "2026-01-01", "vigencia_hasta": "2026-12-31", "documento_fuente": "Ordenanza de prueba 001",
-            "clave_vigencia": "T-01|2026-01-01", "area": self.area["id"]}])
+            "area": self.area["id"]}])
         self.assertIn("tasas: 1 creadas, 0 rechazadas", out)
 
     def test_la_vigencia_hasta_puede_ir_vacia_y_entonces_no_se_manda(self):
@@ -81,12 +81,12 @@ class CargaTests(ImportTasasTestCase):
     def test_el_codigo_se_normaliza_con_trim_y_mayusculas(self):
         # como caja: la ventanilla lo pide en mayúsculas, y un 't-01' cargado así no se encontraría nunca
         self.run_main(self.csv(fila(codigo=" t-01 ")))
-        self.assertEqual((self.tasas()[0]["codigo"], self.tasas()[0]["clave_vigencia"]), ("T-01", "T-01|2026-01-01"))
+        self.assertEqual((self.tasas()[0]["codigo"], self.tasas()[0]["vigencia_desde"]), ("T-01", "2026-01-01"))
 
     def test_la_misma_tasa_en_otra_vigencia_entra(self):
         code, out, err = self.run_main(self.csv(FILA, fila(vigenciaDesde="2027-01-01", vigenciaHasta="", importe="13.00")))
         self.assertEqual(code, 0, err)
-        self.assertEqual([t["clave_vigencia"] for t in self.tasas()], ["T-01|2026-01-01", "T-01|2027-01-01"])
+        self.assertEqual([(t["codigo"], t["vigencia_desde"]) for t in self.tasas()], [("T-01", "2026-01-01"), ("T-01", "2027-01-01")])
 
     def test_dry_run_no_escribe(self):
         code, out, err = self.run_main(self.csv(FILA, fila(codigo="T-02")), "--dry-run")
@@ -159,18 +159,18 @@ class RechazoPorFilaTests(ImportTasasTestCase):
         self.setUp()
         self.assert_rechaza(fila(vigenciaHasta="2026-02-30"), "la vigencia hasta '2026-02-30' no es una fecha AAAA-MM-DD")
 
-    def test_una_clave_de_vigencia_que_core_ya_tiene_se_rechaza_sin_escribir_esa_fila(self):
-        self.core.add_record("tasa", {"codigo": "T-01", "clave_vigencia": "T-01|2026-01-01"})
+    def test_una_vigencia_que_core_ya_tiene_se_rechaza_sin_escribir_esa_fila(self):
+        self.core.add_record("tasa", {"codigo": "T-01", "vigencia_desde": "2026-01-01"})
         code, out, err = self.run_main(self.csv(FILA, fila(codigo="T-02")))
         self.assertEqual(code, 0, err)
-        self.assertIn("rechazada línea 2: ya hay una tasa con la clave de vigencia 'T-01|2026-01-01'", out)
-        # se comprueba antes de escribir: core contesta 500 a un duplicado
+        self.assertIn("rechazada línea 2: ya hay una tasa con el código 'T-01' y la vigencia desde 2026-01-01", out)
+        # se comprueba antes de escribir: el 409 de core a un duplicado sería un rechazo de core, sin el motivo de la fila
         self.assertEqual(self.writes(), [("POST", "/api/objects/tasa/records")])
 
-    def test_dos_filas_del_mismo_archivo_no_repiten_clave_de_vigencia(self):
+    def test_dos_filas_del_mismo_archivo_no_repiten_vigencia(self):
         code, out, err = self.run_main(self.csv(FILA, fila(importe="99.00")))
         self.assertEqual(len(self.tasas()), 1)
-        self.assertIn("rechazada línea 3: ya hay una tasa con la clave de vigencia 'T-01|2026-01-01'", out)
+        self.assertIn("rechazada línea 3: ya hay una tasa con el código 'T-01' y la vigencia desde 2026-01-01", out)
 
     def test_una_fila_con_menos_columnas_que_la_cabecera_se_rechaza(self):
         code, out, err = self.run_main(self.csv("T-01,Corta,A-10", fila(codigo="T-99")))

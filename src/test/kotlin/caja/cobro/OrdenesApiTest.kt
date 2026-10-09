@@ -71,7 +71,10 @@ class OrdenesApiTest : CajaApiTest() {
         assertTrue(estados.all { it == HttpStatus.CREATED || it == HttpStatus.OK }, respuestas.toString())
         assertEquals(1, estados.count { it == HttpStatus.CREATED }, estados.toString())
         assertEquals(1, respuestas.map { tree(it.second)["orden_id"].asString() }.toSet().size, respuestas.toString())
-        val guardadas = tree(send("GET", "/api/objects/orden_de_cobro/records?clave_origen=rentas|${cuerpo["referencia_externa"]}", null, HttpStatus.OK))
+        val guardadas =
+            tree(
+                send("GET", "/api/objects/orden_de_cobro/records?sistema_origen=rentas&referencia_externa=${cuerpo["referencia_externa"]}", null, HttpStatus.OK)
+            )
         assertEquals(1, guardadas["totalElements"].asInt(), guardadas.toString())
     }
 
@@ -144,7 +147,7 @@ class OrdenesApiTest : CajaApiTest() {
     }
 
     @Test
-    fun `un usuario CAJERO no puede dar de alta y uno SISTEMA_ORIGEN si`() {
+    fun `un usuario CAJERO no puede dar de alta y la cuenta de un sistema de origen si`() {
         val cajero = funcionario("CAJERO")
         client
             .post()
@@ -157,8 +160,8 @@ class OrdenesApiTest : CajaApiTest() {
             .expectHeader()
             .contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
 
-        val sistema = funcionario("SISTEMA_ORIGEN")
-        val cuerpo = orden()
+        val (nombre, sistema) = cuentaDeServicio()
+        val cuerpo = orden("sistema_origen" to nombre)
         val alta = post(ORDENES, cuerpo, sistema)
         // el reintento relee la que ya estaba: también puede
         assertEquals(alta["orden_id"].asString(), tree(send("POST", ORDENES, cuerpo, HttpStatus.OK, sistema))["orden_id"].asString())
@@ -166,6 +169,41 @@ class OrdenesApiTest : CajaApiTest() {
         // la ventanilla lee
         val lista = tree(send("GET", "$ORDENES?pagador_documento=${cuerpo["pagador_documento"]}", null, HttpStatus.OK, cajero))
         assertEquals(alta["orden_id"].asString(), lista["content"][0]["orden_id"].asString())
+    }
+
+    @Test
+    fun `la cuenta de servicio da de alta sin el sistema y la orden es de su nombre`() {
+        val (nombre, sistema) = cuentaDeServicio()
+        val sinSistema = orden() - "sistema_origen"
+        val alta = post(ORDENES, sinSistema, sistema)
+        assertEquals(nombre, alta["sistema_origen"].asString())
+        // el reintento, con el sistema escrito de otra forma, es la misma orden
+        val reintento = tree(send("POST", ORDENES, sinSistema + ("sistema_origen" to " ${nombre.uppercase()} "), HttpStatus.OK, sistema))
+        assertEquals(alta["orden_id"].asString(), reintento["orden_id"].asString())
+    }
+
+    @Test
+    fun `la cuenta de servicio que nombra otro sistema recibe 403`() {
+        val (_, sistema) = cuentaDeServicio()
+        send("POST", ORDENES, orden("sistema_origen" to "mercados"), HttpStatus.FORBIDDEN, sistema)
+    }
+
+    @Test
+    fun `una persona con el rol SISTEMA_ORIGEN recibe 403`() {
+        send("POST", ORDENES, orden(), HttpStatus.FORBIDDEN, funcionario("SISTEMA_ORIGEN"))
+    }
+
+    @Test
+    fun `una cuenta de servicio sin permiso de crear ordenes recibe 403`() {
+        val (_, cuenta) = cuentaDeServicio("lectora", "TESORERIA")
+        send("POST", ORDENES, orden() - "sistema_origen", HttpStatus.FORBIDDEN, cuenta)
+    }
+
+    @Test
+    fun `el admin da de alta nombrando el sistema y sin nombrarlo recibe 400`() {
+        val alta = post(ORDENES, orden("sistema_origen" to "mercados"))
+        assertEquals("mercados", alta["sistema_origen"].asString())
+        rejected("POST", ORDENES, orden() - "sistema_origen", "sistema_origen")
     }
 
     private companion object {

@@ -29,14 +29,15 @@ cuando el origen no contesta: nunca ceros.
 
 - JDK 25 y Docker (para PostgreSQL y para los tests de integración con Testcontainers).
 - Node 26 y yarn 1, solo para el formato (prettier) y los hooks de commit (husky + commitlint): `yarn install`.
-- Las librerías de wasichai (`wasichai:wasichai-bom:0.2.0` y los starters). Se resuelven desde:
+- Las librerías de wasichai (`wasichai:wasichai-bom:0.3.2` y los starters). Se resuelven desde:
   1. **GitHub Packages** (`https://maven.pkg.github.com/wasichai/wasichai`). Pide un token aunque sea para leer
      (`read:packages` basta). En `~/.gradle/gradle.properties`:
      ```properties
      gpr.user=<usuario de github>
      gpr.key=<PAT con read:packages>
      ```
-     O, si no, las variables `GITHUB_ACTOR` / `GITHUB_TOKEN`.
+     O, si no, las variables `GITHUB_ACTOR` / `GITHUB_TOKEN` antepuestas a cada `./gradlew`
+     (`GITHUB_ACTOR=<usuario> GITHUB_TOKEN=$(gh auth token) ./gradlew build`).
   2. **mavenLocal**, como respaldo mientras no haya release publicada. En un checkout de wasichai:
      `./gradlew publishToMavenLocal`.
 
@@ -77,23 +78,35 @@ set -a; source develop/.env; set +a      # WASICHAI_CORE, WASICHAI_EMAIL y WASIC
 cd model
 python3 apply.py --validate-only          # revisa el modelo contra las reglas de core, sin tocar nada
 python3 apply.py --dry-run                # imprime lo que enviaría
-python3 apply.py                          # crea 13 objetos y 18 relaciones ("done: 31 created")
-python3 apply.py                          # la segunda vez no crea nada ("done: 0 created, 0 updated, 31 skipped")
+python3 apply.py                          # crea 13 objetos, 18 relaciones y 1 acción ("done: 32 created, 5 updated")
+python3 apply.py                          # la segunda vez no crea nada ("done: 0 created, 0 updated, 32 skipped")
 python3 apply_roles.py                    # crea los 4 roles de caja ("done: 4 created"); ver «Roles»
 ```
 
-- Sobre un core que ya tiene el modelo, `apply.py` sincroniza: agrega los campos que faltan, relaja un campo que el
-  modelo ya no exige y rehace la etiqueta que difiere. Nunca renombra ni cambia el tipo de un campo.
-- `python3 apply.py --drop` lo borra todo en orden inverso, datos incluidos.
+`apply.py` trabaja en tres tiempos. Primero los objetos, con sus campos y sus banderas de escritura (`apiOnly`,
+`appendOnly`, `requiresReason`); después las acciones declaradas (`ANULAR_AJENO` sobre `recibo`) y las relaciones; y al
+final, **con las relaciones ya creadas**, lo que las necesita: las `uniqueConstraints` de cada objeto y el `unique` del
+campo de la relación `anulacion_recibo_recibo`. De ahí los 5 «updated» de un core vacío: los cuatro objetos cuya
+restricción nombra una relación (`turno`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre`) y ese campo; las de
+`tasa` y `orden_de_cobro` nombran solo campos propios y entran con el objeto. Los 32 de la segunda corrida son los 13
+objetos, las 18 relaciones y la acción.
+
+- Sobre un core que ya tiene el modelo, `apply.py` sincroniza: agrega los campos que faltan, declara las acciones (un 409
+  es «ya está»), pone las banderas de escritura y las restricciones que difieren, relaja un campo que el modelo ya no
+  exige y rehace la etiqueta que difiere. Nunca renombra ni cambia el tipo de un campo, ni borra uno con datos.
+- `python3 apply.py --drop` lo borra todo en orden inverso, datos incluidos. Antes apaga `appendOnly` y vacía las
+  `uniqueConstraints`: wasichai no deja borrar una relación cuyo campo está en un objeto `appendOnly` o en una
+  restricción.
 - Opciones comunes: `--core` (por defecto `$WASICHAI_CORE` o `http://localhost:8091`), `--email` y `--password`.
 
 ## Cargar los datos (áreas, cajas y tasas)
 
 Los datos de una municipalidad entran por REST con dos importadores, sin dependencias. El rechazo es **por fila, nunca
 por archivo**: una fila rechazada se informa con su número de línea y su motivo y no impide las siguientes. Los dos
-comprueban lo que core ya tiene **antes** de escribir, porque core contesta 500 (sin detalle) a una violación de
-unicidad; el `unique` del modelo queda como red. Ambos llevan `--dry-run` (lee core y no escribe), `--core`, `--email`,
-`--password` y `--archivo`, y salen con 0 si va bien y con 1 si core rechaza algo o no responde.
+comprueban lo que core ya tiene **antes** de escribir: core contesta 409 a una violación de unicidad, pero eso sería un
+rechazo de core (salida 1), no el de la fila con su motivo, y el `--dry-run` no lo vería; el `unique` del modelo queda
+como red. Ambos llevan `--dry-run` (lee core y no escribe), `--core`, `--email`, `--password` y `--archivo`, y salen con
+0 si va bien y con 1 si core rechaza algo o no responde.
 
 ```bash
 cd model
@@ -120,7 +133,7 @@ ejemplo de `caja`, porque es configuración de una municipalidad y no una cifra 
   `float`). Uno demasiado grande para `Decimal` rechaza su fila, no la corrida.
 - `vigenciaHasta` va vacía o es mayor o igual que `vigenciaDesde`; `documentoFuente` es obligatorio.
 - `codigo` se guarda recortado y en mayúsculas, como lo pide la ventanilla.
-- Calcula `clave_vigencia` (`<codigo>|<vigenciaDesde>`) y rechaza la fila si core ya la tiene.
+- Rechaza la fila si core ya tiene una tasa con ese `codigo` y esa `vigenciaDesde` (la `uniqueConstraint` de `tasa`).
 - **No hay archivo de tarifas en este repositorio**: las cifras del TUPA salen de la normativa verificada a doble firma
   de `normativa`, no se escriben aquí. El CSV se pasa con `--archivo`; las tarifas de las pruebas son inventadas.
 
@@ -134,6 +147,29 @@ de `caja`, de `cierre_caja`, `recibo` y `recibo_detalle` de V3 y V29, de `orden_
 `V2__ordenes_de_cobro_y_outbox.sql`, de `recibo_movimiento` de V30, partida en dos, y de `cierre_turno` y
 `cierre_turno_detalle` de V32 (líneas 266-296 del baseline), con la reversión como objeto propio. wasichai pone el `id`, y la columna
 `municipalidad_id` de `caja` es la organización de wasichai, así que ninguna de las dos es un campo.
+
+**Lo que el modelo le pide a wasichai** (0.3.2), además de campos y relaciones:
+
+- **`apiOnly` en los diez objetos de caja** (todos menos `area`, `caja` y `tasa`): la API genérica
+  (`/api/objects/{objeto}/records`) no los escribe, ni un `ADMIN` (403, desde wasichai; ver «La segunda puerta»). Los
+  escribe la API de caja.
+- **`appendOnly` en ocho**: `turno`, `recibo`, `linea_recibo`, `anulacion_recibo`, `reimpresion_recibo`, `cierre_turno`,
+  `cierre_turno_linea` y `reversion_cierre`. Nada los cambia (409, para todos, también para caja): anular es agregar un
+  acta y reversar es agregar una reversión. Quedan sin la bandera `pago_evento` (se explica y se marca) y
+  `orden_de_cobro` (se cobra y vuelve a `PENDIENTE`).
+- **`requiresReason` en los diez**: toda escritura lleva su razón, y wasichai la deja en `audit_log.reason` (ver «La
+  observación es la razón»).
+- **`uniqueConstraints`** reales, en vez de campos calculados: `tasa` (`codigo`, `vigencia_desde`), `turno` (`caja`,
+  `cajero`, `fecha`), `orden_de_cobro` (`sistema_origen`, `referencia_externa`), `cierre_turno` y `reversion_cierre`
+  (`turno`, `secuencia`) y `cierre_turno_linea` (`cierre_turno`, `forma_pago`). Más los campos únicos solos
+  (`recibo.numero_impreso`, `recibo.clave_idempotencia`, `pago_evento.evento_id` y `reversion_cierre.cierre_revertido`,
+  además de los códigos del catálogo) y la relación `anulacion_recibo.recibo`, que es única.
+- **Una acción declarada**, `ANULAR_AJENO` sobre `recibo` (ver «Roles»).
+- **Borrar lo que un registro `appendOnly` nombra da 409.** Una `caja`, una `tasa` o una `orden_de_cobro` a la que
+  apunta un registro `appendOnly` (un `turno`, un `recibo`, una `linea_recibo` o una `anulacion_recibo`) no se borra: wasichai contesta **409** y
+  dice qué registro la nombra («Record … is referenced by append-only '…'»). El área no está en ese caso por sí sola:
+  solo la citan `caja` y `tasa`, que no son `appendOnly`. Y por la API genérica no se borra ningún objeto de caja, sea
+  cual sea su bandera. Una caja o una tasa que ya cobró se da de baja (`activa = false`, o se cierra su vigencia).
 
 Los enumerados: `estado_orden` (`PENDIENTE`, `PAGADA`, `ANULADA`), `forma_pago` (`EFECTIVO`, `CHEQUE`, `DEPOSITO`,
 `TARJETA`, `TRANSFERENCIA`), `tipo_pago` (`NORMAL`, `TASA`), `tipo_evento_pago` (`PAGO_REGISTRADO`, `PAGO_ANULADO`) y
@@ -174,11 +210,10 @@ La tarifa de un trámite o servicio del TUPA en una vigencia. Relación `tasa_ar
 | `vigencia_desde`       | DATE     | Primer día en que rige. Obligatorio.                                                           | `tasa.vigencia_desde`            |
 | `vigencia_hasta`       | DATE     | Último día en que rige; vacía si sigue vigente.                                                | `tasa.vigencia_hasta`            |
 | `documento_fuente`     | TEXT     | La norma o el TUPA de donde sale la tarifa. Obligatorio.                                       | `tasa.documento_fuente`          |
-| `clave_vigencia`       | TEXT     | `<codigo>\|<vigencia_desde en ISO>`. Obligatoria, única.                                       | calculada: reemplaza el `UNIQUE (codigo, vigencia_desde)` (`tasa_codigo_uq`) |
 | `area`                 | relación | El área que fija la tasa. Obligatoria.                                                         | `tasa.area_id`                   |
 
-`clave_vigencia` existe porque wasichai no tiene unicidad compuesta: en vez de `(codigo, vigencia_desde)` único, un solo
-campo único con los dos valores.
+`(codigo, vigencia_desde)` es única (`uniqueConstraints`, el `UNIQUE (codigo, vigencia_desde)` de `caja`, `tasa_codigo_uq`):
+una tasa tiene una sola tarifa por vigencia, y repetirla es un 409 de wasichai.
 
 ### `orden_de_cobro`
 
@@ -193,7 +228,6 @@ mirar su importe.
 | -------------------- | --------- | --------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | `sistema_origen`     | TEXT      | Quién la mandó: minúsculas, `[a-z0-9_-]`, de 1 a 20. Obligatorio.                                   | `orden_de_cobro.sistema_origen`       |
 | `referencia_externa` | TEXT      | Cómo la reconoce quien la mandó, hasta 120. **Opaca**. Obligatoria.                                 | `orden_de_cobro.referencia_externa`   |
-| `clave_origen`       | TEXT      | `<sistema_origen>\|<referencia_externa>`. Obligatoria, única.                                       | calculada: reemplaza `orden_referencia_uq` |
 | `concepto`           | TEXT      | Lo que se imprime en la línea del recibo, hasta 120. Obligatorio.                                   | `orden_de_cobro.concepto`             |
 | `detalle`            | TEXT      | Lo que el origen quiera añadir, hasta 200.                                                          | `orden_de_cobro.detalle`              |
 | `importe`            | DECIMAL   | Cuánto, a la fecha de `actualizado_a`: mayor que 0, 2 decimales a lo sumo. Obligatorio.             | `orden_de_cobro.importe`              |
@@ -207,14 +241,16 @@ mirar su importe.
 | `recibo`             | relación  | El recibo que la cobró (`orden_recibo`, opcional). Una orden `PAGADA` lo nombra.                    | `orden_de_cobro.recibo_id` (`orden_recibo_ck`) |
 
 Los largos son de las columnas de `caja`: wasichai guarda TEXT sin largo, así que los comprueba el alta. `creada_en` es
-el `created_at` de wasichai.
+el `created_at` de wasichai. `(sistema_origen, referencia_externa)` es única (`uniqueConstraints`, `orden_referencia_uq`
+de `caja`): de ahí sale la idempotencia del alta.
 
 ### `turno`
 
 La apertura de una caja por un cajero en un día (`cierre_caja` de `caja`, con el nombre que tiene mientras está viva).
 **No se abre por un endpoint propio**: el primer cobro del día lo abre, de forma implícita e idempotente, y
 `GET /api/caja/turnos/del-dia` lo publica sin abrirlo. No tiene estado: si está abierto o cerrado se deriva de sus
-cierres y reversiones (ver «El turno»). Relación `turno_caja` (campo `caja`, obligatoria).
+cierres y reversiones (ver «El turno»). Relación `turno_caja` (campo `caja`, obligatoria). `(caja, cajero, fecha)` es única
+(`uniqueConstraints`, `cierre_uq` de `caja`): un cajero tiene un solo turno por caja y día.
 
 | Campo         | Tipo      | Qué guarda                                                                                  | Columna de `caja`             |
 | ------------- | --------- | ------------------------------------------------------------------------------------------- | ----------------------------- |
@@ -222,7 +258,6 @@ cierres y reversiones (ver «El turno»). Relación `turno_caja` (campo `caja`, 
 | `fecha`       | DATE      | El día de trabajo, en Lima. Obligatoria.                                                    | `cierre_caja.fecha`           |
 | `abierto_en`  | DATETIME  | El instante en que se abrió, según el reloj de la caja. Obligatorio.                        | `cierre_caja.fecha_apertura`  |
 | `observacion` | LONG_TEXT | Por qué se abrió: la del cobro que lo abrió (regla 10). Obligatoria.                        | `cierre_caja.observacion`     |
-| `clave_turno` | TEXT      | `<caja id>\|<cajero>\|<fecha>`. Obligatoria, única.                                         | calculada: reemplaza `cierre_uq` |
 
 ### `recibo`
 
@@ -267,11 +302,11 @@ Relaciones `linea_recibo_recibo` (campo `recibo`, obligatoria), `linea_recibo_or
 El acta de la anulación de un recibo (`recibo_movimiento` de `caja`, tipo `ANULACION`): **se agrega, y el recibo no se
 toca**. Crearla es el privilegio `ELIMINACION` de `caja`. Relaciones `anulacion_recibo_recibo`, `anulacion_recibo_caja`
 y `anulacion_recibo_turno` (las tres obligatorias): la caja y el turno son **los del recibo**, para que el arqueo de ese
-turno reste lo anulado.
+turno reste lo anulado. **El campo `recibo` es único** (`unique` sobre la relación; reemplaza
+`recibo_movimiento_anulacion_uq`): un recibo se anula una sola vez.
 
 | Campo                    | Tipo      | Qué guarda                                                                                     |
 | ------------------------ | --------- | ---------------------------------------------------------------------------------------------- |
-| `recibo_anulado`         | TEXT      | El id del recibo, otra vez. Obligatorio, **único**: reemplaza `recibo_movimiento_anulacion_uq`, un recibo se anula una sola vez. |
 | `fecha`                  | DATE      | El día de la anulación, en Lima: el del turno del recibo. Obligatoria.                         |
 | `motivo`                 | TEXT      | El sustento del acto, de hasta 80 y no en blanco: se imprime en el duplicado. Obligatorio.     |
 | `autorizado_por`         | TEXT      | Quien lo autorizó, si consta: hasta 80.                                                        |
@@ -318,6 +353,8 @@ sin registrar) o `EXPLICADO` (un `MUERTO` del que alguien se hizo cargo por escr
 El acta del cierre de un turno con su arqueo **congelado** (`cierre_turno` de `caja`, V32, RF-087). **Solo se agrega**:
 un cierre no se modifica ni se borra, se reversa con una `reversion_cierre`. Crearlo es el privilegio `REGISTRO` de
 `cierre_caja`. Relación `cierre_turno_turno` (campo `turno`, obligatoria). Todos los campos son obligatorios.
+`(turno, secuencia)` es única (`uniqueConstraints`, `cierre_turno_secuencia_uq` de `caja`): la red bajo el candado del
+turno.
 
 | Campo                                                   | Tipo     | Qué guarda                                                                 |
 | ------------------------------------------------------- | -------- | -------------------------------------------------------------------------- |
@@ -329,24 +366,24 @@ un cierre no se modifica ni se borra, se reversa con una `reversion_cierre`. Cre
 | `recibos_emitidos`, `recibos_anulados`                  | INTEGER  | Cuántos recibos emitió el turno y cuántos de ellos se anularon.            |
 | `cobrado_con_evento`, `cobrado_sin_evento`              | DECIMAL  | Las dos mitades del cuadre (órdenes y tasas): suman el neto.               |
 | `usuario`, `observacion`                                | TEXT, LONG_TEXT | Quien cerró y por qué (regla 10).                                   |
-| `clave_secuencia`                                       | TEXT     | `<turno>\|<secuencia>`. **Único**: la red bajo el candado del turno (reemplaza `cierre_turno_secuencia_uq`). |
 
 ### `cierre_turno_linea`
 
 El arqueo del cierre forma de pago por forma de pago (`cierre_turno_detalle` de `caja`). Relación
 `cierre_turno_linea_cierre_turno` (campo `cierre_turno`, obligatoria). Todos los campos son obligatorios.
+`(cierre_turno, forma_pago)` es única (`uniqueConstraints`): una línea por forma de pago y cierre.
 
 | Campo                                   | Tipo    | Qué guarda                                                                           |
 | --------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
 | `forma_pago`                            | ENUM    | `forma_pago`.                                                                        |
 | `cobrado`, `anulado`, `neto`, `declarado` | DECIMAL | Lo cobrado y lo anulado con esa forma, el neto y lo declarado (cero si no se declaró). |
-| `clave`                                 | TEXT    | `<cierre>\|<forma_pago>`. **Única**: una línea por forma de pago y cierre.          |
 
 ### `reversion_cierre`
 
 Deja sin efecto el cierre vigente de un turno y **lo reabre** (`cierre_turno` de `caja`, tipo `REVERSION`). El cierre
 reversado no se toca. Crearla es el privilegio `ELIMINACION` de `cierre_caja`. Relación `reversion_cierre_turno` (campo
-`turno`, obligatoria). Todos los campos son obligatorios.
+`turno`, obligatoria). Todos los campos son obligatorios. `(turno, secuencia)` es única, como en el cierre: la secuencia
+es común a los dos objetos y la serializa el candado del turno (ver «El candado del turno»).
 
 | Campo                      | Tipo      | Qué guarda                                                                               |
 | -------------------------- | --------- | ---------------------------------------------------------------------------------------- |
@@ -355,7 +392,6 @@ reversado no se toca. Crearla es el privilegio `ELIMINACION` de `cierre_caja`. R
 | `motivo`                   | TEXT      | El sustento de reabrir una caja ya arqueada: hasta 80 y no en blanco.                    |
 | `fecha`, `registrado_en`   | DATE, DATETIME | El día del turno que se reabre y el instante en que se reversó.                     |
 | `usuario`, `observacion`   | TEXT, LONG_TEXT | Quien reversó y por qué se registra (regla 10); la observación es otra cosa que el motivo. |
-| `clave_secuencia`          | TEXT      | `<turno>\|<secuencia>`. **Único**.                                                      |
 
 ## API
 
@@ -364,7 +400,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 
 | Ruta                               | Qué hace                                                                                  | Permiso que exige                       |
 | ---------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
-| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba.     | CREATE sobre `orden_de_cobro`, y READ para releer la que ya estaba |
+| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba.     | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
 | `POST /api/caja/cobros`            | Cobra órdenes y emite el recibo (ver «La cobranza»): **201** con el recibo, **200** si es el reenvío de una `Idempotency-Key` ya usada. | CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (403 antes de empezar, diciendo cuál falta); al escribir, core exige además CREATE sobre `turno`, `linea_recibo` y `pago_evento` |
@@ -376,7 +412,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `GET /api/caja/recibos`            | El listado paginado (ver «La consulta de recibos»): `?documento=&caja=&cajero=&desde=&hasta=&estado=&page=&size=`, del más reciente al más antiguo. | READ sobre `recibo`, `anulacion_recibo` y `reimpresion_recibo` (y `caja` si se filtra por ella) |
 | `GET /api/caja/recibos/{numero_impreso}` | La ficha: el recibo con sus líneas, `estado`, `duplicados` y `anulacion`. **404** si no existe, **400** si el número está mal formado. | READ sobre `recibo`, `linea_recibo`, `caja`, `tasa`, `anulacion_recibo` y `reimpresion_recibo` |
 | `POST /api/caja/recibos/{numero_impreso}/duplicados` | El duplicado en PDF, marcado y numerado, y lo registra (ver «El duplicado»): **201** `application/pdf`; **409** si ya no se dibuja igual. | CREATE sobre `reimpresion_recibo` (403 antes de empezar) |
-| `POST /api/caja/recibos/{numero_impreso}/anulacion` | Anula el recibo del día (ver «La anulación»): **201** con el acta. | CREATE sobre `anulacion_recibo` (403 antes de empezar); el recibo de otro cajero, además, el rol `SUPERVISOR_CAJA`; al escribir, core exige UPDATE sobre `orden_de_cobro` y CREATE sobre `pago_evento` |
+| `POST /api/caja/recibos/{numero_impreso}/anulacion` | Anula el recibo del día (ver «La anulación»): **201** con el acta. | CREATE sobre `anulacion_recibo` (403 antes de empezar); el recibo de otro cajero, además, la acción `ANULAR_AJENO` sobre `recibo`; al escribir, core exige UPDATE sobre `orden_de_cobro` y CREATE sobre `pago_evento` |
 | `GET /api/caja/turnos/del-dia`     | Los turnos de hoy de quien pregunta y su situación (ver «El turno»). **No abre ningún turno**; cualquier parámetro es 400. | READ sobre `turno`, `caja`, `cierre_turno` y `reversion_cierre` |
 | `GET /api/caja/turnos/{turno_id}/arqueo` | El arqueo en vivo, las dos mitades del cuadre, lo que impide cerrar y, con el turno cerrado, `cierre_vigente`: el acta tal como se firmó. **200**; **404** si el turno no existe, **400** si el id no es un uuid. | READ sobre `turno`, `recibo`, `anulacion_recibo`, `pago_evento`, `cierre_turno`, `cierre_turno_linea` y `reversion_cierre` |
 | `POST /api/caja/turnos/cierre`     | Cierra el turno con su arqueo (ver «El cierre»): **201** con el acta. | CREATE sobre `cierre_turno` y `cierre_turno_linea` (403 antes de empezar) |
@@ -393,6 +429,25 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
   concepto).
 - **Todo importe va con su fecha** (regla 9) y en cadena (regla 1): `"importe": {"importe": "150.50", "actualizado_a":
   "2026-03-15"}`. El alta recibe el importe en cadena, `"150.50"`, nunca como número.
+
+**El alta de órdenes** la da un sistema de origen con su **cuenta de servicio** de wasichai, no con un usuario y una
+contraseña. El administrador la crea una vez, con el rol `SISTEMA_ORIGEN`; el nombre es el sistema (`[a-z0-9_-]`, de 1 a
+20 caracteres, que es la regla de `sistema_origen`) y la respuesta trae `clientId` y `clientSecret`, que no se vuelven a
+ver:
+
+```
+POST /api/service-accounts   {"name": "rentas", "roles": ["SISTEMA_ORIGEN"]}
+POST /api/auth/token         {"clientId": "…", "clientSecret": "…"}   ->  {"token": "…", "expiresAt": "…"}
+```
+
+El token se manda como `Authorization: Bearer …` y **dura 15 minutos**: el sistema lo pide de nuevo al vencer. Quién
+da de alta fija el `sistema_origen` de la orden:
+
+- **una cuenta de servicio**: el sistema es el nombre de su cuenta. El cuerpo puede omitir `sistema_origen`; si lo trae
+  (se normaliza igual: `" RENTAS "` es `rentas`) y no coincide, **403**. Si el nombre de la cuenta no cumple la regla de
+  `sistema_origen`, también 403;
+- **un ADMIN**: nombra el sistema en el cuerpo, como contingencia (sin él, 400 en `sistema_origen`);
+- **cualquier otra persona**, aunque tenga el rol `SISTEMA_ORIGEN` o permiso de CREATE: 403.
 
 El alta recibe `sistema_origen`, `referencia_externa`, `concepto`, `detalle`, `importe`, `fecha_exigibilidad`,
 `actualizado_a`, `pagador_documento`, `pagador_nombre`, `pagador_externo_id` y `observacion`. **Una propiedad que no
@@ -567,13 +622,24 @@ Con el origen contestando, `recibidos`, `aplicados` y `rechazados` son números,
   propiedad desconocida) y en el modelo (`FronteraDeLaOrdenTest` falla si `orden_de_cobro` gana un campo que empiece así).
 - **La referencia es opaca.** `referencia_externa` no se analiza, no se compara por partes y no se ordena: solo se
   recorta. Es lo que permite que mañana sea el contrato de un puesto de mercado.
-- **La idempotencia es del motor, no de un `if`** (#188 de `caja`). El alta inserta y, si el unique de `clave_origen`
-  salta (`DuplicateKeyException`), relee la orden que ya estaba y la devuelve con 200, tal como estaba. No hay una
+- **La idempotencia es del motor, no de un `if`** (#188 de `caja`). El alta inserta y, si la `uniqueConstraint` de
+  `(sistema_origen, referencia_externa)` salta (`DuplicateKeyException`), relee la orden que ya estaba y la devuelve con
+  200, tal como estaba. No hay una
   lectura previa: dos altas simultáneas la pasarían las dos y el mismo administrado tendría dos órdenes por la misma
   deuda. `OrdenesApiTest` lanza diez altas simultáneas de la misma clave y exige una sola orden.
 - **La caja no recalcula.** El importe y su fecha se guardan como llegan; la caja no comprueba el pagador contra ningún
   padrón.
 - **Ningún `Double` ni `Float`**: el dinero es `BigDecimal`, y viaja en cadena.
+- **La observación es la razón** (regla 10). Los diez objetos de caja son `requiresReason`: wasichai rechaza (400, en
+  `reason`) una escritura sin razón, y la deja en `audit_log.reason`. Por eso `Registros.create` y `Registros.replace`
+  **exigen la razón**, y es la observación de quien hace el acto: la del cobro en el turno, el recibo, sus líneas y las
+  órdenes que pasan a `PAGADA`; la de la anulación en su acta, en las órdenes que vuelven a `PENDIENTE` y en el
+  `PAGO_ANULADO`; la del cierre en sus líneas; la de la explicación en el pago explicado. Un proceso del sistema, el
+  buzón, lleva un texto fijo (ver «Una vuelta»). La observación sigue siendo también un campo (`observacion`) de los
+  objetos que la guardan. `Observacion` la valida en la entrada, con la misma regla que la plataforma aplica a la razón:
+  recortada, de 5 a 500 caracteres (se cuentan code points, no unidades de UTF-16) y **sin caracteres de control**
+  salvo tabulador y saltos de línea; así el rechazo sale en `observacion` y no en un `reason` que el cliente no mandó.
+  La explicación de un pago ya no escribe una segunda fila de auditoría para la observación: es la razón de la única.
 
 ### La cobranza
 
@@ -582,8 +648,9 @@ de la base: el turno, el número de la serie, el recibo con sus líneas, las ór
 `PAGO_REGISTRADO` en el buzón se confirman juntos o no queda nada. **Si la fila del buzón está, el recibo está.**
 
 wasichai no abre transacciones (`RecordService`, ADR-0025 de wasichai), pero escribe por `DatabaseClient`, que se une a
-la transacción en curso: `caja.comun.Transaccion` la abre con el `TransactionalOperator` de Spring, y el usuario que
-llama sigue en el contexto, así que core aplica sus permisos dentro igual que fuera. `CobroEnUnaTransaccionApiTest` lo
+la transacción en curso (ADR-038 de wasichai: es API soportada): `caja.comun.Transaccion` la abre con el
+`TransactionalOperator` de Spring, y el usuario que llama sigue en el contexto, así que core aplica sus permisos dentro
+igual que fuera. `CobroEnUnaTransaccionApiTest` lo
 demuestra: un `RecordChangeListener` de prueba revienta al crearse el `pago_evento`, cuando el turno, el recibo, la
 línea y la orden PAGADA ya están escritos, y tras el 500 no queda ninguno y el número no avanza.
 
@@ -594,8 +661,8 @@ lectura por la clave (un recibo confirmado no cambia): antes de abrir o crear el
 activa. Así un reenvío al día siguiente no abre un turno vacío, y uno posterior a dar de baja la caja devuelve el
 recibo original. Luego, en este orden:
 
-1. **El turno.** Candado `TURNO_CLAVE` con la clave `<clave_turno>`; se busca por `clave_turno` y, si no está, se crea con `abierto_en`
-   según el reloj y la observación del cobro. El primer cobro del día abre el turno, una vez. Una caja inexistente es
+1. **El turno.** Candado `TURNO_CLAVE` con la clave `<caja id>|<cajero>|<fecha>`; se busca por (`caja`, `cajero`,
+   `fecha`) y, si no está, se crea con `abierto_en` según el reloj y la observación del cobro. El primer cobro del día abre el turno, una vez. Una caja inexistente es
    **404**; una de baja, **409**.
 2. **El candado del turno**, `TURNO` con el id del turno: el que toman la anulación y el cierre, para que un cobro no se
    cuele en un cierre en curso.
@@ -620,19 +687,23 @@ recibo original. Luego, en este orden:
 9. **El evento.** El `pago_evento` `PAGO_REGISTRADO`, `PENDIENTE`, con 0 intentos, `sistema_destino` el de las órdenes y
    el cuerpo de `rentas.json` congelado.
 
-**Los candados** (`caja.comun.Candados`) son consultivos de transacción, en la forma de dos enteros
-`pg_advisory_xact_lock(<clase>, hashtext(<clave>))`, con **una clase fija por tipo de candado** (`caja.comun.Candado`:
-`TURNO_CLAVE`, `TURNO`, `ORDEN`, `SERIE` y `RECIBO`; la clave va sin prefijo, la clase la separa). wasichai no bloquea filas ni tiene unicidad compuesta. Se sueltan en el
-commit o el rollback, nunca antes, y `Candados.bloquear` **falla fuera de una transacción** (en autocommit no protegería
-nada). Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie → recibo**, para que dos
-operaciones no se esperen en cruz (la anulación toma el del turno de su recibo y luego los de sus órdenes; el cierre y
-la reversión, solo el del turno; la reimpresión, solo el del recibo); cada decisión se toma con lo leído después de tomar su candado. Los `unique` de `clave_turno`,
-`numero_impreso`, `clave_idempotencia` y `evento_id` son la red: si uno salta (`DuplicateKeyException`), la transacción
+**Los candados** (`caja.comun.Candados`) son consultivos de transacción y los da `ClusterLock.withXactLock` de wasichai
+(`pg_advisory_xact_lock`), con **una clase por tipo de candado** (`caja.comun.Candado`: `TURNO_CLAVE`, `TURNO`, `ORDEN`,
+`SERIE`, `RECIBO` y `PAGO`). La clave de `ClusterLock` es `caja.<CANDADO>.<clave>` (`Candados.clave`), y `lockId` la
+vuelve un entero de 64 bits con los primeros ocho bytes de su SHA-256. wasichai no bloquea filas. `withXactLock` se une
+a la transacción de quien llama, así que el candado se suelta en el commit o el rollback, nunca antes, y
+`Candados.bloquear` **falla fuera de una transacción** (en autocommit abriría una propia, se soltaría al volver y no
+protegería nada). Se toman siempre en el mismo orden, **turno-clave → turno → órdenes por id → serie → recibo**, para que
+dos operaciones no se esperen en cruz (la anulación toma el del turno de su recibo y luego los de sus órdenes; el cierre
+y la reversión, solo el del turno; la reimpresión, solo el del recibo); cada decisión se toma con lo leído después de
+tomar su candado. Las `uniqueConstraints` de `(caja, cajero, fecha)` del turno, y los únicos de `numero_impreso`,
+`clave_idempotencia` y `evento_id` son la red: si uno salta (`DuplicateKeyException`), la transacción
 entera se revierte y el cobro contesta 409 («vuelva a intentarlo»), sin reintentar dentro (postgres no deja leer nada en
-una transacción abortada); cualquier otra violación de integridad se propaga como lo que es (500). `hashtext` da 32
-bits: dos claves **de la misma clase** pueden caer en el mismo candado, lo que solo ordena de más dentro de esa clase.
-Con la forma de un entero, un choque entre una clave de turno y una de serie las habría vuelto el mismo candado, y dos
-cobros podrían haberlo tomado en órdenes distintos y esperarse en cruz (40P01): por eso cada clase tiene su espacio.
+una transacción abortada); cualquier otra violación de integridad se propaga como lo que es (500). Los 64 bits de
+`lockId` hacen despreciable que dos claves de clases distintas caigan en el mismo candado (con el `hashtext` de 32 bits
+de antes, un choque entre una clave de turno y una de serie habría vuelto el mismo candado a los dos, y dos cobros
+podrían haberlo tomado en órdenes distintos y esperarse en cruz, 40P01); y la clase va en el texto de la clave, así que
+`caja.TURNO.x` y `caja.SERIE.x` nunca son la misma.
 
 `max(numero)` se lee como el usuario que llama: un rol con «solo sus registros» (`own_records_only`) no vería los
 recibos ajenos y su cobro chocaría con el `unique` de `numero_impreso` (409, sin datos). Los roles de `roles.json` no lo
@@ -697,8 +768,8 @@ sobre `emitido_en`, los dos incluidos: `hasta` llega hasta las 23:59:59 de Lima)
 se resuelve con un `EXISTS` sobre la tabla de `anulacion_recibo`). Un rango al revés, una fecha mal escrita o un estado
 desconocido son **400** (un filtro que no se entiende no es «todos»). Una búsqueda sin resultados es una página vacía.
 
-El orden es `emitido_en` descendente con **desempate estable por id**: el `ORDER BY` de core es de una sola columna, así
-que se leen los recibos entre el instante del último de la página y el del primero, se cuentan los más recientes, y la
+El orden es `emitido_en` descendente con **desempate estable por id**. Se escribió cuando el `ORDER BY` de core (0.2.0) era de
+una sola columna, y se queda tal cual aunque 0.3.x ya termina todo orden con `id` (D21): se leen los recibos entre el instante del último de la página y el del primero, se cuentan los más recientes, y la
 página es el tramo que le toca en el orden (`emitido_en`, `id`). Dos recibos del mismo instante no se repiten ni se
 pierden al pasar de página. Esas lecturas, y las de las anulaciones y reimpresiones de la página, van en **una
 transacción de solo lectura en `REPEATABLE READ`** (`Transaccion.lectura`): ven una sola foto de la base, y un cobro que
@@ -730,11 +801,12 @@ de 5 a 500; una clave desconocida). Luego, en **una transacción**:
 2. **Solo el mismo día**: la fecha del turno contra el que se cobró tiene que ser hoy en Lima. Si no, **422** «fuera del
    día de pago»: ese dinero ya cuadró en el arqueo de su día, y lo que corresponde es una devolución. Y **con el turno
    cerrado, 409 «Turno cerrado»**, bajo el mismo candado: su arqueo ya congeló el recibo como cobrado.
-3. **Una sola vez**: si ya tiene su anulación, **409**. El `unique` de `recibo_anulado` es la red: dos anulaciones a la
-   vez dan una y un 409, sin releer dentro.
-4. **El recibo de otro cajero** exige el rol `SUPERVISOR_CAJA` (o ADMIN): **403** que lo nombra. Es el privilegio
-   `ESPECIAL` de `caja`, y es **un hueco declarado**: wasichai no tiene acciones propias además de las CRUD, así que se
-   comprueba por el nombre del rol y no por un permiso que se pueda dar en el admin.
+3. **Una sola vez**: si ya tiene su anulación, **409**. El `unique` del campo `recibo` de la anulación es la red: dos
+   anulaciones a la vez dan una y un 409, sin releer dentro.
+4. **El recibo de otro cajero** exige la acción `ANULAR_AJENO` sobre `recibo` (el `ADMIN` la tiene): **403** que la
+   nombra. Es el privilegio `ESPECIAL` de `caja`: una **acción declarada** en el modelo (`model.json`), que
+   `roles.json` da a `SUPERVISOR_CAJA`, y que la UI lee de `/api/auth/me/permissions` como cualquier otro permiso. Ya no
+   se comprueba por el nombre del rol: quien la tenga puede anular el recibo ajeno, y quien no, no.
 5. **El acta**: la `anulacion_recibo` con la caja y el turno del recibo y `importe` igual a su total.
 6. **Las órdenes del recibo vuelven a `PENDIENTE` y sin recibo**: candado `ORDEN` de cada una, por id, relectura y
    `replace`. No se marcan `ANULADA`: el dinero volvió y la deuda sigue, así que se pueden cobrar otra vez.
@@ -798,7 +870,7 @@ día pasado**: el turno que se quedó abierto ayer tiene que poder cerrarse; ma�
 cadena, un decimal sin signo de hasta 2 decimales y 13 enteros, por una forma de pago conocida: si no, 400 en
 `declarado` que dice cuál), `observacion` y una clave desconocida. Luego, en **una transacción**:
 
-1. **El turno de la caja, del cajero de la sesión y de esa fecha** (por `clave_turno`): **404** si no hay, o si la caja
+1. **El turno de la caja, del cajero de la sesión y de esa fecha** (por `caja`, `cajero` y `fecha`): **404** si no hay, o si la caja
    no existe. Una caja de baja también cierra.
 2. **El candado del turno** (`TURNO`), y todo lo que sigue se lee después de tomarlo.
 3. **Ya cerrado: 409** («ya está cerrado»): dos arqueos vigentes sobre el mismo dinero.
@@ -847,13 +919,15 @@ sesión, como en `caja`). Un cajero que cerró por error no puede volver a cobra
 elegir una es una decisión de negocio, no de código:
 
 1. **Dar CREATE sobre `reversion_cierre` al `CAJERO`**: reabre su propio turno, con su motivo y su observación.
-2. **Que un supervisor reverse el cierre de otro**, como una regla `ESPECIAL` (igual que anular el recibo de otro
-   cajero): el rol `SUPERVISOR_CAJA` y la caja y el cajero en la petición.
+2. **Que un supervisor reverse el cierre de otro**, como una acción declarada (igual que `ANULAR_AJENO` para el recibo
+   de otro cajero): una acción nueva sobre `reversion_cierre`, que se da a `SUPERVISOR_CAJA`, y la caja y el cajero en
+   la petición.
 
 **Solo se agregan filas (regla 4).** Nadie tiene UPDATE ni DELETE sobre `cierre_turno`, `cierre_turno_linea` ni
 `reversion_cierre` (`test_apply_roles.py`), `src/main` no tiene ningún `replace`, `update` ni `delete` sobre ellos
-(`InmutabilidadDelReciboTest`) y ninguna ruta de caja los modifica. Los `unique` de `clave_secuencia`, de la `clave` de
-cada línea y de `cierre_revertido` son la red: un cierre se reversa una sola vez.
+(`InmutabilidadDelReciboTest`) y ninguna ruta de caja los modifica. Las `uniqueConstraints` de `(turno, secuencia)`
+del cierre y de la reversión, la de `(cierre_turno, forma_pago)` de cada línea y el único de `cierre_revertido` son la
+red: un cierre se reversa una sola vez. Y son `appendOnly`: nada de eso se cambia, ni por caja (409).
 
 #### El candado del turno
 
@@ -863,8 +937,9 @@ tenga, un cobro o una anulación de ese turno **esperan**, y al soltarlo encuent
 cerrado»**, comprobado bajo el candado (en `Ventanilla` después de la idempotencia, en `AnularRecibo` después del mismo
 día). La caja vecina es otro turno y no espera. El orden de los candados no cambia: **turno-clave → turno → órdenes por
 id → serie → recibo → pago** (el del pago lo toma solo la explicación de un pago sin entregar), y el cierre, que solo toma el del turno, no puede esperar en cruz con nadie. La secuencia es común
-al cierre y a la reversión: wasichai no tiene unicidad compuesta entre objetos, así que **la serializa el candado del
-turno**; dos cierres a la vez dan uno, y el segundo encuentra el turno cerrado.
+al cierre y a la reversión: una `uniqueConstraint` es de un solo objeto y no distingue un cierre de una reversión con la
+misma secuencia, así que **la serializa el candado del turno**; dos cierres a la vez dan uno, y el segundo encuentra el
+turno cerrado.
 
 El **original** del recibo (`GET …/pdf`) también exige el turno abierto: con el turno cerrado es 409 y remite al
 duplicado. Y exige que no tenga reimpresiones: con un duplicado ya entregado, un original sin marca sería otro papel
@@ -911,11 +986,18 @@ configuración, no un despliegue. Por variables: `CAJA_BUZON_DESTINOS_RENTAS_URL
 `caja.buzon.BucleDelBuzon` es un `SmartLifecycle` que solo arranca con `habilitado`: espera el intervalo, da una vuelta y
 vuelve a esperar. En cada vuelta:
 
-1. Intenta **`CerrojoBuzon`**, un `pg_try_advisory_lock` **de sesión** sobre una conexión propia (el `CerrojoEmision` de
-   `srtm`). Si otro lo tiene, la vuelta no hace nada: **un solo publicador por base, no uno por réplica**. Una instancia
-   que muere lo suelta con su sesión.
-2. Con el cerrojo, recorre cada organización y lee hasta `por-vuelta` eventos `PENDIENTE`, por orden de creación
-   (`BuzonStore`).
+1. Intenta **`CerrojoBuzon`**: `ClusterLock.tryLock("caja.buzon")` de wasichai, un `pg_try_advisory_lock` **de
+   sesión**. Si otro lo tiene, la vuelta no hace nada: **un solo publicador por base, no uno por réplica**. Una instancia
+   que muere lo suelta con su sesión. **El cerrojo abre una conexión propia en cada vuelta, por debajo del pool**, y la
+   cierra al soltarlo, así el candado nunca vuelve al pool tomado: es una conexión nueva cada `intervalo`, también
+   cuando no hay nada que entregar, y cuenta en el `max_connections` de la base.
+2. Con el cerrojo, recorre cada organización que tiene `pago_evento` y lee hasta `por-vuelta` eventos `PENDIENTE`, por
+   orden de creación, de 200 en 200 (`BuzonStore`). Lee y marca por `RecordService` **como la plataforma** de esa
+   organización (`asPlatform` de wasichai: sin usuario y sin roles, como un ADMIN), sin SQL sobre las tablas de datos.
+   **Una organización con `pago_evento` y el modelo de caja incompleto ya no se salta en silencio**: si le falta algo
+   que la lista de pendientes lee, su vuelta falla con **un ERROR en cada vuelta** («El buzón de la organización … no
+   se pudo sacar en esta vuelta») y las demás siguen; si le falta algo del recibo, cada evento cuenta un intento fallido
+   (abajo).
 3. Cada evento se comprueba contra su recibo (la defensa (a), abajo).
 4. **Un `PAGO_ANULADO` no sale antes que su `PAGO_REGISTRADO`** (caja-backend#23). Mira el estado del
    `PAGO_REGISTRADO` que deshace, el que lleva el sello del cobro (uno forjado no cuenta):
@@ -934,9 +1016,16 @@ vuelve a esperar. En cada vuelta:
 5. Si le toca salir, se entrega **fuera de cualquier transacción**: `POST {url}/pagos` con el `cuerpo` **congelado**,
    tal cual se escribió al cobrar. `ClienteDelSistemaDeOrigen` comprueba que no hay una transacción abierta antes de
    llamar, y falla si la hay.
-6. Cada marca va **en su propia transacción y es condicional**: `WHERE estado = 'PENDIENTE' AND intentos = :leidos`.
-   Si dos publicadores llegaran a coincidir, se cuenta un solo intento. Cada marca se audita con `AuditService` y
-   usuario `null` (la escribió el sistema).
+6. Cada marca va **en su propia transacción, bajo el candado de su evento y es condicional**. Como wasichai no tiene
+   un update condicional, con `Candado.PAGO` del evento (el mismo que toma la explicación) se relee, y solo se escribe
+   si sigue `PENDIENTE` con los intentos leídos; el `update` de core reemplaza el registro entero, así que va lo
+   guardado con los cambios encima. Si dos publicadores llegaran a coincidir, se cuenta un solo intento, y una marca
+   nunca pisa un evento ya explicado o ya entregado. **Core escribe su auditoría, con usuario `null` y una razón fija**
+   («entrega del buzón: ENTREGADO», «entrega del buzón: intento fallido» o «entrega del buzón: MUERTO»; nunca el error
+   ni lo que contestó el destino, que van en `ultimo_error`). Pasa por `GuardiaDeEscrituras` con la marca
+   `EscrituraDeCaja`, y **las marcas llegan ahora a los `RecordChangeListener`**, dentro de su transacción (antes se
+   escribían en la tabla y no llegaban). Hoy no hay ninguno (caja no instala `wasichai-automation`); un módulo que se
+   instale después verá cada marca.
 
 | Respuesta | Qué es | Qué queda |
 |---|---|---|
@@ -951,9 +1040,28 @@ destino viaja en él **tachado**: el token configurado y todo lo que parece una 
 
 **Un fallo inesperado con un evento** (la base al leer su recibo o al marcarlo; `EntregarEventos` de `caja`, #109)
 **cuenta como un intento**, con su tipo en `ultimo_error` y su traza en el registro, y la vuelta sigue con el siguiente:
-un evento envenenado, primero en la cola, no atasca el buzón de su organización para siempre. Si ni siquiera se puede
-anotar ese intento, la vuelta de esa organización se corta; las demás siguen. Lo ya marcado queda marcado, y lo que no
-se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo deduplica.
+un evento envenenado, primero en la cola, no atasca el buzón de su organización para siempre. Si ese intento tampoco se
+puede anotar porque la plataforma rechaza la fila misma (un valor que su tipo no admite, escrito en la base por fuera de
+caja tras quitar el `CHECK` de su columna: el `update` de core reescribe la fila entera y vuelve a validar cada campo),
+es un problema de ese evento: sigue `PENDIENTE` sin contar el intento, deja en cada vuelta una línea ERROR que lo
+nombra hasta que alguien corrija la fila en la base, y la vuelta sigue con el siguiente. Si no se puede anotar por otra
+causa (la base caída), la vuelta de esa organización se corta; las demás siguen. Lo ya marcado queda marcado, y lo que
+no se marcó sigue `PENDIENTE`; si el destino ya lo tenía, lo recibe otra vez con el mismo `pagoId` y lo deduplica.
+
+**Lo que cuesta.** Leer y marcar por `RecordService` en vez de por SQL propio hace unas 4 veces más consultas por evento
+(cada `list` y cada `update` cargan la definición del objeto): medido en local, cada evento tarda unas 2 veces más (6 a
+8 ms más) y una vuelta vacía unos 10 ms más (la conexión del cerrojo, la lista de organizaciones y un `list`). A cambio,
+el buzón ya no depende de nombres de tablas que wasichai no promete. Y la auditoría crece: cada marca es un `update` de
+core, que guarda en `audit_log` la fila entera antes y después, con el `cuerpo`, que lleva el nombre y el documento del
+pagador; con `caja.buzon.intentos: 8`, un evento que no se entrega deja hasta 16 copias. El tamaño de esa tabla y la
+retención de esos datos personales (quién la purga y cuándo) se deciden en el despliegue.
+
+**Esta versión se despliega sin réplicas mezcladas.** Las claves de los candados cambiaron: el cerrojo del buzón y los
+candados de `Candados` son ahora de `ClusterLock`, con su `lockId` (los primeros 64 bits del SHA-256) de `caja.buzon` y
+de `caja.<CANDADO>.<clave>`, no la constante `0x43414A4142555A4E` ni la forma de dos enteros
+`(clase, hashtext(clave))`. Una réplica vieja y una nueva no se excluyen: habría dos publicadores a la vez, y dos cobros
+de la misma serie o del mismo turno no se esperarían. Se paran todas las réplicas viejas antes de arrancar las nuevas
+(un `Recreate`, no un rolling update).
 
 #### La alerta
 
@@ -980,17 +1088,18 @@ aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistr
   3. En una transacción, toma el candado del evento (`Candado.PAGO`) y lo **relee**: si no está `MUERTO`, **409** (uno
      `PENDIENTE` se entregaría solo, y explicarlo lo sacaría de la cola).
   4. Lo escribe por `RecordService`, **como el usuario**: `estado` y `explicacion`, con la auditoría de core. La
-     `observacion` va a otra fila de auditoría del mismo acto: `pago_evento` no tiene ese campo.
+     `observacion` es **la razón** de esa única escritura (`audit_log.reason`): `pago_evento` no tiene ese campo y ya no
+     hay una segunda fila de auditoría.
 
 #### La segunda puerta: la API genérica
 
-La API genérica de wasichai (`POST`/`PUT`/`DELETE /api/objects/{objeto}/records`) aplica los permisos de objeto de core
-y nada más, y caja escribe como el usuario que llama: quien cobra tiene CREATE sobre `recibo`, `linea_recibo` y
+La API genérica de wasichai (`POST`/`PUT`/`DELETE /api/objects/{objeto}/records`) aplicaría los permisos de objeto de
+core y nada más, y caja escribe como el usuario que llama: quien cobra tiene CREATE sobre `recibo`, `linea_recibo` y
 `pago_evento`; quien anula, sobre `anulacion_recibo`; quien explica, UPDATE sobre `pago_evento`. Por esa puerta se
 podía escribir un evento que nunca ocurrió (el hallazgo de la revisión del PR 4b), **un acta de anulación forjada**, que
 el arqueo restaba (el dinero salía del cajón y el cierre cuadraba igual), o **reenviar un pago ya entregado con otro
-`pagoId`** (la revisión de #18; wasichai#15). **La guarda (b) cierra esa puerta para todo objeto de caja**
-(caja-backend#20). La defensa (a) se queda, como segunda línea frente a quien escribe en la base:
+`pagoId`** (la revisión de #18). **Hoy esa puerta está cerrada por el modelo y por una guarda** (caja-backend#20 y #28),
+y la defensa (a) se queda, como segunda línea frente a quien escribe en la base:
 
 - **(a) El cuerpo se vuelve a componer antes de enviar, con el sello de la transacción.** PostgreSQL da a
   `created_at` el valor de `now()`, **el comienzo de la transacción**. Todo lo que escribe una transacción de caja lleva
@@ -1020,25 +1129,31 @@ el arqueo restaba (el dinero salía del cajón y el cierre cuadraba igual), o **
 
   Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con su recibo: …» (que
   nombra las claves que difieren, la copia o el descuadre), y salta la alerta.
-- **(b) La guarda antes de escribir** (caja-backend#20). `caja.comun.GuardiaDeEscrituras` envuelve el `RecordStore` de
-  wasichai (`AlmacenDeRegistros`, como `CuotasInmutables` de `srtm`): el bean de wasichai es `@ConditionalOnMissingBean`,
-  y por él pasa **toda** escritura de `RecordService`, sea la API genérica, el admin o la API de caja. `RecordService` ya
-  comprobó los permisos (un `ADMIN` se los salta) y llama al almacén en la corrutina de quien escribe, así que la guarda
-  ve la marca `EscrituraDeCaja`, un elemento del contexto de la corrutina que `Registros` pone alrededor de cada `create`
-  y `replace`. Un cliente HTTP no puede ponerla. Sobre los objetos de caja (`recibo`, `linea_recibo`, `pago_evento`,
-  `anulacion_recibo`, `reimpresion_recibo`, `turno`, `cierre_turno`, `cierre_turno_linea`, `reversion_cierre` y
-  `orden_de_cobro`):
-  - **sin la marca no se escribe nada**: ni un alta, ni un cambio, ni un borrado, **tampoco un `ADMIN`**. Es un **403
-    antes de tocar la base**: no queda fila, ni auditoría, ni listener al que avisar;
-  - **lo que solo se agrega no se cambia ni con la marca**: el recibo, sus líneas, su acta, sus reimpresiones, el
-    cierre, sus líneas y su reversión. Anular es agregar un acta y reversar es agregar una reversión
-    (`InmutabilidadDelReciboTest` lo vigila además en el código);
-  - **nada de caja se borra, nunca**.
+- **(b) El modelo y la guarda antes de escribir** (caja-backend#20 y #28). Son dos capas, de wasichai 0.3.2:
+  1. **El modelo.** Los diez objetos de caja (`recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`,
+     `reimpresion_recibo`, `turno`, `cierre_turno`, `cierre_turno_linea`, `reversion_cierre` y `orden_de_cobro`) son
+     **`apiOnly`**: la API genérica no los escribe (alta, cambio ni borrado), **tampoco un `ADMIN`**. Es un **403 que da
+     wasichai**, antes de los permisos y de tocar la base: no queda fila ni auditoría, y caja no escribe ninguna línea
+     WARN, porque nada de caja corre. Ocho son además **`appendOnly`** (los de «Modelo»): nada los cambia, ni la
+     plataforma ni caja, y un cambio es un **409** (el orden de wasichai es `apiOnly` 403, permisos, `appendOnly` 409,
+     `requiresReason` 400, destinos de relación 400 y la guarda). Anular es agregar un acta y reversar es agregar una
+     reversión; `pago_evento` y `orden_de_cobro` son los dos que se cambian, y su única alta es `POST
+     /api/caja/ordenes-de-cobro`.
+  2. **La guarda**, para lo que el modelo no ve: lo que corre **dentro del proceso**. `caja.comun.GuardiaDeEscrituras` es
+     un `RecordWriteGuard` de wasichai: `RecordService` la llama con un `RecordWrite` (objeto, clase de cambio, usuario,
+     antes, atributos y razón) antes de toda escritura, **en la corrutina de quien escribe**, así que ve la marca
+     `EscrituraDeCaja`, un elemento del contexto de la corrutina que `Registros` pone alrededor de cada `create` y
+     `replace`, y `BuzonStore` alrededor de cada marca del publicador. Un cliente HTTP no puede ponerla. Sobre los diez
+     objetos: **sin la marca no se escribe nada** (ni un alta ni un cambio, tampoco la plataforma ni otro módulo, ni
+     `asPlatform`) y **nada se borra, nunca, ni con la marca**. Es un **403 antes de tocar la base**: no queda fila,
+     ni auditoría, ni listener al que avisar. Cada rechazo deja **una línea WARN** que empieza con `ESCRITURA FUERA DE
+     CAJA RECHAZADA`, con la operación, el objeto, el id, el usuario (o «la plataforma») y la organización; en el alta de
+     una orden dice además si su importe es uno que el alta de caja rechazaría («Tiene el importe roto (…)»). **Por la API
+     genérica ya no llega ninguna**: da 403 desde wasichai sin pasar por la guarda, así que el WARN queda para las
+     escrituras en proceso sin la marca (`GuardiaDeEscriturasApiTest` escribe una orden rota con `asPlatform` y lee la
+     línea). Lo que no es de caja (una `caja`, un `area`, una `tasa`) se sigue escribiendo por la API genérica.
 
-  Cada rechazo deja **una línea WARN** que empieza con `ESCRITURA FUERA DE CAJA RECHAZADA`, con la operación, el objeto,
-  el id y el usuario: alguien con permiso lo intentó por la segunda puerta. En el alta de una orden, la línea dice
-  además si su importe es uno que el alta de caja rechazaría («Tiene el importe roto (…)»). Lo que no es de caja (una
-  `caja`, un `area`, una `tasa`) se sigue escribiendo por la API genérica. Así quedan cerrados:
+  Así quedan cerrados:
   - **el acta forjada, que costaba dinero**: el arqueo restaba su `importe` y el dinero podía salir del cajón con un
     cierre que cuadraba igual;
   - **el `PUT` del supervisor sobre `pago_evento`**: poner `EXPLICADO` sin explicación ni candado, pasar un `PENDIENTE`
@@ -1052,27 +1167,29 @@ el arqueo restaba (el dinero salía del cajón y el cierre cuadraba igual), o **
   **Lo que queda abierto**, y por eso se queda la defensa (a):
   - **quien escribe en la base directamente**, con sus credenciales: ahí no hay guarda ni firma que lo distinga. Un
     acta escrita así seguiría restando en el arqueo;
-  - **el borrado del objeto entero** por la API de metadatos (`DELETE /api/objects/{objeto}`), que es de un `ADMIN`;
-  - **un módulo de wasichai que escriba sin pasar por el `RecordStore`** (`wasichai-automation` lo hace; caja no lo
-    instala) y **otro decorador del `RecordStore`**: `AlmacenDeRegistros` construye el `PhysicalTableRecordStore` y lo
-    dejaría fuera. Hoy no hay ninguno.
+  - **el borrado del objeto entero** por la API de metadatos (`DELETE /api/objects/{objeto}`), que es de un `ADMIN`. Con
+    `appendOnly`, wasichai lo rechaza (409) mientras el objeto lo tenga: hay que apagarlo antes, y eso también es de un
+    `ADMIN`;
+  - **un módulo de wasichai que escriba por debajo de `RecordService`**: no pasa por la guarda ni por los permisos.
+    Caja no instala ninguno (ni `wasichai-automation`).
 
-  Es el rodeo de **wasichai#15** (objetos de solo agregar y una guarda antes de escribir en wasichai mismo): cuando
-  llegue, la guarda puede pasar a usarla. Mientras tanto, **el sistema de origen sigue comprobando el importe de cada
-  `PAGO_REGISTRADO` contra su propia deuda**: es su propia defensa (ver «Siguientes pasos»).
+  **El sistema de origen sigue comprobando el importe de cada `PAGO_REGISTRADO` contra su propia deuda**: es su propia
+  defensa (ver «Siguientes pasos»).
 
-#### Los huecos de wasichai que se rodean aquí
+#### Lo que wasichai 0.3.2 resolvió
 
-- **No hay programación de tareas ni ayuda de candados** (**wasichai#18**). El bucle es propio (un `SmartLifecycle` con
-  `delay`, como `AutomationDrain` de wasichai) y `CerrojoBuzon` es un candado de sesión de postgres.
-- **El trabajo de fondo no tiene principal para `RecordService`** (**wasichai#18**): `CurrentUser` exige un usuario. El
-  publicador lee y marca `pago_evento` (y lee el recibo, sus líneas y su anulación) con `DatabaseClient` sobre la tabla
-  física resuelta en `custom_objects`, como `EmisionMasivaService` de `srtm`, y audita con `AuditService` y usuario
-  `null`. **Todo eso vive en una sola clase, `BuzonStore`**: es el único acceso a tablas físicas de caja (aparte de
-  `Candados` y `CerrojoBuzon`, que solo toman candados). Lo que escribe no pasa por los `RecordChangeListener` ni por
-  la guarda: no usa el `RecordStore`.
-- **La API genérica es una segunda puerta** (**wasichai#15**): la guarda (b) la cierra para los objetos de caja, y la
-  defensa (a) queda detrás.
+Caja rodeaba ocho huecos de wasichai (wasichai#13 a #20). Con 0.3.2 cada uno tiene su soporte y caja lo usa:
+
+| Hueco | Lo que caja usa ahora |
+|---|---|
+| `RecordService` en la transacción de quien llama (#13) | Sigue igual: `Transaccion` (ver «Lo que no se migra, y por qué»), ahora con ADR-038 de wasichai que lo respalda |
+| Unicidad compuesta (#14) | `uniqueConstraints` en el modelo; un choque es `DuplicateKeyException`, y caja ya no calcula claves |
+| Objetos de solo agregar y una guarda (#15) | `apiOnly`, `appendOnly` y `GuardiaDeEscrituras` como `RecordWriteGuard` |
+| Acciones propias además de las CRUD (#16) | `ANULAR_AJENO` sobre `recibo` |
+| Cuentas de servicio (#17) | Los sistemas de origen dan de alta con la suya; el sistema sale de su principal |
+| Trabajo de fondo con un principal y un candado de clúster (#18) | `asPlatform` en `BuzonStore`, `ClusterLock` en el cerrojo y en los candados |
+| El motivo de un cambio (#19) | `requiresReason` en los diez objetos, y la observación es la razón |
+| Un desempate único al paginar (#20) | Cubierto por wasichai (D21), sin cambio en caja: ver «Lo que no se migra, y por qué» |
 
 ### La recaudación y la conciliación
 
@@ -1110,16 +1227,17 @@ número. Lo mismo la conciliación: cuenta los eventos de los turnos de esa `fec
   recibo roto»).
 - **Una caja o un cajero que no existen son 400** en `caja` o en `cajero`, no un avance en cero: una errata se leería
   como «no cobró nada». Un cajero existe para el avance si abrió algún turno, cualquier día.
-- **Cada fila se lee una sola vez.** Core ordena por una sola columna (por defecto `created_at`) y pagina con
-  `LIMIT`/`OFFSET`. Sobre una columna con empates, postgres no garantiza el mismo orden de una consulta a otra, y los
-  empates son lo normal: las líneas de un recibo comparten su `created_at`. Con cobros simultáneos, una suma sobre esas
+- **Cada fila se lee una sola vez.** Antes de 0.3.x, core ordenaba por una sola columna (por defecto `created_at`) y
+  paginaba con `LIMIT`/`OFFSET`; sobre una columna con empates, postgres no garantiza el mismo orden de una consulta a
+  otra, y los empates son lo normal: las líneas de un recibo comparten su `created_at`. Con cobros simultáneos, una suma sobre esas
   páginas contaba unas líneas dos veces y otras ninguna (`RecaudacionApiTest` lo reproducía con 920 líneas). Por eso
   `Registros.all`, y con él `byRelation` y todo lo que lee varias páginas (también `LibroDelTurno`, que alimenta el
   arqueo y el cierre), **pagina por `id`**, que es único, y aplica el orden pedido después, sobre todo lo leído, con el
-  id como desempate.
+  id como desempate. Hoy wasichai 0.3.x termina todo `ORDER BY` con `id` (D21, wasichai#20), así que ese empate ya no
+  se repite entre páginas; este rodeo no estorba y se queda: ver «Lo que no se migra, y por qué».
 - **El límite**: se agrega en la aplicación, sobre lo que core devuelve página por página (200 registros), no con un
-  `GROUP BY` en la base. Un rango de un año con mucho movimiento es lento; un agregado en la base necesitaría una lectura
-  física como `BuzonStore` o una agregación en wasichai.
+  `GROUP BY` en la base. Un rango de un año con mucho movimiento es lento; un agregado en la base necesitaría una
+  agregación en wasichai (el buzón ya no lee tablas físicas: lee por `RecordService`, como la plataforma).
 
 #### La conciliación del día
 
@@ -1149,29 +1267,36 @@ Las cifras de la conciliación van a la `fecha` conciliada; `a_la_fecha` dice cu
 
 ## Roles
 
-`model/roles.json` declara los roles de caja y, por rol, las acciones (`READ`, `CREATE`, `UPDATE` o `DELETE`) sobre
-cada uno de los trece objetos del modelo.
+`model/roles.json` declara los roles de caja y, por rol, las acciones (`READ`, `CREATE`, `UPDATE` o `DELETE`, y la que el
+modelo declare para ese objeto: `ANULAR_AJENO` sobre `recibo`) sobre cada uno de los trece objetos del modelo.
 
 | Rol               | Puede                                                    |
 | ----------------- | -------------------------------------------------------- |
-| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: da de alta órdenes. **Hueco declarado**: el `sistema_origen` sale del cuerpo, no del usuario, así que cualquier usuario `SISTEMA_ORIGEN` puede dar de alta órdenes a nombre de otro sistema; ligarlo a la cuenta espera las cuentas de servicio (wasichai#17) |
+| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: es el rol de la **cuenta de servicio** de un sistema de origen (el nombre de la cuenta es el sistema), y da de alta órdenes. Una persona con este rol recibe 403 en el alta (ver «El alta de órdenes») |
 | `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime. READ y CREATE sobre `cierre_turno` y `cierre_turno_linea`: cierra su turno. READ sobre `reversion_cierre`: no reversa |
-| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula, también el recibo de otro cajero), sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno), y **UPDATE sobre `pago_evento`** (explica un pago sin entregar) |
+| `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula) y la acción **`ANULAR_AJENO`** sobre `recibo` (anula también el recibo de otro cajero), CREATE sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno), y **UPDATE sobre `pago_evento`** (explica un pago sin entregar) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |
 
 **Nadie tiene UPDATE ni DELETE sobre `recibo`, `linea_recibo`, `pago_evento`, `anulacion_recibo`,
 `reimpresion_recibo`, `cierre_turno`, `cierre_turno_linea` ni `reversion_cierre`** (`test_apply_roles.py` lo comprueba):
 un recibo no se corrige, su anulación se agrega; un cierre no se corrige, se reversa. **La única excepción es UPDATE
 sobre `pago_evento` para `SUPERVISOR_CAJA`**: explicar un pago `MUERTO` (lo fija `test_apply_roles.py`). El publicador
-marca la entrega sin pasar por los roles (`BuzonStore`). **Ese UPDATE no vale en la API genérica**: `PUT
-/api/objects/pago_evento/records/{id}` da 403 (la guarda, ver «La segunda puerta»), y solo se usa por la explicación.
+marca la entrega sin pasar por los roles (`BuzonStore`, como la plataforma). **Ese UPDATE no vale en la API genérica**:
+`PUT /api/objects/pago_evento/records/{id}` da 403 (`apiOnly`, ver «La segunda puerta»), y solo se usa por la explicación.
 Ningún permiso de estos vale por esa puerta sobre un objeto de caja, **ni el de un `ADMIN`**. Los privilegios de `caja` se
 vuelven permisos CRUD de wasichai: anular (`ELIMINACION`) es CREATE sobre `anulacion_recibo`; reimprimir (`IMPRESION`),
 CREATE sobre `reimpresion_recibo`; cerrar (`REGISTRO` de `cierre_caja`), CREATE sobre `cierre_turno`, y reversar
 (`ELIMINACION` de `cierre_caja`), CREATE sobre `reversion_cierre`, así que la UI los lee de `/api/auth/me/permissions`.
 Cobrar y anular leen además la historia del turno: un rol propio que cobre necesita READ sobre `cierre_turno` y
 `reversion_cierre`.
-`ESPECIAL` (anular el recibo de otro cajero) no cabe en CRUD: es el rol `SUPERVISOR_CAJA` (ver «La anulación»).
+`ESPECIAL` (anular el recibo de otro cajero) no cabe en CRUD: es la **acción declarada** `ANULAR_AJENO` sobre `recibo`
+(`model.json` la declara y `apply.py` la crea; `roles.json` se la da a `SUPERVISOR_CAJA`). La UI la lee de
+`/api/auth/me/permissions` como a cualquier otro permiso, y quien la tenga anula el recibo de otro cajero. Un `ADMIN`
+pasa todo, y el `CAJERO` no la tiene (`AnulacionApiTest` lo comprueba).
+
+**Una cuenta de servicio** es un principal sin persona, con roles como cualquier otro (`POST /api/service-accounts`, ver
+«El alta de órdenes»): la de un sistema de origen lleva `SISTEMA_ORIGEN`. Su nombre es el sistema de las órdenes que da
+de alta.
 
 `model/apply_roles.py` los crea o sincroniza por la API de core (`POST /api/roles` y `PUT /api/roles/{name}/permissions`).
 Es idempotente: un rol que falta se crea, uno que existe queda con los permisos de `roles.json` (**un permiso dado a mano
@@ -1217,14 +1342,16 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   autorizado y memorando, el número del papel, los filtros, el mismo día, el recibo ajeno y el cuerpo de
   `PAGO_ANULADO`); `InmutabilidadDelReciboTest` recorre `src/main` y falla si aparece un `replace`, `update` o `delete`
   sobre el recibo, sus líneas, su anulación, sus reimpresiones, su evento, el cierre, sus líneas o su reversión, salvo
-  la explicación de un pago sin entregar, y falla si aparece cualquier puerta para borrar (un `delete`, aunque nadie lo
-  llame), salvo la de la guarda, que la cierra. `GuardiaDeEscriturasTest` fija la guarda con un almacén de prueba: sin
-  la marca nada de caja llega al almacén, con ella caja da de alta lo suyo y cambia solo lo que no se agrega, nada de
-  caja se borra, lo demás y las lecturas pasan, y el `RecordStore` de wasichai tiene los métodos que la guarda conoce
-  (uno nuevo pasaría por la delegación sin mirar la marca). `CuerpoEstrictoTest` falla si un `@RequestBody` de caja no
-  es un `CuerpoEstricto`, el cuerpo que anota cada clave que no conoce para rechazarla con su nombre.
-  `DependenciasEntrePaquetesTest` lee los imports de `src/main` y falla si aparece un ciclo entre paquetes o si `comun` o
-  `modelo` importan uno de negocio (ver «Los paquetes»). `EntregaTest` fija las reglas del publicador: la clasificación de cada
+  las dos ediciones del evento del pago (la explicación de un pago sin entregar y la marca del publicador, cada una bajo
+  el candado de su evento), y falla si aparece cualquier puerta para borrar (un `delete`, aunque nadie lo llame: la guarda
+  rechaza el borrado sin tener uno). `GuardiaDeEscriturasTest` fija la guarda sin Spring ni base, sobre el `RecordWrite`
+  que wasichai le da: sin la marca nada de caja se escribe (una línea WARN por rechazo, que nombra el objeto, el id y a
+  quien escribe), con ella caja da de alta lo suyo, nada de caja se borra ni con la marca, y lo que no es de caja pasa;
+  y que los objetos protegidos son los diez del modelo que no son catálogo. `ObservacionTest` fija también que el
+  máximo se cuenta en code points y que un carácter de control se rechaza. `CuerpoEstrictoTest` falla si un `@RequestBody` de caja no es un `CuerpoEstricto`, el cuerpo que anota cada
+  clave que no conoce para rechazarla con su nombre. `DependenciasEntrePaquetesTest` lee los imports de `src/main` y
+  falla si aparece un ciclo entre paquetes o si `comun` o `modelo` importan uno de negocio (ver «Los paquetes»).
+  `EntregaTest` fija las reglas del publicador: la clasificación de cada
   respuesta, el recorte de `ultimo_error`, la marca de cada intento, la coherencia del evento con su recibo y la salida
   de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`;
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
@@ -1238,13 +1365,15 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   fecha obligatoria); `PurezaDeLaRecaudacionTest`, que no dependen de Spring, del reloj, de la base ni de la red.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
-  `CAJERO`) y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
+  `CAJERO`), la cuenta de servicio que da de alta sin nombrar el sistema, la que nombra otro (403), la persona con el
+  rol `SISTEMA_ORIGEN` (403), la cuenta sin CREATE (403) y el `ADMIN` que nombra el sistema (y recibe 400 si no lo hace),
+  y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
   caso feliz, el doble cobro, la idempotencia, los 400, 403, 404 y 409, **diez cobros simultáneos de la misma orden**
   (un recibo y nueve 409) y **veinte simultáneos en la misma caja** (del 1 al 20, sin huecos ni repetidos), los
   permisos y el PDF (con una reimpresión ya no sale el original), y **dos cobros simultáneos con la misma
   `Idempotency-Key`** (un solo recibo).
-  `CobroEnUnaTransaccionApiTest` es la prueba de la transacción, y `CandadosTest` la del candado (y de que la misma
-  clave en dos clases son dos candados). `TasasApiTest` cubre la caja de tasas (el precio de la tabla con dos
+  `CobroEnUnaTransaccionApiTest` es la prueba de la transacción, y `CandadosTest` la del candado, sobre `ClusterLock`
+  (falla fuera de una transacción, dura hasta que ella termina, y la misma clave en dos clases son dos candados). `TasasApiTest` cubre la caja de tasas (el precio de la tabla con dos
   vigencias, el 400 de un precio en el cuerpo, 404 sin tarifa vigente, 409 con tarifa en cero, la idempotencia, el
   pagador anónimo, los 400, la numeración compartida con el cobro de órdenes, ningún `pago_evento`, el 403 de
   `TESORERIA`) y la lista de tasas vigentes; `VistaPreviaApiTest`, las dos vistas previas, sus motivos y sus permisos,
@@ -1254,7 +1383,9 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   sin READ y los 400) y el duplicado (marcado y registrado, dos registros, el de un anulado, el 409 si ya no se dibuja
   igual, el 403 de un `CAJERO`); `AnulacionApiTest`, la anulación (la orden vuelve a `PENDIENTE` y el recibo sigue
   igual, `PAGO_ANULADO` con su `pagoOriginalId`, el recibo de ayer con un `Clock` de prueba, dos veces, **diez
-  simultáneas dan una**, el recibo de tasas, sin evento, los 400, el recibo ajeno y el 403 del `CAJERO`).
+  simultáneas dan una**, el recibo de tasas, sin evento, los 400, el recibo ajeno con y sin la acción `ANULAR_AJENO`, que la lista de permisos propios trae `ANULAR_AJENO` para el
+  supervisor y no para el cajero, la observación como razón del acta, de la orden devuelta y del `PAGO_ANULADO`, una
+  segunda acta forjada en la base que choca, y el 403 del `CAJERO`).
   `TurnoApiTest` cubre el turno del día (entero y con su hora, sin turno, cerrado, dos abiertos, sin parámetros, y que
   preguntar no abre), el arqueo en vivo sin declarado, el cajero y el día del cierre (el turno de otro, el de ayer,
   mañana, reversar sin `SUPERVISOR_CAJA`) y el reenvío (al día siguiente no abre un turno; tras la baja de la caja o el
@@ -1280,13 +1411,17 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `PAGO_REGISTRADO` sin contar intento y sale detrás de él**, **la anulación que no se envía y muere si su pago murió, y
   el turno que cierra al explicar los dos**, la explicación que solo vale con un
   `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
-  comprueba que apagado no arranca; `CerrojoBuzonTest`, que el cerrojo del buzón es exclusivo (un segundo `tomar()` da
-  `null` y, suelto, se toma otra vez); `GuardiaDeEscriturasApiTest`, la guarda: **el acta forjada que no se escribe y
+  comprueba que apagado no arranca; `CerrojoBuzonTest`, que el cerrojo del buzón (`ClusterLock.tryLock`) es exclusivo (un
+  segundo `tomar()` da `null` y, suelto con `release()`, se toma otra vez); `BuzonApiTest` prueba además que una marca
+  espera el candado de su evento (el de la explicación) y que dos publicadores cuentan un solo intento, y que cada marca
+  deja su auditoría como la plataforma, sin usuario y con su razón fija; `GuardiaDeEscriturasApiTest`, la guarda: **el acta forjada que no se escribe y
   no cambia el arqueo**, **el pago `ENTREGADO` que no se reenvía con otro `pagoId`** (ni un `PENDIENTE` que se explica
-  por fuera), **los diez objetos de caja que no se dan de alta, no se cambian ni se borran por la API genérica, ni como
-  `ADMIN`**, la orden que no entra ni se rebaja por ella (con su importe roto en la línea WARN) y lo que no es de caja,
-  que se sigue escribiendo. Las pruebas que necesitan algo roto o forjado lo escriben **en la base**, por debajo de la
-  guarda (`forjarEnLaBase` y `cambiarEnLaBase` de `CajaApiTest`). `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
+  por fuera), **los diez objetos de caja que no se dan de alta, no se cambian ni se borran por la API genérica (403 de `apiOnly`), ni
+  como `ADMIN`**, la orden que no entra ni se rebaja por ella, **la escritura en proceso sin la marca** (una orden rota
+  escrita con `asPlatform` se rechaza, con su importe roto en la línea WARN) y lo que no es de caja, que se sigue
+  escribiendo. Las pruebas que necesitan algo roto o forjado lo escriben **en la base**, por debajo de la
+  guarda (`forjarEnLaBase` y `cambiarEnLaBase` de `CajaApiTest`). `CajaApiTest` da también `cuentaDeServicio()` (la
+  cuenta de un sistema de origen y su token) y `organizacion()` (la del admin sembrado, para `asPlatform`). `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
   un `Clock` movible y días lejanos propios: **ocho días que cuadran** con la línea y sus dos mitades, el día sin cobros
   que cuadra, el origen que aplicó de menos o rechazó, el pago en tránsito, **el origen apagado y el destino sin
   configurar, sin un solo cero** (recorre el JSON), la fecha obligatoria, **las partes que suman el total**, lo de una
@@ -1302,6 +1437,41 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   obligatoria.
 - Con un Docker remoto no corren en local tal cual (Testcontainers no llega a sus puertos): ver
   [docs/develop/README.md](docs/develop/README.md#6-tests).
+
+## Lo que no se migra, y por qué
+
+Con 0.3.2, caja retiró los rodeos de wasichai#13 a #20 (ver «Lo que wasichai 0.3.2 resolvió»). Esto otro se queda como
+estaba, cada cosa con su motivo:
+
+- **`Registros.all` sigue paginando por `id`.** wasichai#20 se cerró (D21): todo `ORDER BY` termina en `id`, así que las
+  filas con el mismo `created_at` ya no se repiten ni se pierden entre páginas. Pero paginar por `id` da la misma
+  garantía, caja necesita leer todo y ordenarlo ella (`enOrden`, con el `id` de desempate), y `RecaudacionApiTest` (920
+  líneas) lo fija: no estorba y cambiarlo no gana nada. El único lector que usa el cursor de wasichai (`after`) es el
+  buzón, que sí lee por orden de creación.
+- **`Transaccion` (ADR-038) se queda.** wasichai prometió, y probó, que `RecordService` se une a la transacción de quien
+  llama, pero decidió **no** ofrecer un `inTransaction { }`: la API es el `TransactionalOperator` de Spring.
+  `caja.comun.Transaccion` es ese operador envuelto, más una variante de solo lectura en `REPEATABLE READ`
+  (`lectura`) que wasichai no tiene y que el listado, el arqueo y la recaudación necesitan para ver una sola foto.
+- **`BucleDelBuzon` sigue siendo propio.** wasichai no trae un planificador (ADR-039 lo deja fuera a propósito: ningún
+  otro módulo lo pide). Migró lo que sí ofrece, el principal (`asPlatform`) y el candado (`ClusterLock`); el
+  `SmartLifecycle` con su espera entre vueltas queda como el `AutomationDrain` de wasichai.
+- **El buzón enumera las organizaciones con `CustomObjectRepository.findAllOrganizations()`.** Esa lectura es interna de
+  la plataforma (no lleva filtro de organización, a propósito, y es de su arranque), y wasichai no ofrece una API
+  soportada para listar organizaciones: el trabajo de fondo no tiene a quién preguntarle. Si wasichai la mueve o la
+  esconde, el buzón deja de compilar, no de funcionar en silencio.
+- **Las actas siguen como objetos.** `anulacion_recibo`, `reimpresion_recibo`, `cierre_turno` y `reversion_cierre` no
+  pasan a ser un estado o una transición del `recibo` o del `turno`: ambos son `appendOnly`, un papel entregado no se
+  toca, y cada acta lleva lo suyo (motivo, importe congelado, arqueo, quién y por qué). Anular es agregar; el estado se
+  deriva de que exista el acta. La acción declarada resuelve el permiso (`ANULAR_AJENO`), no el hecho.
+- **`cierre_revertido` sigue siendo un TEXT único.** No es una clave sintética como las que reemplazaron las
+  `uniqueConstraints`: guarda el id real del cierre que se reversa, y su `unique` ya garantiza que un cierre se reversa
+  una vez. Convertirlo en una relación sería una relación y una FK nuevas sin cambiar esa garantía.
+- **El WARN no cubre la API genérica, por decisión.** Con `apiOnly`, wasichai da el 403 antes de permisos, de
+  `appendOnly` y de la guarda: la línea `ESCRITURA FUERA DE CAJA RECHAZADA` queda para las escrituras dentro del proceso
+  sin la marca. Quien intente la segunda puerta por REST recibe el 403 y no deja rastro en el registro de caja (antes
+  dejaba el WARN). Si se quiere ese rastro, la vía es un `WebFilter` propio de caja, de unas 30 líneas, que anote
+  `ESCRITURA FUERA DE CAJA RECHAZADA` cuando una escritura a `/api/objects/{objeto}/records…` (las rutas de los
+  registros relacionados incluidas) sobre un objeto protegido termina en 403. No se hizo.
 
 ## Los paquetes
 
@@ -1324,8 +1494,9 @@ Un registro que solo usa un paquete vive en él (el cierre y su reversión en `t
 
 - **La integración con `srtm-backend`**, el sistema de origen `rentas` reescrito: que reciba `POST /pagos` (el evento
   del buzón) y conteste `GET /pagos/conciliacion?fecha=` con `recibidos`, `aplicados`, `rechazados` e
-  `importe_aplicado`, y que caja tenga su `caja.buzon.destinos.rentas` (url y token). Hoy solo se probó contra el
-  sistema de origen falso.
+  `importe_aplicado`, y que caja tenga su `caja.buzon.destinos.rentas` (url y token). Y la otra mitad: que dé de alta
+  sus órdenes con su **cuenta de servicio** (`rentas`, con el rol `SISTEMA_ORIGEN`) y pida su token cada 15 minutos; el
+  usuario con contraseña ya no existe, y nadie integra todavía. Hoy solo se probó contra el sistema de origen falso.
 - **`rentas.json` declara `ordenId` entero, y ahora es un UUID** en cadena: el contrato de `caja`
   (`docs/50-api/contratos-que-consume/rentas.json`) y quien lo lea tienen que cambiar (ver «El evento
   `PAGO_REGISTRADO`»).
@@ -1333,15 +1504,4 @@ Un registro que solo usa un paquete vive en él (el cierre y su reversión en `t
   `referenciaExterna` y su importe): la guarda impide bajarlo por la API genérica, pero no a quien escribe en la base
   (ver «La segunda puerta»).
 - **Decidir quién reabre el turno cerrado de un `CAJERO`** (ver «La reversión»): dar CREATE sobre `reversion_cierre` al
-  `CAJERO`, o una regla `ESPECIAL` para que un supervisor reverse el cierre de otro.
-- **Los huecos de wasichai que se rodean aquí**, de wasichai#13 a wasichai#20:
-  - que `RecordService` se una a la transacción de quien llama esté documentado y probado (wasichai#13);
-  - unicidad compuesta, y el choque de un único como 409 con su campo (wasichai#14);
-  - objetos de solo agregar y una guarda antes de escribir, también para ADMIN y la API genérica (wasichai#15): hoy la
-    rodea `GuardiaDeEscrituras`, que envuelve el `RecordStore` (caja-backend#20);
-  - acciones propias además de las CRUD (wasichai#16): el `ESPECIAL` de anular el recibo ajeno;
-  - cuentas de servicio para los sistemas de origen (wasichai#17): hoy `sistema_origen` sale del cuerpo del alta;
-  - trabajo de fondo con un principal y un candado de clúster (wasichai#18): el buzón;
-  - el motivo de un cambio en la auditoría (wasichai#19);
-  - un desempate único al paginar (`ORDER BY …, id`), para que las filas con el mismo `created_at` no se repitan ni se
-    pierdan entre páginas (wasichai#20): hoy `Registros.all` pagina por `id` (ver «Cada fila se lee una sola vez»).
+  `CAJERO`, o una acción declarada, como `ANULAR_AJENO`, para que un supervisor reverse el cierre de otro.

@@ -1,6 +1,13 @@
 package caja.buzon
 
 import caja.CajaApiTest
+import caja.comun.Candado
+import caja.comun.Candados
+import caja.comun.Transaccion
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.reactive.awaitSingle
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterAll
@@ -63,6 +70,12 @@ class BuzonApiTest : CajaApiTest() {
 
     @Autowired
     lateinit var schemas: WasichaiSchemas
+
+    @Autowired
+    lateinit var candados: Candados
+
+    @Autowired
+    lateinit var transaccion: Transaccion
 
     // del cobro con el origen caído
 
@@ -192,14 +205,47 @@ class BuzonApiTest : CajaApiTest() {
     fun `dos publicadores que leyeron el mismo evento y fallan los dos cuentan un solo intento`() =
         runBlocking {
             val cobro = cobrar(PRUEBAS)
-            val (buzon, leido) =
-                store.buzones().firstNotNullOf { b -> store.pendientes(b, 100000).firstOrNull { it.eventoId == cobro.pagoId }?.let { b to it } }
+            val (buzon, leido) = leidoDe(cobro)
 
             publicador.entregarUno(buzon, leido)
             publicador.entregarUno(buzon, leido)
 
             assertEquals(2, origen.de(cobro.pagoId).size, "los dos llamaron")
             assertEquals(1, evento(cobro.pagoId)["attributes"]["intentos"].asInt(), "y se contó uno")
+        }
+
+    @Test
+    fun `una marca espera el candado de su evento, el de la explicacion, y a la vez cuentan un solo intento`() =
+        runBlocking {
+            val cobro = cobrar(PRUEBAS)
+            val (buzon, leido) = leidoDe(cobro)
+            val tomado = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            // otra transacción con el candado del evento, como lo toma ExplicarPagoSinEntregar
+            val otra =
+                async(Dispatchers.IO) {
+                    transaccion.en {
+                        candados.bloquear(Candado.PAGO, cobro.pagoId)
+                        tomado.complete(Unit)
+                        soltar.await()
+                    }
+                }
+            tomado.await()
+            val marca = async(Dispatchers.IO) { store.fallido(buzon, leido, "no contesta", muere = false) }
+            delay(500)
+            assertFalse(marca.isCompleted, "la marca espera el candado del evento")
+            // mientras espera, otro publicador ya anotó su intento
+            cambiarEnLaBase("pago_evento", leido.id.toString(), "intentos" to 1, "ultimo_error" to "lo anotó otro")
+            soltar.complete(Unit)
+            otra.await()
+            assertFalse(marca.await(), "bajo el candado lo releyó: ya no estaba como se leyó, y no anota")
+            assertEquals("lo anotó otro", evento(cobro.pagoId)["attributes"]["ultimo_error"].asString())
+
+            // cuatro marcas a la vez sobre lo mismo leído: el candado las pone en fila, y solo la primera lo encuentra igual
+            val (_, releido) = leidoDe(cobro)
+            val anotadas = (1..4).map { async(Dispatchers.IO) { store.fallido(buzon, releido, "no contesta", muere = false) } }.map { it.await() }
+            assertEquals(1, anotadas.count { it }, anotadas.toString())
+            assertEquals(2, evento(cobro.pagoId)["attributes"]["intentos"].asInt())
         }
 
     @Test
@@ -232,6 +278,45 @@ class BuzonApiTest : CajaApiTest() {
         assertEquals(0L, enTransaccion, "ninguna transacción abierta esperando la respuesta")
         assertEquals(0L, bloqueos, "nadie retiene un candado sobre pago_evento durante la llamada")
         assertEquals("ENTREGADO", evento(segundo.pagoId)["attributes"]["estado"].asString())
+    }
+
+    @Test
+    fun `cada marca deja su auditoria como la plataforma, sin usuario y con su razon fija`() {
+        val entregado = cobrar(PRUEBAS)
+        val fallido = cobrar(PRUEBAS)
+        val muerto = cobrar(PRUEBAS)
+        origen.contestar(entregado.pagoId, 200)
+        origen.contestar(muerto.pagoId, 422, """{"detail":"rentas no conoce esa orden"}""")
+        // al fallido nadie le dijo nada al origen: contesta 503, y sigue PENDIENTE con un intento
+
+        vuelta()
+
+        listOf(
+            Triple(entregado, "ENTREGADO", "entrega del buzón: ENTREGADO"),
+            Triple(fallido, "PENDIENTE", "entrega del buzón: intento fallido"),
+            Triple(muerto, "MUERTO", "entrega del buzón: MUERTO")
+        ).forEach { (cobro, estado, razon) ->
+            val guardado = evento(cobro.pagoId)
+            assertEquals(estado, guardado["attributes"]["estado"].asString())
+            val id = guardado["id"].asString()
+            val historia = tree(send("GET", "/api/objects/pago_evento/records/$id/history", null, HttpStatus.OK)).toList()
+            val marca = historia.single { it["operation"].asString() == "UPDATE" }
+            // la razón fija, nunca lo que contestó el destino (eso va en ultimo_error)
+            assertEquals(razon, marca["reason"].asString(), marca.toString())
+            assertTrue(marca["userEmail"].isNull, "la marca la escribió la plataforma, no una persona: $marca")
+            assertFalse(marca.has("serviceAccount"), "ni una cuenta de servicio: $marca")
+            val intentos = marca["changes"].toList().single { it["field"].asString() == "intentos" }
+            assertEquals(0, intentos["before"].asInt(), marca.toString())
+            assertEquals(1, intentos["after"].asInt(), marca.toString())
+            val sinUsuario =
+                runBlocking {
+                    contar(
+                        "SELECT count(*) FROM ${schemas.metadata}.audit_log WHERE record_id = '$id'::uuid AND operation = 'UPDATE' " +
+                            "AND user_id IS NULL AND reason = '$razon'"
+                    )
+                }
+            assertEquals(1L, sinUsuario, "su fila de auditoría no tiene usuario")
+        }
     }
 
     // de lo que se escribe por fuera de caja
@@ -567,6 +652,57 @@ class BuzonApiTest : CajaApiTest() {
     }
 
     @Test
+    fun `un pago_evento con un valor que su tipo no admite, escrito en la base antes que uno legitimo, no atasca el buzon`(salida: CapturedOutput) {
+        val cobro = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 200)
+        val malo = UUID.randomUUID().toString()
+        val tabla = runBlocking { tablaDe("pago_evento") }
+        val eventoId = runBlocking { columnaDe("pago_evento", "evento_id") }
+        // en la base, un ENUM es una columna text con un CHECK de sus opciones, y quien escribe en la base con el dueño de
+        // las tablas también lo quita. por SQL crudo, por debajo del almacén de wasichai: una copia del legítimo con un tipo
+        // fuera de sus opciones y anterior a él, primero en la cola. no coincide con su recibo y muere, pero el update de
+        // core reescribe la fila entera, vuelve a validar cada campo y la rechaza: no se puede marcar, ni de respaldo
+        sinElCheckDe("pago_evento", "tipo") {
+            val legitimo = evento(cobro.pagoId)["id"].asString()
+            runBlocking {
+                // columna -> lo que lleva la copia: lo mismo que el legítimo (null), salvo lo que se nombra
+                val copia =
+                    mapOf(
+                        "evento_id" to "'$malo'::uuid",
+                        "tipo" to "'pago_registrado'",
+                        "sistema_destino" to null,
+                        "recibo" to null,
+                        "turno" to null,
+                        "cuerpo" to null,
+                        "estado" to "'PENDIENTE'",
+                        "intentos" to "0"
+                    ).entries.associate { (campo, valor) -> "\"${columnaDe("pago_evento", campo)}\"".let { it to (valor ?: it) } }
+                ejecutar(
+                    "INSERT INTO $tabla (organization_id, created_by, updated_by, created_at, updated_at, ${copia.keys.joinToString(", ")}) " +
+                        "SELECT organization_id, created_by, updated_by, created_at - interval '1 minute', created_at - interval '1 minute', " +
+                        "${copia.values.joinToString(", ")} FROM $tabla WHERE id = '$legitimo'::uuid"
+                )
+            }
+            try {
+                vuelta()
+
+                assertEquals("ENTREGADO", evento(cobro.pagoId)["attributes"]["estado"].asString(), "el legítimo sale en la misma vuelta")
+                assertFalse(salida.out.contains("no se pudo sacar en esta vuelta"), "la vuelta de la organización no se cortó")
+                assertTrue(origen.de(malo).isEmpty(), "el malo no se envió")
+                val guardado = evento(malo)["attributes"]
+                assertEquals("PENDIENTE", guardado["estado"].asString(), "no se pudo marcar: sigue como estaba")
+                assertEquals(0, guardado["intentos"].asInt())
+                // una sola línea ERROR que nombra el evento y por qué no se puede anotar
+                val error = salida.out.lines().single { it.contains(" ERROR ") && it.contains(malo) }
+                assertTrue(error.contains("pago_registrado") && error.contains("tipo must be one of"), error)
+            } finally {
+                // la base es compartida: la fila mala no queda para las vueltas de las demás pruebas, y el CHECK vuelve
+                runBlocking { ejecutar("DELETE FROM $tabla WHERE \"$eventoId\" = '$malo'::uuid") }
+            }
+        }
+    }
+
+    @Test
     fun `la alerta de un pago que murio no se pierde aunque la vuelta se corte despues`(salida: CapturedOutput) {
         val muerto = cobrar(PRUEBAS)
         val despues = cobrar(PRUEBAS)
@@ -617,6 +753,13 @@ class BuzonApiTest : CajaApiTest() {
         val guardado = evento(rechazado.pagoId)["attributes"]
         assertEquals("EXPLICADO", guardado["estado"].asString())
         assertEquals("rentas borró la orden; se registró a mano", guardado["explicacion"].asString())
+
+        // la observación de la explicación es la razón de la edición, en la auditoría de core: no hay otra fila aparte
+        val id = evento(rechazado.pagoId)["id"].asString()
+        val historia = tree(send("GET", "/api/objects/pago_evento/records/$id/history", null, HttpStatus.OK)).toList()
+        val edicion = historia.single { it["operation"].asString() == "UPDATE" && it["reason"].asString() == "lo explica el supervisor" }
+        assertFalse(edicion["userEmail"].isNull, "la explicó una persona: $edicion")
+        assertTrue(edicion["changes"].toList().any { it["field"].asString() == "explicacion" }, edicion.toString())
 
         // explicado una vez, no se explica otra
         send("POST", explicar(rechazado.pagoId), explicacion, HttpStatus.CONFLICT, supervisor)
@@ -735,6 +878,10 @@ class BuzonApiTest : CajaApiTest() {
 
     private fun evento(pagoId: String): JsonNode = registros("pago_evento", "evento_id" to pagoId).single()
 
+    // el evento de ese cobro como lo lee el publicador, con su buzón
+    private suspend fun leidoDe(cobro: Cobro): Pair<BuzonStore.Buzon, EventoDelBuzon> =
+        store.buzones().firstNotNullOf { b -> store.pendientes(b, 100000).firstOrNull { it.eventoId == cobro.pagoId }?.let { b to it } }
+
     // el PAGO_ANULADO del recibo de ese cobro
     private fun anulacionDe(cobro: Cobro): JsonNode = anulacionesDe(cobro).single()
 
@@ -809,6 +956,36 @@ class BuzonApiTest : CajaApiTest() {
             bloque()
         } finally {
             runBlocking { ejecutar("DROP TRIGGER IF EXISTS $disparador ON ${tablaDe("pago_evento")}") }
+        }
+    }
+
+    // mientras corre el bloque, la columna de ese campo no tiene su CHECK (el de las opciones de un ENUM): lo que haría
+    // quien escribe en la base con el dueño de las tablas. al terminar vuelve tal cual, así que el bloque deja la columna
+    // como la encontró
+    private fun sinElCheckDe(
+        objeto: String,
+        campo: String,
+        bloque: () -> Unit
+    ) {
+        val tabla = runBlocking { tablaDe(objeto) }
+        val (nombre, definicion) =
+            runBlocking {
+                db
+                    .sql(
+                        "SELECT c.conname::text, pg_get_constraintdef(c.oid) FROM pg_constraint c " +
+                            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) " +
+                            "WHERE c.conrelid = to_regclass(:tabla) AND c.contype = 'c' AND a.attname = :columna"
+                    ).bind("tabla", tabla)
+                    .bind("columna", columnaDe(objeto, campo))
+                    .map { row, _ -> row.get(0, String::class.java)!! to row.get(1, String::class.java)!! }
+                    .one()
+                    .awaitSingle()
+            }
+        runBlocking { ejecutar("ALTER TABLE $tabla DROP CONSTRAINT \"$nombre\"") }
+        try {
+            bloque()
+        } finally {
+            runBlocking { ejecutar("ALTER TABLE $tabla ADD CONSTRAINT \"$nombre\" $definicion") }
         }
     }
 

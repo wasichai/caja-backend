@@ -2,6 +2,7 @@ package caja
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpHeaders
@@ -33,7 +34,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
 
     protected val json: JsonMapper get() = JSON
 
-    // por debajo de la guarda: el almacén de wasichai sin GuardiaDeEscrituras, y la metadata que da su definición
+    // por debajo de las guardas (que viven en RecordService, no en el almacén): el almacén de wasichai, y la metadata que da su definición
     @Autowired
     private lateinit var conexion: DatabaseClient
 
@@ -56,7 +57,8 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     protected fun modelo(): JsonNode = json.readTree(File("model/model.json"))
 
     // model/apply.py en kotlin: se crea lo que falta (objetos, campos, opciones de enum, relaciones obligatorias), un
-    // campo que model.json ya no exige se relaja, lo demás se deja
+    // campo que model.json ya no exige se relaja, lo demás se deja; las acciones declaradas de cada objeto. la fase 3, ya con las relaciones: las
+    // uniqueConstraints de cada objeto y el unique de las relaciones que lo piden, solo si difieren
     private fun applyModel() {
         val model = modelo()
         val enums = model["enums"]
@@ -69,6 +71,8 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                 .toList()
 
         fun required(field: JsonNode) = field["required"]?.asBoolean() ?: false
+
+        fun uniques(obj: JsonNode): List<List<String>> = conjuntos(obj["uniqueConstraints"])
 
         fun payload(field: JsonNode) =
             buildMap {
@@ -92,7 +96,12 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                         "name" to name,
                         "label" to obj["label"].asString(),
                         "pluralLabel" to obj["pluralLabel"].asString(),
-                        "fields" to fields.map(::payload)
+                        "apiOnly" to (obj["apiOnly"]?.asBoolean() ?: false),
+                        "appendOnly" to (obj["appendOnly"]?.asBoolean() ?: false),
+                        "requiresReason" to (obj["requiresReason"]?.asBoolean() ?: false),
+                        "fields" to fields.map(::payload),
+                        // en el POST solo las que nombran campos propios: las de una relación esperan a la fase 3
+                        "uniqueConstraints" to uniques(obj).filter { set -> set.all { n -> fields.any { it["name"].asString() == n } } }
                     ),
                     HttpStatus.CREATED
                 )
@@ -123,6 +132,14 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                 if (change.isNotEmpty()) send("PUT", "/api/metadata/objects/$name/fields/${field["name"].asString()}", change, HttpStatus.OK)
             }
         }
+        // las acciones declaradas de cada objeto: un 409 es que ya estaba (la base se vacía al empezar, pero se repite en una corrida)
+        for (obj in model["objects"]) {
+            for (accion in obj["actions"]?.toList() ?: emptyList()) {
+                val cuerpo = mapOf("name" to accion["name"].asString(), "label" to accion["label"].asString())
+                val (estado, respuesta) = exchange("POST", "/api/metadata/objects/${obj["name"].asString()}/actions", cuerpo)
+                assertTrue(estado == HttpStatus.CREATED || estado == HttpStatus.CONFLICT, "acción ${accion["name"]}: $estado $respuesta")
+            }
+        }
         val relationships: Set<String> = tree(send("GET", "/api/relationships", null, HttpStatus.OK)).names()
         for (rel in model["relationships"]) {
             if (rel["name"].asString() in relationships) continue
@@ -142,7 +159,44 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                 )
             }
         }
+
+        // fase 3: el objeto entero con la lista completa de uniqueConstraints (el PUT lo reemplaza, y wasichai omite la
+        // clave si está vacía) y el unique de la relación
+        val guardados = tree(send("GET", "/api/objects", null, HttpStatus.OK)).associateBy { it["name"].asString() }
+        for (obj in model["objects"]) {
+            val name = obj["name"].asString()
+            val queremos = uniques(obj)
+            val tiene = conjuntos(guardados.getValue(name)["uniqueConstraints"])
+            if (tiene == queremos) continue
+            send(
+                "PUT",
+                "/api/objects/$name",
+                mapOf(
+                    "label" to obj["label"].asString(),
+                    "pluralLabel" to obj["pluralLabel"].asString(),
+                    "description" to obj["description"]?.asString(),
+                    "enabled" to true,
+                    "apiOnly" to (obj["apiOnly"]?.asBoolean() ?: false),
+                    "appendOnly" to (obj["appendOnly"]?.asBoolean() ?: false),
+                    "requiresReason" to (obj["requiresReason"]?.asBoolean() ?: false),
+                    "uniqueConstraints" to queremos
+                ),
+                HttpStatus.OK
+            )
+        }
+        for (rel in model["relationships"]) {
+            if (rel["unique"]?.asBoolean() != true) continue
+            val source = rel["source"].asString()
+            val campo = rel["fieldName"].asString()
+            val guardado = tree(send("GET", "/api/metadata/objects/$source/fields", null, HttpStatus.OK)).first { it["name"].asString() == campo }
+            if (guardado["unique"]?.asBoolean() != true) {
+                send("PUT", "/api/metadata/objects/$source/fields/$campo", mapOf("unique" to true), HttpStatus.OK)
+            }
+        }
     }
+
+    // las listas de campos de un uniqueConstraints (wasichai omite la clave si está vacía)
+    private fun conjuntos(nodo: JsonNode?): List<List<String>> = nodo?.toList()?.map { set -> set.toList().map { it.asString() } } ?: emptyList()
 
     // model/apply_roles.py en kotlin: el rol que falta se crea, y cada uno queda con los permisos de roles.json
     private fun applyRoles() {
@@ -255,6 +309,26 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         return rol
     }
 
+    // la cuenta de servicio de un sistema de origen: su nombre (el sistema_origen de sus órdenes, de 20 caracteres a lo sumo)
+    // y su Bearer, que dura 15 minutos
+    protected fun cuentaDeServicio(
+        prefijo: String = "rentas",
+        rol: String = "SISTEMA_ORIGEN"
+    ): Pair<String, String> {
+        val nombre = uniqueName(prefijo)
+        val creada = tree(send("POST", "/api/service-accounts", mapOf("name" to nombre, "roles" to listOf(rol)), HttpStatus.CREATED))
+        val acceso =
+            tree(
+                send(
+                    "POST",
+                    "/api/auth/token",
+                    mapOf("clientId" to creada["clientId"].asString(), "clientSecret" to creada["clientSecret"].asString()),
+                    HttpStatus.OK
+                )
+            )
+        return nombre to "Bearer ${acceso["token"].asString()}"
+    }
+
     private fun usuario(rol: String): Cuenta {
         val email = "${uniqueName(rol.lowercase())}@caja.test"
         send("POST", "/api/users", mapOf("email" to email, "displayName" to rol, "password" to CLAVE, "roles" to listOf(rol)), HttpStatus.CREATED)
@@ -327,7 +401,6 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                 "vigencia_desde" to desde.toString(),
                 "vigencia_hasta" to hasta?.toString(),
                 "documento_fuente" to "ORDENANZA DE LA PRUEBA",
-                "clave_vigencia" to "$codigo|$desde",
                 "area" to area
             )
         )
@@ -348,18 +421,19 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
         total: String = "10.00"
     ): String {
         val fecha = emitidoEn.atZoneSameInstant(ZoneId.of("America/Lima")).toLocalDate()
+        // un turno por (caja, cajero, fecha): si ya existe se usa, y si no se forja
         val turno =
-            forjarEnLaBase(
-                "turno",
-                mapOf(
-                    "caja" to caja.id,
-                    "cajero" to cajero,
-                    "fecha" to fecha.toString(),
-                    "abierto_en" to emitidoEn.toString(),
-                    "observacion" to "turno escrito por la prueba",
-                    "clave_turno" to "${caja.id}|$cajero|$fecha|$numero"
+            registros("turno", "caja" to caja.id, "cajero" to cajero, "fecha" to fecha.toString()).firstOrNull()?.get("id")?.asString()
+                ?: forjarEnLaBase(
+                    "turno",
+                    mapOf(
+                        "caja" to caja.id,
+                        "cajero" to cajero,
+                        "fecha" to fecha.toString(),
+                        "abierto_en" to emitidoEn.toString(),
+                        "observacion" to "turno escrito por la prueba"
+                    )
                 )
-            )
         return forjarEnLaBase(
             "recibo",
             mapOf(
@@ -422,6 +496,9 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
     }
 
     private fun almacen() = PhysicalTableRecordStore(conexion, esquemas, tipos)
+
+    // la organización del admin sembrado: la de todo lo que escribe una prueba
+    protected fun organizacion(): UUID = admin().first
 
     // la organización y el id del admin sembrado
     private fun admin(): Pair<UUID, UUID> {

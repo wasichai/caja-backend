@@ -58,6 +58,10 @@ class RolesJsonTests(unittest.TestCase):
             ("cierre_turno_linea", "READ"), ("cierre_turno_linea", "CREATE"),
             ("reversion_cierre", "READ")})
 
+    def test_solo_el_supervisor_anula_el_recibo_de_otro_cajero(self):
+        anulan = {rol["name"] for rol in self.roles.values() if ("recibo", "ANULAR_AJENO") in permisos(rol)}
+        self.assertEqual(anulan, {"SUPERVISOR_CAJA"})
+
     def test_nadie_edita_ni_borra_un_recibo_su_linea_su_evento_su_anulacion_ni_su_reimpresion(self):
         # el recibo es un papel con número correlativo que el contribuyente se lleva: no se corrige (V29 de caja). su
         # anulación y sus duplicados se agregan, y tampoco se corrigen
@@ -87,7 +91,8 @@ class RolesJsonTests(unittest.TestCase):
         # una reversion_cierre, ELIMINACION de cierre_caja
         self.assertEqual(permisos(self.roles["SUPERVISOR_CAJA"]),
                          permisos(self.roles["CAJERO"]) | {("anulacion_recibo", "CREATE"), ("reimpresion_recibo", "CREATE"),
-                                                           ("reversion_cierre", "CREATE"), ("pago_evento", "UPDATE")})
+                                                           ("reversion_cierre", "CREATE"), ("pago_evento", "UPDATE"),
+                                                           ("recibo", "ANULAR_AJENO")})
 
     def test_tesoreria_lee_cada_objeto_del_modelo(self):
         # un objeto nuevo en model.json sin su READ para tesorería hace fallar esta prueba
@@ -111,6 +116,12 @@ class ValidationTests(unittest.TestCase):
     def test_una_accion_que_core_no_conoce_se_rechaza(self):
         errors = self.mutate(lambda r: r["roles"][0]["permisos"].update({"caja": ["MANAGE_METADATA"]}))
         self.assertTrue(any("MANAGE_METADATA" in e for e in errors), errors)
+
+    def test_una_accion_que_el_modelo_declara_se_acepta_sobre_su_objeto_y_no_sobre_otro(self):
+        # ANULAR_AJENO la declara recibo: sobre caja no existe
+        self.assertEqual(self.mutate(lambda r: r["roles"][0]["permisos"].update({"recibo": ["READ", "ANULAR_AJENO"]})), [])
+        errors = self.mutate(lambda r: r["roles"][0]["permisos"].update({"caja": ["ANULAR_AJENO"]}))
+        self.assertTrue(any("ANULAR_AJENO" in e and "caja" in e for e in errors), errors)
 
     def test_un_nombre_que_core_no_acepta_se_rechaza(self):
         errors = self.mutate(lambda r: r["roles"][0].update({"name": "cajero"}))

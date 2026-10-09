@@ -114,7 +114,13 @@ class CobroService(
         // orden_recibo_ck: PAGADA nombra su recibo. replace lee, mezcla y escribe sin control de versión: va bajo el
         // candado de la orden, tomado al prepararlas
         ordenes.forEach { orden ->
-            registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(orden.id), mapOf("estado" to PAGADA, "recibo" to reciboId))
+            registros.replace(
+                ORDEN_DE_COBRO,
+                OrdenDeCobro::class.java,
+                UUID.fromString(orden.id),
+                mapOf("estado" to PAGADA, "recibo" to reciboId),
+                emitido.observacion
+            )
         }
 
         // el pagoId lo genera la caja al cobrar: un reintento de entrega manda el mismo y el origen deduplica
@@ -132,7 +138,8 @@ class CobroService(
                     "cuerpo" to cuerpoPagoRegistrado(pagoId, emitido.recibo, ordenes),
                     "estado" to EVENTO_PENDIENTE,
                     "intentos" to 0
-                )
+                ),
+                emitido.observacion
             )
         return respuestaDelCobro(emitido.recibo, emitido.lineas, evento, emitido = true)
     }

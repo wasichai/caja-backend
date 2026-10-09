@@ -59,7 +59,7 @@ class CobroApiTest : CajaApiTest() {
         assertEquals("PAGADA", pagada["estado"].asString())
         assertEquals(reciboId, pagada["recibo"].asString())
 
-        val turno = registros("turno", "clave_turno" to "${caja.id}|${cajero.email}|$hoy").single()
+        val turno = registros("turno", "caja" to caja.id, "cajero" to cajero.email, "fecha" to hoy.toString()).single()
         assertEquals(guardado["attributes"]["turno"].asString(), turno["id"].asString())
         assertEquals(caja.id, turno["attributes"]["caja"].asString())
         assertEquals(hoy.toString(), turno["attributes"]["fecha"].asString())
@@ -80,6 +80,27 @@ class CobroApiTest : CajaApiTest() {
         assertEquals("001-0000001", cuerpo["recibo"]["numero"].asString())
         assertEquals(ordenId, cuerpo["ordenes"][0]["ordenId"].asString())
         assertEquals("150.50", cuerpo["total"].asString())
+    }
+
+    @Test
+    fun `la observacion del cobro es la razon de cada escritura, en el turno, el recibo, la linea, la orden y el evento`() {
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        val ordenId = post(ORDENES, orden())["orden_id"].asString()
+        val pagoId = post(COBROS, cobro(caja, ordenId), cajero.token)["pago_id"].asString()
+
+        val reciboId = registros("recibo", "caja" to caja.id).single()["id"].asString()
+        listOf(
+            "turno" to registros("turno", "caja" to caja.id).single()["id"].asString(),
+            "recibo" to reciboId,
+            "linea_recibo" to registros("linea_recibo", "recibo" to reciboId).single()["id"].asString(),
+            "pago_evento" to registros("pago_evento", "evento_id" to pagoId).single()["id"].asString()
+        ).forEach { (objeto, id) ->
+            assertEquals("cobro en ventanilla", razonDelUltimo(objeto, id, "CREATE"), objeto)
+        }
+        // la orden: su alta dijo la suya, y el cobro la pasó a PAGADA con la del cobro
+        assertEquals("emisión de la cuota 1", razonDelUltimo("orden_de_cobro", ordenId, "CREATE"))
+        assertEquals("cobro en ventanilla", razonDelUltimo("orden_de_cobro", ordenId, "UPDATE"))
     }
 
     @Test
@@ -338,6 +359,17 @@ class CobroApiTest : CajaApiTest() {
     }
 
     // el cuerpo de un cobro en efectivo de esas órdenes en esa caja
+    // la razón de la última operación de ese tipo (la historia de core viene de la más nueva a la más vieja)
+    private fun razonDelUltimo(
+        objeto: String,
+        id: String,
+        operacion: String
+    ): String =
+        tree(send("GET", "/api/objects/$objeto/records/$id/history", null, HttpStatus.OK))
+            .toList()
+            .first { it["operation"].asString() == operacion }["reason"]
+            .asString()
+
     private fun cobro(
         caja: CajaDePrueba,
         vararg ordenes: String

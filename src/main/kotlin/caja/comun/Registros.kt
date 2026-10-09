@@ -19,9 +19,11 @@ import java.util.UUID
 // transacción: cada escritura se confirma sola, y un unique que salta llega como DuplicateKeyException. dentro de
 // Transaccion.en se une a la transacción en curso y se confirma con ella (la cobranza). un dto lleva
 // todos sus campos, y core rechaza la escritura entera que nombra un campo que el usuario no puede escribir: las
-// escrituras mandan solo los escribibles. cada escritura lleva la marca EscrituraDeCaja: es la api de caja, y sin ella
-// GuardiaDeEscrituras no deja escribir ningún objeto de caja. NO HAY delete: caja no borra nada (un recibo se anula, un
-// cierre se reversa), y una puerta para borrar que nadie llama es la que alguien usa mañana (InmutabilidadDelReciboTest)
+// escrituras mandan solo los escribibles. toda escritura lleva su razón (requiresReason): la observación del acto, o el
+// texto fijo de un proceso del sistema; core la deja en audit_log.reason. cada escritura lleva la marca EscrituraDeCaja:
+// es la api de caja, y sin ella GuardiaDeEscrituras no deja escribir ningún objeto de caja. NO HAY delete: caja no
+// borra nada (un recibo se anula, un cierre se reversa), y una puerta para borrar que nadie llama es la que alguien
+// usa mañana (InmutabilidadDelReciboTest)
 @Component
 class Registros(
     private val records: RecordService,
@@ -67,7 +69,7 @@ class Registros(
                 )
             rows += result.content
             page++
-        } while (page < result.totalPages)
+        } while (result.content.size >= PageRequest.MAX_SIZE)
         return enOrden(rows, sort, descending).map { read(type, it) }
     }
 
@@ -126,13 +128,17 @@ class Registros(
         objectName: String,
         filters: Map<String, String> = emptyMap(),
         criteria: List<RecordCriterion> = emptyList()
-    ): Long = records.list(objectName, RecordQuery(page = PageRequest.of(0, 1), filters = filters, criteria = criteria)).totalElements
+    ): Long = records.list(objectName, RecordQuery(page = PageRequest.of(0, 1), filters = filters, criteria = criteria)).totalElements ?: 0
 
     suspend fun <T : Any> create(
         objectName: String,
         type: Class<T>,
-        attributes: Map<String, Any?>
-    ): T = withContext(EscrituraDeCaja) { read(type, records.create(objectName, RecordRequest(escribibles(objectName, attributes)))) }
+        attributes: Map<String, Any?>,
+        razon: String
+    ): T =
+        withContext(EscrituraDeCaja) {
+            read(type, records.create(objectName, RecordRequest(escribibles(objectName, attributes)), razon))
+        }
 
     // el update de core reemplaza cada campo que el usuario puede escribir: uno que falta en la petición se borra.
     // se manda lo que el dto sabe sobre lo guardado, así un campo agregado en el admin (y ausente del dto) no se borra.
@@ -141,10 +147,13 @@ class Registros(
         objectName: String,
         type: Class<T>,
         id: UUID,
-        attributes: Map<String, Any?>
+        attributes: Map<String, Any?>,
+        razon: String
     ): T {
         val stored = records.get(objectName, id).attributes
-        return withContext(EscrituraDeCaja) { read(type, records.update(objectName, id, RecordRequest(escribibles(objectName, stored + attributes)))) }
+        return withContext(EscrituraDeCaja) {
+            read(type, records.update(objectName, id, RecordRequest(escribibles(objectName, stored + attributes)), razon))
+        }
     }
 
     private fun <T : Any> read(

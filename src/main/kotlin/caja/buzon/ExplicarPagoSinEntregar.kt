@@ -17,8 +17,6 @@ import caja.modelo.EVENTO_PENDIENTE
 import caja.modelo.PagoEvento
 import caja.modelo.Recibo
 import org.springframework.stereotype.Service
-import wasichai.core.audit.AuditOperation
-import wasichai.core.audit.AuditService
 import wasichai.core.common.Actions
 import wasichai.core.common.ConflictException
 import wasichai.core.common.FieldViolation
@@ -32,15 +30,15 @@ import java.util.UUID
 // cerrar para siempre, y la presión acabaría relajando el cierre para todos. así que la salida existe y cuesta lo que
 // tiene que costar: SOLO UN PAGO MUERTO (uno PENDIENTE se entregaría solo, y explicarlo lo sacaría de la cola), con su
 // explicación en el evento y su observación en la auditoría, y SOLO con UPDATE sobre pago_evento, que roles.json da
-// únicamente a SUPERVISOR_CAJA: es la única edición del buzón. se escribe por RecordService, como el usuario, con el
-// candado del evento y releyéndolo bajo él: dos explicaciones a la vez dan una y un 409
+// únicamente a SUPERVISOR_CAJA: es la única edición del buzón que hace una persona. se escribe por RecordService, como el
+// usuario, con el candado del evento (el mismo que toma cada marca del publicador, BuzonStore) y releyéndolo bajo él:
+// dos explicaciones a la vez dan una y un 409, y una explicación y una marca del publicador no se pisan
 @Service
 class ExplicarPagoSinEntregar(
     private val registros: Registros,
     private val candados: Candados,
     private val transaccion: Transaccion,
     private val permisos: Permisos,
-    private val auditoria: AuditService,
     private val currentUser: CurrentUser
 ) {
     suspend fun explicar(
@@ -79,18 +77,14 @@ class ExplicarPagoSinEntregar(
                         }
                 )
             }
-            val cambios = mapOf("estado" to EVENTO_EXPLICADO, "explicacion" to explicacion)
-            val explicado = registros.replace(PAGO_EVENTO, PagoEvento::class.java, UUID.fromString(actual.id), cambios)
-            // el por qué del acto (regla 10): pago_evento no tiene observación, va en la auditoría, junto a la de core
-            auditoria.record(
-                usuario.organizationId,
-                usuario.userId,
-                PAGO_EVENTO,
-                UUID.fromString(actual.id),
-                AuditOperation.UPDATE,
-                before = mapOf("estado" to actual.estado),
-                after = mapOf("estado" to EVENTO_EXPLICADO, "explicacion" to explicacion, "observacion" to observacion!!.texto)
-            )
+            val explicado =
+                registros.replace(
+                    PAGO_EVENTO,
+                    PagoEvento::class.java,
+                    UUID.fromString(actual.id),
+                    mapOf("estado" to EVENTO_EXPLICADO, "explicacion" to explicacion),
+                    observacion!!.texto
+                )
             val numero = explicado.recibo?.let { registros.byIds(RECIBO, Recibo::class.java, listOf(it))[it]?.numeroImpreso }
             pagoDelBuzon(explicado, numero)
         }

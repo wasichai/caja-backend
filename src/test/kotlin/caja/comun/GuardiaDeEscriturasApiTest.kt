@@ -1,28 +1,38 @@
 package caja.comun
 
 import caja.CajaApiTest
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.http.HttpStatus
 import tools.jackson.databind.JsonNode
+import wasichai.core.common.ForbiddenException
+import wasichai.core.data.RecordRequest
+import wasichai.core.data.RecordService
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
 
-// la guarda antes de escribir (caja-backend#20): ningún objeto de caja se escribe por la API genérica de wasichai
-// (POST/PUT/DELETE /api/objects/{objeto}/records), ni con el permiso del rol ni como ADMIN. 403 antes de tocar la base,
-// y una línea WARN. lo que caja escribe por su api pasa (lo prueba también el resto de la suite), y lo que no es de caja
-// (una caja, un área) se sigue escribiendo por esa puerta
+// la segunda puerta (caja-backend#20): ningún objeto de caja se escribe por la API genérica de wasichai
+// (POST/PUT/DELETE /api/objects/{objeto}/records), ni con el permiso del rol ni como ADMIN. los diez son apiOnly: 403
+// desde wasichai, antes de tocar la base y sin línea WARN de caja. lo que corre dentro del proceso sin la marca de caja
+// lo rechaza GuardiaDeEscrituras, con su WARN. lo que caja escribe por su api pasa (lo prueba también el resto de la
+// suite), y lo que no es de caja (una caja, un área) se sigue escribiendo por esa puerta
 @ExtendWith(OutputCaptureExtension::class)
 class GuardiaDeEscriturasApiTest : CajaApiTest() {
+    @Autowired
+    private lateinit var records: RecordService
+
     // los dos vectores del #20
 
     @Test
-    fun `un acta de anulacion forjada no se escribe, y el arqueo del turno no cambia`(salida: CapturedOutput) {
+    fun `un acta de anulacion forjada no se escribe, y el arqueo del turno no cambia`() {
         val cajero = cuenta("CAJERO")
         val supervisor = cuenta("SUPERVISOR_CAJA")
         val cobro = cobrar(cajero)
@@ -33,7 +43,6 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
         val acta =
             mapOf(
                 "recibo" to cobro.recibo,
-                "recibo_anulado" to cobro.recibo,
                 "caja" to cobro.caja.id,
                 "turno" to cobro.turno,
                 "fecha" to LocalDate.now(LIMA).toString(),
@@ -44,10 +53,9 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             )
         val problema = tree(send("POST", "/api/objects/anulacion_recibo/records", mapOf("attributes" to acta), HttpStatus.FORBIDDEN, supervisor.token))
 
-        assertTrue(problema["detail"].asString().contains("anulacion_recibo") && problema["detail"].asString().contains("caja-backend#20"), problema.toString())
+        assertTrue(problema["detail"].asString().contains("anulacion_recibo"), problema.toString())
         assertTrue(registros("anulacion_recibo", "recibo" to cobro.recibo).isEmpty(), "no quedó ningún acta")
         assertEquals(antes, arqueo(cobro.turno, cajero), "el arqueo no resta nada")
-        assertTrue(rechazos(salida, "CREATE anulacion_recibo").isNotEmpty())
 
         // la anulación de verdad, por la api de caja, sí
         post("/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, supervisor.token)
@@ -55,7 +63,7 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
     }
 
     @Test
-    fun `un pago ENTREGADO no se reenvia con otro pagoId, ni uno PENDIENTE se explica por fuera`(salida: CapturedOutput) {
+    fun `un pago ENTREGADO no se reenvia con otro pagoId, ni uno PENDIENTE se explica por fuera`() {
         val supervisor = cuenta("SUPERVISOR_CAJA")
         val entregado = cobrar(cuenta("CAJERO"))
         val evento = registros("pago_evento", "evento_id" to entregado.pagoId).single()
@@ -84,13 +92,12 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
         val explicado = atributos(suyo) + ("estado" to "EXPLICADO")
         send("PUT", "/api/objects/pago_evento/records/${suyo["id"].asString()}", mapOf("attributes" to explicado), HttpStatus.FORBIDDEN, supervisor.token)
         assertEquals("PENDIENTE", registros("pago_evento", "evento_id" to pendiente.pagoId).single()["attributes"]["estado"].asString())
-        assertEquals(2, rechazos(salida, "UPDATE pago_evento").size)
     }
 
     // todos los objetos de caja
 
     @Test
-    fun `ningun objeto de caja se da de alta, se cambia ni se borra por la API generica, ni como ADMIN`(salida: CapturedOutput) {
+    fun `ningun objeto de caja se da de alta, se cambia ni se borra por la API generica, ni como ADMIN`() {
         val supervisor = cuenta("SUPERVISOR_CAJA")
         // un turno con todo lo que escribe caja: el cobro, un duplicado, la anulación, el cierre y su reversión
         val cobro = cobrar(supervisor)
@@ -139,7 +146,7 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             val cuantos = total(objeto)
 
             val alta = tree(send("POST", ruta, mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN))
-            assertTrue(alta["detail"].asString().contains("«$objeto»"), alta.toString())
+            assertTrue(alta["detail"].asString().contains("'$objeto'"), alta.toString())
             send("PUT", "$ruta/$id", mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN)
             send("DELETE", "$ruta/$id", null, HttpStatus.FORBIDDEN)
 
@@ -147,20 +154,18 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             assertEquals(registro["attributes"], tras["attributes"], "$objeto no cambió")
             assertEquals(registro["updatedAt"], tras["updatedAt"], "$objeto no se tocó")
             assertEquals(cuantos, total(objeto), "ningún $objeto de más")
-            listOf("CREATE $objeto (alta)", "UPDATE $objeto $id", "DELETE $objeto $id").forEach { assertEquals(1, rechazos(salida, it).size, it) }
         }
     }
 
     // la orden de cobro: su única puerta es el alta de caja
 
     @Test
-    fun `una orden no se da de alta ni se cambia por la API generica, y por el alta de caja si`(salida: CapturedOutput) {
+    fun `una orden no se da de alta ni se cambia por la API generica, y por el alta de caja si`() {
         val referencia = "FUERA-${unico()}"
         val porFuera =
             mapOf(
                 "sistema_origen" to "rentas",
                 "referencia_externa" to referencia,
-                "clave_origen" to "rentas|$referencia",
                 "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
                 "importe" to "-50.00",
                 "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),
@@ -170,9 +175,6 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             )
         send("POST", "/api/objects/orden_de_cobro/records", mapOf("attributes" to porFuera), HttpStatus.FORBIDDEN, funcionario("SISTEMA_ORIGEN"))
         assertTrue(registros("orden_de_cobro", "referencia_externa" to referencia).isEmpty())
-        // la línea nombra el importe que el alta habría rechazado: el que rompería un recibo
-        val alta = rechazos(salida, "CREATE orden_de_cobro").single { it.contains("-50.00") }
-        assertTrue(alta.contains("importe roto") && alta.contains("debe ser mayor que 0"), alta)
 
         // el alta de caja, sí
         val orden = post("/api/caja/ordenes-de-cobro", orden("importe" to "80.00"))["orden_id"].asString()
@@ -183,7 +185,31 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
         send("PUT", "/api/objects/orden_de_cobro/records/$orden", mapOf("attributes" to rebajada), HttpStatus.FORBIDDEN, funcionario("CAJERO"))
         val tras = tree(send("GET", "/api/objects/orden_de_cobro/records/$orden", null, HttpStatus.OK))
         assertEquals(guardada["attributes"], tras["attributes"])
-        assertEquals(1, rechazos(salida, "UPDATE orden_de_cobro $orden").size)
+    }
+
+    // lo que corre dentro del proceso sin la marca de caja: wasichai ya no lo ve por REST, y la guarda lo rechaza con su WARN
+    @Test
+    fun `una escritura en proceso sin la marca de caja se rechaza, con su linea WARN`(salida: CapturedOutput) {
+        val referencia = "EN-PROCESO-${unico()}"
+        val porFuera =
+            mapOf(
+                "sistema_origen" to "rentas",
+                "referencia_externa" to referencia,
+                "concepto" to "IMPUESTO PREDIAL 2026 - CUOTA 1",
+                "importe" to "-50.00",
+                "fecha_exigibilidad" to LocalDate.now(LIMA).toString(),
+                "actualizado_a" to LocalDate.now(LIMA).toString(),
+                "estado" to "PENDIENTE",
+                "observacion" to "escrita por un módulo"
+            )
+        assertThrows(ForbiddenException::class.java) {
+            runBlocking { records.asPlatform(organizacion()) { records.create(ORDEN_DE_COBRO, RecordRequest(porFuera), "escrita por un módulo") } }
+        }
+
+        assertTrue(registros("orden_de_cobro", "referencia_externa" to referencia).isEmpty(), "no quedó ninguna fila")
+        // la línea nombra el importe que el alta habría rechazado: el que rompería un recibo, y que lo escribió la plataforma
+        val linea = rechazos(salida, "CREATE orden_de_cobro").single { it.contains("-50.00") }
+        assertTrue(linea.contains("la plataforma") && linea.contains("importe roto") && linea.contains("debe ser mayor que 0"), linea)
     }
 
     @Test
