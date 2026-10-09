@@ -29,7 +29,7 @@ cuando el origen no contesta: nunca ceros.
 
 - JDK 25 y Docker (para PostgreSQL y para los tests de integración con Testcontainers).
 - Node 26 y yarn 1, solo para el formato (prettier) y los hooks de commit (husky + commitlint): `yarn install`.
-- Las librerías de wasichai (`wasichai:wasichai-bom:0.3.2` y los starters). Se resuelven desde:
+- Las librerías de wasichai (`wasichai:wasichai-bom:0.6.0` y los starters). Se resuelven desde:
   1. **GitHub Packages** (`https://maven.pkg.github.com/wasichai/wasichai`). Pide un token aunque sea para leer
      (`read:packages` basta). En `~/.gradle/gradle.properties`:
      ```properties
@@ -148,7 +148,7 @@ de `caja`, de `cierre_caja`, `recibo` y `recibo_detalle` de V3 y V29, de `orden_
 `cierre_turno_detalle` de V32 (líneas 266-296 del baseline), con la reversión como objeto propio. wasichai pone el `id`, y la columna
 `municipalidad_id` de `caja` es la organización de wasichai, así que ninguna de las dos es un campo.
 
-**Lo que el modelo le pide a wasichai** (0.3.2), además de campos y relaciones:
+**Lo que el modelo le pide a wasichai** (desde 0.3.2), además de campos y relaciones:
 
 - **`apiOnly` en los diez objetos de caja** (todos menos `area`, `caja` y `tasa`): la API genérica
   (`/api/objects/{objeto}/records`) no los escribe, ni un `ADMIN` (403, desde wasichai; ver «La segunda puerta»). Los
@@ -991,8 +991,9 @@ vuelve a esperar. En cada vuelta:
    que muere lo suelta con su sesión. **El cerrojo abre una conexión propia en cada vuelta, por debajo del pool**, y la
    cierra al soltarlo, así el candado nunca vuelve al pool tomado: es una conexión nueva cada `intervalo`, también
    cuando no hay nada que entregar, y cuenta en el `max_connections` de la base.
-2. Con el cerrojo, recorre cada organización que tiene `pago_evento` y lee hasta `por-vuelta` eventos `PENDIENTE`, por
-   orden de creación, de 200 en 200 (`BuzonStore`). Lee y marca por `RecordService` **como la plataforma** de esa
+2. Con el cerrojo, recorre cada organización que tiene `pago_evento` (las da el `TenantDirectory` de wasichai, por id) y
+   lee hasta `por-vuelta` eventos `PENDIENTE`, por orden de creación, de 200 en 200 (`BuzonStore`). Lee y marca por
+   `RecordService` **como la plataforma** de esa
    organización (`asPlatform` de wasichai: sin usuario y sin roles, como un ADMIN), sin SQL sobre las tablas de datos.
    **Una organización con `pago_evento` y el modelo de caja incompleto ya no se salta en silencio**: si le falta algo
    que la lista de pendientes lee, su vuelta falla con **un ERROR en cada vuelta** («El buzón de la organización … no
@@ -1016,9 +1017,10 @@ vuelve a esperar. En cada vuelta:
 5. Si le toca salir, se entrega **fuera de cualquier transacción**: `POST {url}/pagos` con el `cuerpo` **congelado**,
    tal cual se escribió al cobrar. `ClienteDelSistemaDeOrigen` comprueba que no hay una transacción abierta antes de
    llamar, y falla si la hay.
-6. Cada marca va **en su propia transacción, bajo el candado de su evento y es condicional**. Como wasichai no tiene
-   un update condicional, con `Candado.PAGO` del evento (el mismo que toma la explicación) se relee, y solo se escribe
-   si sigue `PENDIENTE` con los intentos leídos; el `update` de core reemplaza el registro entero, así que va lo
+6. Cada marca va **en su propia transacción, bajo el candado de su evento y es condicional**. El update condicional de
+   wasichai (`expectedUpdatedAt`, de 0.5.0) compara la versión de la fila, y esta marca decide por el estado y los
+   intentos, así que no lo usa: con `Candado.PAGO` del evento (el mismo que toma la explicación) se relee, y solo se
+   escribe si sigue `PENDIENTE` con los intentos leídos; el `update` de core reemplaza el registro entero, así que va lo
    guardado con los cambios encima. Si dos publicadores llegaran a coincidir, se cuenta un solo intento, y una marca
    nunca pisa un evento ya explicado o ya entregado. **Core escribe su auditoría, con usuario `null` y una razón fija**
    («entrega del buzón: ENTREGADO», «entrega del buzón: intento fallido» o «entrega del buzón: MUERTO»; nunca el error
@@ -1093,7 +1095,8 @@ aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistr
 
 #### La segunda puerta: la API genérica
 
-La API genérica de wasichai (`POST`/`PUT`/`DELETE /api/objects/{objeto}/records`) aplicaría los permisos de objeto de
+La API genérica de wasichai (`POST`/`PUT`/`PATCH`/`DELETE /api/objects/{objeto}/records`; el `PATCH` llegó con 0.5.0 y
+`GuardiaDeEscriturasApiTest` lo prueba junto a los demás) aplicaría los permisos de objeto de
 core y nada más, y caja escribe como el usuario que llama: quien cobra tiene CREATE sobre `recibo`, `linea_recibo` y
 `pago_evento`; quien anula, sobre `anulacion_recibo`; quien explica, UPDATE sobre `pago_evento`. Por esa puerta se
 podía escribir un evento que nunca ocurrió (el hallazgo de la revisión del PR 4b), **un acta de anulación forjada**, que
@@ -1102,13 +1105,13 @@ el arqueo restaba (el dinero salía del cajón y el cierre cuadraba igual), o **
 y la defensa (a) se queda, como segunda línea frente a quien escribe en la base:
 
 - **(a) El cuerpo se vuelve a componer antes de enviar, con el sello de la transacción.** PostgreSQL da a
-  `created_at` el valor de `now()`, **el comienzo de la transacción**. Todo lo que escribe una transacción de caja lleva
-  el mismo instante: la cobranza escribe el recibo, sus líneas, el `PAGO_REGISTRADO` y las órdenes `PAGADA` (su
-  `updated_at`) en una sola; la anulación, su acta y el `PAGO_ANULADO` en otra. Lo prueba `BuzonApiTest`. Una escritura
-  suelta en la base es otra transacción: lleva **otro sello**, salvo que quien escribe fije `created_at` a mano. `now()`
-  tiene resolución de microsegundos, así que dos escrituras sueltas lanzadas en paralelo (un acta forjada y su
-  `PAGO_ANULADO`) podrían, en teoría, caer en el mismo instante. Es improbable y ruidoso: cada intento fallido muere con
-  su alerta. Sobre eso, el publicador comprueba:
+  `created_at` el valor de `now()`, **el comienzo de la transacción**. Todo lo que **inserta** una transacción de caja
+  lleva el mismo instante: la cobranza inserta el recibo, sus líneas y el `PAGO_REGISTRADO` (y marca las órdenes
+  `PAGADA`, que es un `UPDATE`: ver más abajo); la anulación, su acta y el `PAGO_ANULADO` en otra. Lo prueba
+  `BuzonApiTest`. Una escritura suelta en la base es otra transacción: lleva **otro sello**, salvo que quien escribe fije
+  `created_at` a mano. `now()` tiene resolución de microsegundos, así que dos escrituras sueltas lanzadas en paralelo
+  (un acta forjada y su `PAGO_ANULADO`) podrían, en teoría, caer en el mismo instante. Es improbable y ruidoso: cada
+  intento fallido muere con su alerta. Sobre eso, el publicador comprueba:
   - **El evento lleva el sello de su origen.** Un `PAGO_REGISTRADO` tiene el `created_at` de su recibo; un
     `PAGO_ANULADO`, el de su `anulacion_recibo`. Si no, es una copia o un evento forjado, y muere. Uno forjado **antes**
     no le quita el lugar al legítimo, que conserva su sello y se entrega.
@@ -1121,10 +1124,15 @@ y la defensa (a) se queda, como segunda línea frente a quien escribe en la base
     la fecha salen del acta. El cuerpo guardado tiene que ser **igual, campo a campo**: el sistema, el recibo, el
     pagador, el total y cada orden con su referencia y su importe (de su línea) y su fecha. Lo único que no se compara
     tal cual es **el orden de las órdenes**: la petición no se guarda, así que se comparan ordenadas por `ordenId`.
-  - **La fecha de cada orden** (`actualizadoA`, que la línea no guarda) sale de la orden **solo si su `updated_at` es el
-    sello del cobro**, es decir, si nadie la tocó desde entonces. Si se tocó después (una anulación, otro cobro, o un
-    cambio en la base), su valor de hoy ya no es el del cobro. Entonces se toma el del propio cuerpo para esa orden, y cambiar la orden no mata al evento
-    legítimo.
+  - **La fecha de cada orden** (`actualizadoA`, que la línea no guarda) **se toma del propio cuerpo del evento, y no se
+    contrasta con la orden**: la orden la puede cambiar otro después (una anulación, otro cobro, un cambio en la base),
+    y tocarla no puede matar al evento legítimo. **Es el único campo del cuerpo que no se contrasta con lo guardado.**
+    Hasta wasichai 0.3.x se leía de la orden *solo si su `updated_at` era el sello del cobro*, es decir, si nadie la
+    había tocado desde entonces; con 0.5.0 un `UPDATE` pone `updated_at` con el reloj de su sentencia y no con el
+    comienzo de la transacción (ADR-051 y D36 de wasichai), así que marcar la orden `PAGADA` ya no le deja el sello del
+    cobro y no hay cómo saber que nadie la tocó. Volver a contrastarla pide guardar `actualizado_a` en la
+    `linea_recibo`, congelada como su importe: un cambio del modelo que queda para decidirse (ver «Lo que wasichai 0.6.0
+    cambió para caja»).
   - **El `sistema_destino` de la fila es el de esas líneas, y un `PAGO_REGISTRADO` es de un recibo `NORMAL`.**
 
   Si algo no cuadra, **no se envía**: pasa a `MUERTO` con `ultimo_error` «el evento no coincide con su recibo: …» (que
@@ -1190,6 +1198,36 @@ Caja rodeaba ocho huecos de wasichai (wasichai#13 a #20). Con 0.3.2 cada uno tie
 | Trabajo de fondo con un principal y un candado de clúster (#18) | `asPlatform` en `BuzonStore`, `ClusterLock` en el cerrojo y en los candados |
 | El motivo de un cambio (#19) | `requiresReason` en los diez objetos, y la observación es la razón |
 | Un desempate único al paginar (#20) | Cubierto por wasichai (D21), sin cambio en caja: ver «Lo que no se migra, y por qué» |
+
+#### Lo que wasichai 0.6.0 cambió para caja
+
+Caja pasó de 0.3.2 a 0.6.0 (por 0.3.3, 0.4.0 y 0.5.0). La API que caja usa no cambió de forma incompatible y el código
+compila igual; lo que se movió es esto:
+
+| Cambio de wasichai | Qué hace caja |
+|---|---|
+| `CustomObjectRepository.findAllOrganizations()` quedó `@Deprecated`: los repositorios son API interna (ADR-057) | `BuzonStore.buzones()` usa `TenantDirectory.organizationsWithObject("pago_evento")`: las organizaciones que lo definen, por id. Solo contesta al trabajo de fondo (el bucle del publicador): en una petición lanza |
+| El `updated_at` de un `UPDATE` sale del reloj de la sentencia y no de `now()` (ADR-051, D36 de wasichai) | Las órdenes que el cobro marca `PAGADA` ya no llevan el sello del recibo, y la fecha de cada orden del evento se toma del cuerpo y no de la orden (ver «La segunda puerta», defensa (a)). El `created_at` de lo que se inserta no cambia |
+| `PATCH` en la API genérica (ADR-051) | Es otra puerta de escritura: los diez objetos de caja la rechazan como `apiOnly` (403) y `GuardiaDeEscriturasApiTest` lo prueba |
+| `ETag` e `If-Match` (412) en los registros, `X-Correlation-Id` en toda respuesta, `capabilities` en `/api/auth/me/permissions` | Sin cambios en caja: son opt-in o aditivos |
+| `defaultValue` se aplica al crear (D40) y una auto-relación se lee de los dos lados (D42) | No aplica: el modelo de caja no declara ninguno de los dos |
+| Revocación de tokens, límite de intentos de login y política de contraseñas (ADR-059), `Idempotency-Key` en el alta genérica (ADR-058) | Apagados o neutros por defecto: caja no cambia su configuración. ADR-059 los recomienda antes de producción (`wasichai.security.*`) |
+| Módulos nuevos (`notifications`, `files`) y cambios en `agent` y `automation` | Caja no los instala |
+
+**Al actualizar una base existente corren las migraciones nuevas de core**, sin que caja haga nada: `V9__org_units`,
+`V10__audit_origin`, `V12__audit_user_index`, `V13__audit_log_immutable`, `V15__manage_tenants`,
+`V16__idempotency_keys`, `V17__tokens_valid_after` y la repetible `R__audit_purge_role`. `V13` deja **`audit_log`
+inmutable en la base**: unos triggers rechazan `UPDATE`, `DELETE` y `TRUNCATE` para cualquier rol (ADR-054). Quien purgue
+la auditoría lo hace con el login que nombre `wasichai.audit.purge-role`, que por defecto no hay.
+
+**Al arrancar, wasichai avisa con un WARN** (`AuditLogOwnershipCheck`; no falla el arranque) si el rol con que corre la
+app puede actuar como dueño de `audit_log`: los triggers lo protegen de todos menos de su dueño, que puede quitarlos.
+Con el `caja`/`caja` de desarrollo es así, porque ese rol migra y es dueño de todo. En producción se separan el rol que
+migra y el de la app (la guía de wasichai, «Two database roles, and a trail nobody rewrites»).
+
+**Queda por decidir**: guardar `actualizado_a` en la `linea_recibo` (congelado, como su importe) para que el publicador
+vuelva a contrastar la fecha de cada orden del `PAGO_REGISTRADO`. Es un cambio del modelo de un objeto `appendOnly`, con
+filas anteriores que no la tendrían; mientras tanto esa fecha es lo único del cuerpo que no se compara con lo guardado.
 
 ### La recaudación y la conciliación
 
@@ -1455,10 +1493,6 @@ estaba, cada cosa con su motivo:
 - **`BucleDelBuzon` sigue siendo propio.** wasichai no trae un planificador (ADR-039 lo deja fuera a propósito: ningún
   otro módulo lo pide). Migró lo que sí ofrece, el principal (`asPlatform`) y el candado (`ClusterLock`); el
   `SmartLifecycle` con su espera entre vueltas queda como el `AutomationDrain` de wasichai.
-- **El buzón enumera las organizaciones con `CustomObjectRepository.findAllOrganizations()`.** Esa lectura es interna de
-  la plataforma (no lleva filtro de organización, a propósito, y es de su arranque), y wasichai no ofrece una API
-  soportada para listar organizaciones: el trabajo de fondo no tiene a quién preguntarle. Si wasichai la mueve o la
-  esconde, el buzón deja de compilar, no de funcionar en silencio.
 - **Las actas siguen como objetos.** `anulacion_recibo`, `reimpresion_recibo`, `cierre_turno` y `reversion_cierre` no
   pasan a ser un estado o una transición del `recibo` o del `turno`: ambos son `appendOnly`, un papel entregado no se
   toca, y cada acta lleva lo suyo (motivo, importe congelado, arqueo, quién y por qué). Anular es agregar; el estado se

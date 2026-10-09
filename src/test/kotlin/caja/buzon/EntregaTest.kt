@@ -161,10 +161,11 @@ class EntregaTest {
                 LineaDelEvento(orden1, "rentas", "PREDIAL-1", BigDecimal("150.50"), cobro),
                 LineaDelEvento(orden2, "rentas", "PREDIAL-2", BigDecimal("80.25"), cobro)
             )
-        private val ordenes =
-            mapOf(orden1 to OrdenDelEvento(LocalDate.parse("2026-03-15"), cobro), orden2 to OrdenDelEvento(LocalDate.parse("2026-03-16"), cobro))
+
+        // la fecha de cada orden la dice solo el cuerpo del evento: la línea no la guarda y la orden no se lee
+        private val fechas = mapOf(orden1 to LocalDate.parse("2026-03-15"), orden2 to LocalDate.parse("2026-03-16"))
         private val eventos = listOf(EventoDelRecibo(registradoId, registradoId.toString(), "PAGO_REGISTRADO", cobro, "ENTREGADO"))
-        private val delRecibo = ReciboDelEvento(recibo, cobro, lineas, ordenes, null, eventos)
+        private val delRecibo = ReciboDelEvento(recibo, cobro, lineas, null, eventos)
 
         // el cuerpo que escribió la cobranza: el mismo compositor, con las órdenes de la petición
         private val legitimo =
@@ -177,7 +178,7 @@ class EntregaTest {
                         sistemaOrigen = it.sistemaOrigen,
                         referenciaExterna = it.referenciaExterna,
                         importe = it.monto,
-                        actualizadoA = ordenes.getValue(it.orden!!).actualizadoA
+                        actualizadoA = fechas.getValue(it.orden!!)
                     )
                 }
             )
@@ -224,11 +225,7 @@ class EntregaTest {
         @Test
         fun `una linea agregada despues no cuenta, y un cuerpo que la incluye no coincide`() {
             val orden3 = "5c6d7e8f-1f0e-4d0b-9a8e-3c1d2b4a5e6f"
-            val conLineaForjada =
-                delRecibo.copy(
-                    lineas = lineas + LineaDelEvento(orden3, "rentas", "PREDIAL-3", BigDecimal("10.00"), suelta),
-                    ordenes = ordenes + (orden3 to OrdenDelEvento(LocalDate.parse("2026-03-17"), suelta))
-                )
+            val conLineaForjada = delRecibo.copy(lineas = lineas + LineaDelEvento(orden3, "rentas", "PREDIAL-3", BigDecimal("10.00"), suelta))
             // la línea forjada no mata al evento legítimo
             assertNull(incoherencia(evento(legitimo), conLineaForjada))
             // y un cuerpo editado para incluirla no coincide
@@ -258,15 +255,14 @@ class EntregaTest {
         }
 
         @Test
-        fun `la fecha de una orden sale de la orden si nadie la toco desde el cobro, y si no, del cuerpo`() {
-            // sin tocar desde el cobro (su updated_at es el sello del cobro): otra fecha en el cuerpo no coincide
-            assertTrue(incoherencia(evento(legitimo.replace("2026-03-16", "2026-03-17")), delRecibo)!!.contains("ordenes"))
-            // tocada después (una anulación, o un cambio en la base): no manda su fecha de hoy, y el evento
-            // legítimo se entrega igual
-            val tocada = delRecibo.copy(ordenes = ordenes + (orden2 to OrdenDelEvento(LocalDate.parse("2027-01-01"), suelta)))
-            assertNull(incoherencia(evento(legitimo), tocada))
-            // y una orden que ya no existe tampoco lo mata
-            assertNull(incoherencia(evento(legitimo), delRecibo.copy(ordenes = ordenes - orden2)))
+        fun `la fecha de una orden sale del cuerpo y la orden no se lee, y una fecha que no lo es no coincide`() {
+            // desde wasichai 0.5.0 la orden no deja rastro de si la tocaron después del cobro (su updated_at ya no es el sello
+            // de la transacción), así que no se lee: otra fecha en el cuerpo es la fecha del cuerpo, y tocar la orden no mata
+            // al evento legítimo
+            assertNull(incoherencia(evento(legitimo.replace("2026-03-16", "2026-03-17")), delRecibo))
+            // lo demás del cuerpo sí se contrasta, y una fecha que no es una fecha no se puede componer: no coincide
+            val sinFecha = cambiado(legitimo) { ((it["ordenes"] as ArrayNode)[0] as ObjectNode).put("actualizadoA", "no es una fecha") }
+            assertTrue(incoherencia(evento(sinFecha), delRecibo)!!.contains("ordenes"))
         }
 
         @Test

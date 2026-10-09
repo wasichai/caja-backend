@@ -532,7 +532,7 @@ class BuzonApiTest : CajaApiTest() {
     // del sello de la transacción: created_at = now(), el comienzo de la transacción
 
     @Test
-    fun `todo lo que escribe un cobro, y una anulacion, lleva el sello de su transaccion, y una escritura suelta otro`() {
+    fun `todo lo que inserta un cobro, y una anulacion, lleva el sello de su transaccion, y una escritura suelta otro`() {
         val cobro = cobrar(PRUEBAS, importe = "100.00", otros = listOf("50.50"))
         val evento = evento(cobro.pagoId)
         val reciboId = evento["attributes"]["recibo"].asString()
@@ -543,7 +543,12 @@ class BuzonApiTest : CajaApiTest() {
         assertEquals(2, lineas.size)
         lineas.forEach { assertEquals(sello, it["createdAt"].asString(), "cada línea también") }
         assertEquals(sello, registro("turno", cobro.turnoId)["createdAt"].asString(), "y el turno que abrió")
-        lineas.forEach { assertEquals(sello, registro("orden_de_cobro", it["attributes"]["orden"].asString())["updatedAt"].asString(), "y cada orden PAGADA") }
+        // la orden PAGADA es un UPDATE y no un INSERT: desde wasichai 0.5.0 su updated_at lo da el reloj de la sentencia y no el
+        // comienzo de la transacción (ADR-051), así que ya no lleva el sello. se marcó dentro de ella, no antes
+        lineas.forEach {
+            val marcada = Instant.parse(registro("orden_de_cobro", it["attributes"]["orden"].asString())["updatedAt"].asString())
+            assertFalse(marcada.isBefore(Instant.parse(sello)), "y cada orden PAGADA se marcó dentro de ella")
+        }
 
         send("POST", "/api/caja/recibos/${cobro.numero}/anulacion", ANULACION, HttpStatus.CREATED, funcionario("SUPERVISOR_CAJA"))
         val acta = registros("anulacion_recibo", "recibo" to reciboId).single()["createdAt"].asString()

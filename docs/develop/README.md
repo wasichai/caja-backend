@@ -11,7 +11,7 @@ Cómo preparar, iniciar y probar caja-backend en una máquina de desarrollo. La 
 | Docker | cualquiera reciente | PostgreSQL (`compose.yml`) y los tests de integración |
 | Node | >= 26 | solo si también corres el front, `../caja-ui` |
 
-Las librerías de wasichai (`wasichai:wasichai-bom:0.3.2` y sus starters) se resuelven así, en este orden:
+Las librerías de wasichai (`wasichai:wasichai-bom:0.6.0` y sus starters) se resuelven así, en este orden:
 
 1. **GitHub Packages**. Pide un token aunque sea para leer. En `~/.gradle/gradle.properties`:
    ```properties
@@ -20,7 +20,7 @@ Las librerías de wasichai (`wasichai:wasichai-bom:0.3.2` y sus starters) se res
    ```
    También sirven `GITHUB_ACTOR` / `GITHUB_TOKEN`, en `develop/.env` o antepuestas a cada `./gradlew` (con la CLI de
    GitHub: `GITHUB_ACTOR=<usuario> GITHUB_TOKEN=$(gh auth token) ./gradlew build integrationTest --rerun`). El token
-   necesita `read:packages`: **0.3.2 se descarga de GitHub Packages**, y sin él Gradle no resuelve el BOM.
+   necesita `read:packages`: **0.6.0 se descarga de GitHub Packages**, y sin él Gradle no resuelve el BOM.
 2. **mavenLocal**, como respaldo mientras no haya una release publicada. En un checkout de
    [wasichai](https://github.com/wasichai/wasichai):
    ```bash

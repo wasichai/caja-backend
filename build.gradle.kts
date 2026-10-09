@@ -10,7 +10,7 @@ plugins {
 group = "caja"
 description = "caja-backend: caja de cobranzas sobre wasichai (core, views, forms, pages)"
 
-val wasichaiVersion = "0.3.2"
+val wasichaiVersion = "0.6.0"
 
 dependencies {
     implementation(platform("wasichai:wasichai-bom:$wasichaiVersion"))
