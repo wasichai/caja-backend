@@ -20,7 +20,7 @@ import java.time.OffsetDateTime
 import java.util.UUID
 
 // la segunda puerta (caja-backend#20): ningún objeto de caja se escribe por la API genérica de wasichai
-// (POST/PUT/DELETE /api/objects/{objeto}/records), ni con el permiso del rol ni como ADMIN. los diez son apiOnly: 403
+// (POST/PUT/PATCH/DELETE /api/objects/{objeto}/records), ni con el permiso del rol ni como ADMIN. los diez son apiOnly: 403
 // desde wasichai, antes de tocar la base y sin línea WARN de caja. lo que corre dentro del proceso sin la marca de caja
 // lo rechaza GuardiaDeEscrituras, con su WARN. lo que caja escribe por su api pasa (lo prueba también el resto de la
 // suite), y lo que no es de caja (una caja, un área) se sigue escribiendo por esa puerta
@@ -148,6 +148,8 @@ class GuardiaDeEscriturasApiTest : CajaApiTest() {
             val alta = tree(send("POST", ruta, mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN))
             assertTrue(alta["detail"].asString().contains("'$objeto'"), alta.toString())
             send("PUT", "$ruta/$id", mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN)
+            // PATCH llegó con wasichai 0.5.0 (ADR-051): otra puerta de escritura, y la misma regla
+            send("PATCH", "$ruta/$id", mapOf("attributes" to atributos(registro)), HttpStatus.FORBIDDEN)
             send("DELETE", "$ruta/$id", null, HttpStatus.FORBIDDEN)
 
             val tras = tree(send("GET", "$ruta/$id", null, HttpStatus.OK))

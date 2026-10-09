@@ -71,13 +71,12 @@ sealed interface Lectura {
 enum class Marca { ENTREGADO, PENDIENTE, MUERTO }
 
 // el recibo de un evento tal como está guardado, con todo lo que hace falta para volver a componer el cuerpo de su
-// evento con los mismos compositores que la cobranza y la anulación. cada fila lleva su SELLO: el created_at (o, en la
-// orden, el updated_at) que postgres le dio con now(), que es el comienzo de SU transacción
+// evento con los mismos compositores que la cobranza y la anulación. cada fila lleva su SELLO: el created_at que
+// postgres le dio con now(), que es el comienzo de SU transacción
 data class ReciboDelEvento(
     val recibo: Recibo,
     val creadoEn: Instant,
     val lineas: List<LineaDelEvento>,
-    val ordenes: Map<String, OrdenDelEvento>,
     val anulacion: AnulacionDelEvento?,
     val eventos: List<EventoDelRecibo>
 )
@@ -88,11 +87,6 @@ data class LineaDelEvento(
     val referenciaExterna: String?,
     val monto: BigDecimal?,
     val creadoEn: Instant
-)
-
-data class OrdenDelEvento(
-    val actualizadoA: LocalDate?,
-    val actualizadaEn: Instant
 )
 
 data class AnulacionDelEvento(
@@ -227,17 +221,21 @@ fun marcaDe(
 // (GuardiaDeEscrituras, caja-backend#20): esto queda como la segunda línea, frente a quien escribe en la base.
 //
 // EL SELLO DE LA TRANSACCIÓN. postgres da a created_at el valor de now(), que es el comienzo de la transacción: todo lo
-// que escribe UNA transacción de caja lleva el mismo instante (lo prueba BuzonApiTest). la cobranza escribe el recibo,
-// sus líneas, el evento y las órdenes PAGADA en una; la anulación, su acta y el PAGO_ANULADO en otra. una escritura
-// suelta es otra transacción: lo que se escribe por fuera de esas dos lleva otro sello, salvo que quien escribe en la
-// base fije created_at a mano. así que:
+// que INSERTA una transacción de caja lleva el mismo instante (lo prueba BuzonApiTest). la cobranza inserta el recibo,
+// sus líneas y el evento; la anulación, su acta y el PAGO_ANULADO en otra. una escritura suelta es otra transacción: lo
+// que se escribe por fuera de esas dos lleva otro sello, salvo que quien escribe en la base fije created_at a mano. así
+// que:
 // - un PAGO_REGISTRADO tiene el sello de su recibo, y un PAGO_ANULADO el de su anulacion_recibo. si no, es una copia o un
 //   evento forjado, y muere; uno forjado ANTES no le quita el lugar al legítimo, que sigue teniendo su sello;
 // - el cuerpo se compone SOLO con las líneas que llevan el sello del recibo: una línea agregada después no cuenta (ni
 //   mata al evento legítimo, ni hace pasar uno editado para incluirla), y esas líneas suman exactamente el total;
-// - la fecha de cada orden (actualizadoA, que la línea no guarda) sale de la orden SOLO si su updated_at es el sello del
-//   cobro: nadie la tocó desde entonces. si se tocó después (una anulación, un nuevo cobro, un cambio en la base), su
-//   valor de hoy ya no es el del cobro, y se toma el del propio cuerpo del evento para esa orden.
+// - la fecha de cada orden (actualizadoA) NO se contrasta con la orden. la línea no la guarda y la orden la puede cambiar
+//   otro después (una anulación, un cambio en la base): si se leyera de ella, tocar la orden mataría al evento legítimo.
+//   antes de wasichai 0.5.0 se leía solo si el updated_at de la orden era el sello del cobro, es decir, si nadie la
+//   había tocado desde entonces. desde 0.5.0 un UPDATE pone updated_at con el reloj de su sentencia y no con el comienzo
+//   de la transacción (ADR-051 y D36 de wasichai), así que marcar la orden PAGADA ya no le deja el sello del cobro y no
+//   hay cómo saber que nadie la tocó. se toma la del propio cuerpo. es el único campo del cuerpo que no se contrasta
+//   con lo guardado: guardarlo en la línea, congelado como su importe, lo volvería a contrastar
 //
 // con eso, el cuerpo esperado se VUELVE A COMPONER con los MISMOS compositores que la cobranza (cuerpoPagoRegistrado) y
 // la anulación (cuerpoPagoAnulado), con pagoId = el evento_id de la fila y pagoOriginalId = el del PAGO_REGISTRADO con
@@ -288,9 +286,7 @@ fun incoherencia(
                         sistemaOrigen = linea.sistemaOrigen,
                         referenciaExterna = linea.referenciaExterna,
                         importe = linea.monto,
-                        actualizadoA =
-                            recibo.ordenes[orden]?.takeIf { it.actualizadaEn == recibo.creadoEn }?.actualizadoA
-                                ?: actualizadoDelCuerpo(guardado, orden)
+                        actualizadoA = actualizadoDelCuerpo(guardado, orden)
                     )
                 }
             cuerpoPagoRegistrado(UUID.fromString(evento.eventoId), recibo.recibo, ordenes)

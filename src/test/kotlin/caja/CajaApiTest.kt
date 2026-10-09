@@ -245,6 +245,7 @@ abstract class CajaApiTest : WasichaiIntegrationTest() {
                 "GET" -> client.get().uri(path)
                 "DELETE" -> client.delete().uri(path)
                 "PUT" -> client.put().uri(path).bodyValue(body!!)
+                "PATCH" -> client.patch().uri(path).bodyValue(body!!)
                 else -> client.post().uri(path).bodyValue(body!!)
             }
         val result =

@@ -5,7 +5,6 @@ import caja.comun.Candado
 import caja.comun.Candados
 import caja.comun.EscrituraDeCaja
 import caja.comun.LINEA_RECIBO
-import caja.comun.ORDEN_DE_COBRO
 import caja.comun.PAGO_EVENTO
 import caja.comun.RECIBO
 import caja.comun.Records
@@ -14,7 +13,6 @@ import caja.modelo.EVENTO_ENTREGADO
 import caja.modelo.EVENTO_MUERTO
 import caja.modelo.EVENTO_PENDIENTE
 import caja.modelo.LineaRecibo
-import caja.modelo.OrdenDeCobro
 import caja.modelo.PagoEvento
 import caja.modelo.Recibo
 import kotlinx.coroutines.withContext
@@ -25,8 +23,8 @@ import wasichai.core.data.RecordQuery
 import wasichai.core.data.RecordRequest
 import wasichai.core.data.RecordResponse
 import wasichai.core.data.RecordService
-import wasichai.core.metadata.CustomObjectRepository
 import wasichai.core.platform.ClusterLock
+import wasichai.core.platform.TenantDirectory
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -38,27 +36,23 @@ import kotlin.math.min
 // RecordChangeListener. lleva la marca EscrituraDeCaja: sin ella GuardiaDeEscrituras no deja escribir pago_evento, ni a
 // la plataforma
 //
-// CADA MARCA VA EN SU PROPIA TRANSACCIÓN, BAJO EL CANDADO DE SU EVENTO, Y SOLO SI SIGUE COMO SE LEYÓ. core no tiene un
-// update condicional: bajo Candado.PAGO del evento (el mismo que toma ExplicarPagoSinEntregar) se relee, y se escribe
-// solo si sigue PENDIENTE con los intentos leídos. dos publicadores que leyeron el mismo evento cuentan un solo intento,
-// y una marca nunca pisa un evento que ya cambió (uno EXPLICADO, uno que otro entregó). la llamada al destino ocurre
-// entre una lectura y una marca, sin ninguna transacción abierta ni candado tomado (PublicadorDelBuzon)
+// CADA MARCA VA EN SU PROPIA TRANSACCIÓN, BAJO EL CANDADO DE SU EVENTO, Y SOLO SI SIGUE COMO SE LEYÓ. el update
+// condicional de core (expectedUpdatedAt, desde 0.5.0) compara la versión de la fila, y esta marca decide por su estado y
+// sus intentos: no se usa. bajo Candado.PAGO del evento (el mismo que toma ExplicarPagoSinEntregar) se relee, y se
+// escribe solo si sigue PENDIENTE con los intentos leídos. dos publicadores que leyeron el mismo evento cuentan un solo
+// intento, y una marca nunca pisa un evento que ya cambió (uno EXPLICADO, uno que otro entregó). la llamada al destino
+// ocurre entre una lectura y una marca, sin ninguna transacción abierta ni candado tomado (PublicadorDelBuzon)
 @Component
 class BuzonStore(
     private val records: RecordService,
-    private val objetos: CustomObjectRepository,
+    private val tenants: TenantDirectory,
     private val cerrojos: ClusterLock
 ) {
-    // el buzón de cada organización que tiene pago_evento (findAllOrganizations es de la plataforma, sin usuario). una a
-    // la que le falta el resto del modelo de caja ya no se salta en silencio: lo que no puede leer falla en cada vuelta,
-    // la lista de pendientes con un ERROR de su organización y el recibo de un evento como un intento (PublicadorDelBuzon)
-    suspend fun buzones(): List<Buzon> =
-        objetos
-            .findAllOrganizations()
-            .filter { it.name == PAGO_EVENTO }
-            .map { it.organizationId }
-            .distinct()
-            .map(::Buzon)
+    // el buzón de cada organización que tiene pago_evento, por id. las da el TenantDirectory de wasichai (ADR-057): es de
+    // la plataforma, sin usuario, y solo contesta al trabajo de fondo (en una petición lanza). una a la que le falta el
+    // resto del modelo de caja ya no se salta en silencio: lo que no puede leer falla en cada vuelta, la lista de
+    // pendientes con un ERROR de su organización y el recibo de un evento como un intento (PublicadorDelBuzon)
+    suspend fun buzones(): List<Buzon> = tenants.organizationsWithObject(PAGO_EVENTO).map { Buzon(it.id) }
 
     // hasta cuantos eventos PENDIENTE, por orden de creación (el del cobro)
     suspend fun pendientes(
@@ -83,9 +77,9 @@ class BuzonStore(
         }
 
     // el recibo del evento, tal como está, con lo que hace falta para volver a componer el cuerpo de su evento
-    // (incoherencia): el recibo, sus líneas, el actualizado_a de cada orden, su anulación y los eventos de su buzón por
-    // (created_at, id), cada fila con su sello (su created_at, o el updated_at de la orden). cada evento lleva además su
-    // estado: un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (salida). null si no existe
+    // (incoherencia): el recibo, sus líneas, su anulación y los eventos de su buzón por (created_at, id), cada fila con su
+    // sello (su created_at). las órdenes no se leen: la fecha de cada una sale del cuerpo del evento (incoherencia). cada
+    // evento lleva además su estado: un PAGO_ANULADO no sale antes que su PAGO_REGISTRADO (salida). null si no existe
     suspend fun recibo(
         buzon: Buzon,
         reciboId: String?
@@ -101,14 +95,6 @@ class BuzonStore(
                     val linea = Records.read<LineaRecibo>(l.id, l.attributes)
                     LineaDelEvento(linea.orden, linea.sistemaOrigen, linea.referenciaExterna, linea.monto, sello(l.createdAt))
                 }
-            val ordenes =
-                lineas
-                    .mapNotNull { it.orden }
-                    .distinct()
-                    .map(UUID::fromString)
-                    .chunked(PageRequest.MAX_SIZE)
-                    .flatMap { ids -> records.list(ORDEN_DE_COBRO, RecordQuery(PageRequest.of(0, ids.size), ids = ids, count = false)).content }
-                    .associate { o -> o.id to OrdenDelEvento(Records.read<OrdenDeCobro>(o.id, o.attributes).actualizadoA, sello(o.updatedAt)) }
             val anulacion =
                 leer(ANULACION_RECIBO, delRecibo, 1).firstOrNull()?.let { a ->
                     val acta = Records.read<AnulacionRecibo>(a.id, a.attributes)
@@ -119,7 +105,7 @@ class BuzonStore(
                     val evento = Records.read<PagoEvento>(e.id, e.attributes)
                     EventoDelRecibo(UUID.fromString(e.id), evento.eventoId!!, evento.tipo, sello(e.createdAt), evento.estado)
                 }
-            ReciboDelEvento(Records.read<Recibo>(fila.id, fila.attributes), sello(fila.createdAt), lineas, ordenes, anulacion, eventos)
+            ReciboDelEvento(Records.read<Recibo>(fila.id, fila.attributes), sello(fila.createdAt), lineas, anulacion, eventos)
         }
     }
 
@@ -205,7 +191,7 @@ class BuzonStore(
 
     // el sello de una fila: el instante que postgres le dio con now(), el comienzo de su transacción (incoherencia), en
     // microsegundos, como lo guarda
-    private fun sello(instante: Instant?): Instant = checkNotNull(instante) { "una fila sin su created_at/updated_at" }
+    private fun sello(instante: Instant?): Instant = checkNotNull(instante) { "una fila sin su created_at" }
 
     class Buzon(
         val organizacion: UUID
