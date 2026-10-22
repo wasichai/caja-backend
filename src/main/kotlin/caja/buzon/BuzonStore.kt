@@ -109,16 +109,25 @@ class BuzonStore(
         }
     }
 
-    // el evento llegó: ENTREGADO, con su hora y su intento. false si ya no estaba como se leyó (otro lo marcó)
+    // el evento llegó: ENTREGADO, con su hora y su intento, y si el origen lo recibió «a cuenta» (aCuenta: su motivo,
+    // caja-backend#41), la marca y el motivo. false si ya no estaba como se leyó (otro lo marcó)
     suspend fun entregado(
         buzon: Buzon,
         evento: EventoDelBuzon,
-        cuando: OffsetDateTime
+        cuando: OffsetDateTime,
+        aCuenta: String?
     ): Boolean =
         marcar(
             buzon,
             evento,
-            mapOf("estado" to EVENTO_ENTREGADO, "intentos" to evento.intentos + 1, "entregado_en" to cuando.toString(), "ultimo_error" to null),
+            mapOf(
+                "estado" to EVENTO_ENTREGADO,
+                "intentos" to evento.intentos + 1,
+                "entregado_en" to cuando.toString(),
+                "ultimo_error" to null,
+                "a_cuenta" to (aCuenta != null),
+                "motivo_a_cuenta" to aCuenta
+            ),
             RAZON_ENTREGADO
         )
 

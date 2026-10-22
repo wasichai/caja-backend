@@ -533,6 +533,18 @@
           "label": "Explicación",
           "type": "LONG_TEXT",
           "description": "Solo si está EXPLICADO: quien se hizo cargo dice por qué."
+        },
+        {
+          "name": "a_cuenta",
+          "label": "A cuenta",
+          "type": "BOOLEAN",
+          "description": "Solo si está ENTREGADO: el origen contestó 202 con a_cuenta true, porque la deuda ya no estaba vigente (la sustituyó o la anuló) y guardó el pago como saldo a favor del pagador. Lo escribe el publicador."
+        },
+        {
+          "name": "motivo_a_cuenta",
+          "label": "Motivo a cuenta",
+          "type": "TEXT",
+          "description": "Solo si es a cuenta: el motivo que dio el origen, sin credenciales, en una línea y recortado a 400 caracteres."
         }
       ]
     },

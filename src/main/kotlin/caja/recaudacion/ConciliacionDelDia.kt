@@ -84,6 +84,8 @@ class ConciliacionDelDia(
             aplicados = aplicado?.aplicados,
             rechazados = aplicado?.rechazados,
             importeAplicado = aplicado?.let { Importe.de(it.importeAplicado, dia) },
+            recibidosACuenta = aplicado?.recibidosACuenta,
+            importeACuenta = aplicado?.let { Importe.de(it.importeACuenta, dia) },
             diferencia = linea.diferencia?.let { Importe.de(it, dia) },
             porQueNoSeSabe = linea.porQueNoSeSabe,
             cuadra = linea.cuadra()

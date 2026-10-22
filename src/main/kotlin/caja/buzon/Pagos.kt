@@ -1,8 +1,12 @@
 package caja.buzon
 
+import caja.comun.Importe
 import caja.comun.enLima
 import caja.modelo.PagoEvento
+import caja.modelo.Recibo
 import wasichai.core.common.ValidationException
+import java.time.LocalDate
+import java.time.format.DateTimeParseException
 import java.util.UUID
 
 // las reglas de la pantalla de los pagos sin entregar (PagoController y ExplicarPagoSinEntregar de caja)
@@ -45,4 +49,34 @@ fun pagoDelBuzon(
         creadoEn = evento.createdAt?.let(::enLima),
         entregadoEn = evento.entregadoEn?.let(::enLima),
         explicacion = evento.explicacion
+    )
+
+// el día de los pagos a cuenta: obligatorio, como el de la conciliación (fechaDeLaConciliacion, que vive en recaudacion:
+// buzon no la importa, porque recaudacion importa a buzon). sin él habría que elegir uno, y la hoja de cierre de ayer
+// no se podría volver a leer
+fun fechaDeLosPagosACuenta(valor: String?): LocalDate {
+    val texto =
+        valor?.trim()?.ifEmpty { null }
+            ?: throw ValidationException("Falta la fecha", "fecha", "los pagos a cuenta son de un día: fecha=AAAA-MM-DD, obligatoria")
+    return try {
+        LocalDate.parse(texto)
+    } catch (_: DateTimeParseException) {
+        throw ValidationException("Fecha inválida", "fecha", "una fecha AAAA-MM-DD")
+    }
+}
+
+// un pago a cuenta como sale por la api, con el número y el total de su recibo, este a la fecha del turno
+fun pagoACuenta(
+    evento: PagoEvento,
+    recibo: Recibo?,
+    dia: LocalDate
+): PagoACuenta =
+    PagoACuenta(
+        pagoId = evento.eventoId!!,
+        tipo = evento.tipo!!,
+        recibo = recibo?.numeroImpreso,
+        sistemaDestino = evento.sistemaDestino!!,
+        total = recibo?.total?.let { Importe.de(it, dia) },
+        motivoACuenta = evento.motivoACuenta,
+        entregadoEn = evento.entregadoEn?.let(::enLima)
     )

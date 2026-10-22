@@ -164,6 +164,42 @@ class RecaudacionApiTest : CajaApiTest() {
         assertFalse(rechazo["cuadra"].asBoolean())
     }
 
+    // el pago «a cuenta» (caja-backend#41): lo que el origen recibió como saldo a favor, porque la deuda ya no estaba
+    // vigente, se cuenta aparte y se resta del neto. sin rechazos, la línea cuadra
+    @Test
+    fun `la linea de rentas trae recibidos_a_cuenta e importe_a_cuenta`() {
+        val (conACuenta, sinLosCampos) = diasNuevos(2)
+        val caja = nuevaCaja()
+        val cajero = cuenta("CAJERO")
+        listOf(conACuenta, sinLosCampos).forEach { dia ->
+            enElDia(dia)
+            entregar(cobrarOrden(caja, cajero, OK, "100.00").pagoId)
+            entregar(cobrarOrden(caja, cajero, OK, "25.50").pagoId)
+        }
+        origen.conciliar(
+            conACuenta,
+            200,
+            """{"fecha":"$conACuenta","recibidos":2,"aplicados":1,"rechazados":0,"importe_aplicado":"100.00",""" +
+                """"recibidos_a_cuenta":1,"importe_a_cuenta":"25.50"}"""
+        )
+        origen.conciliar(sinLosCampos, 2, 2, 0, "125.50")
+
+        val conciliacion = conciliacion(conACuenta)
+        val linea = conciliacion["lineas"].single()
+        assertEquals(1, linea["recibidos_a_cuenta"].asInt())
+        assertEquals("25.50", cifra(linea["importe_a_cuenta"], conACuenta))
+        assertEquals("100.00", cifra(linea["importe_aplicado"], conACuenta))
+        assertEquals("0.00", cifra(linea["diferencia"], conACuenta))
+        assertTrue(linea["cuadra"].asBoolean(), linea.toString())
+        assertTrue(conciliacion["cuadra"].asBoolean())
+
+        // un origen que no dice nada de pagos a cuenta: ceros de verdad, porque contestó
+        val vieja = conciliacion(sinLosCampos)["lineas"].single()
+        assertEquals(0, vieja["recibidos_a_cuenta"].asInt())
+        assertEquals("0.00", cifra(vieja["importe_a_cuenta"], sinLosCampos))
+        assertTrue(vieja["cuadra"].asBoolean(), vieja.toString())
+    }
+
     @Test
     fun `un pago todavia en transito impide que el dia cuadre`() {
         val dia = diasNuevos(1).single()
@@ -718,7 +754,7 @@ class RecaudacionApiTest : CajaApiTest() {
         const val TOKEN_SISTEMA = "conc-token"
         const val LENTO = "conc-lento"
         const val TOKEN = "el-token-de-la-conciliacion"
-        val CAMPOS_DEL_ORIGEN = listOf("recibidos", "aplicados", "rechazados", "importe_aplicado", "diferencia")
+        val CAMPOS_DEL_ORIGEN = listOf("recibidos", "aplicados", "rechazados", "importe_aplicado", "recibidos_a_cuenta", "importe_a_cuenta", "diferencia")
         val ANULACION = mapOf("motivo" to "COBRO EN DEMASÍA", "observacion" to "el pagador pagó dos veces en ventanilla")
 
         val reloj = TurnoApiTest.RelojMovible()

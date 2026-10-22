@@ -40,7 +40,11 @@ private val JSON: JsonMapper = JsonMapper.builder().build()
 // del lado del despliegue y se reintenta; RECHAZADO no va a cambiar solo y no se reintenta: confundirlos gasta los
 // intentos de un rechazo, o mata por una credencial un pago que se habría entregado
 sealed interface Respuesta {
-    data object Entregado : Respuesta
+    // aCuenta: el motivo, si el origen recibió el pago «a cuenta» (un 202 que lo dice, caja-backend#41), o null. no
+    // cambia la entrega: solo la anota, para la hoja de cierre y la conciliación
+    data class Entregado(
+        val aCuenta: String? = null
+    ) : Respuesta
 
     data class NoContesta(
         val motivo: String
@@ -122,7 +126,9 @@ sealed interface Salida {
 // la respuesta del destino a POST {url}/pagos (ClienteHttpDelSistemaDeOrigen.publicar de caja). el 409 es «ya lo
 // tengo»: el receptor deduplicó por pagoId, y es un éxito. 401 y 403 hablan de quien llama, no del pago: se reintentan,
 // y cada uno dice dónde se arregla. el resto de los 4xx es un rechazo del pago. un 5xx, o cualquier otra cosa, no
-// contesta. la clasificación mira el código, nunca el cuerpo: el cuerpo lo escribe el otro sistema
+// contesta. EL CÓDIGO DECIDE LA ENTREGA, nunca el cuerpo: el cuerpo lo escribe el otro sistema. lo único que se lee del
+// cuerpo es el de un 202, y solo para ANOTAR el pago «a cuenta» (aCuentaDe): un 202 es ENTREGADO diga lo que diga, y
+// uno ilegible es un ENTREGADO sin anotar
 fun clasificar(
     sistema: String,
     estado: Int,
@@ -131,12 +137,46 @@ fun clasificar(
 ): Respuesta {
     val contesto = contestado(cuerpo, token)
     return when {
-        estado == 200 || estado == 201 || estado == 202 || estado == 409 -> Respuesta.Entregado
+        estado == 202 -> Respuesta.Entregado(aCuentaDe(cuerpo, token))
+        estado == 200 || estado == 201 || estado == 409 -> Respuesta.Entregado()
         estado == 401 || estado == 403 -> Respuesta.NoContesta(deCredencial(sistema, estado, token, contesto))
         estado in 400..499 ->
             Respuesta.Rechazado("«$sistema» rechazó el pago con $estado. Esto NO se reintenta: el motivo no va a cambiar solo. Contestó $contesto")
         else -> Respuesta.NoContesta("«$sistema» contestó $estado al publicar el pago: se reintenta. Contestó $contesto")
     }
+}
+
+// lo que se guarda cuando el origen dice «a cuenta» y no dice por qué: la marca no se pierde por un motivo que falta
+const val SIN_MOTIVO_A_CUENTA = "el origen no dijo por qué"
+
+// el pago «a cuenta» (caja-backend#41): el motivo, si el cuerpo de un 202 es {"a_cuenta": true, "motivo": "…"}, o null.
+// el origen lo contesta cuando la deuda ya no estaba vigente (la sustituyó o la anuló) y guardó el pago como saldo a favor
+// del pagador. a_cuenta tiene que ser el booleano true: «"true"» o un cuerpo que no se entiende no anotan nada. el motivo
+// lo escribió el otro sistema y acaba en una columna que lee el cajero: va tachado, en una línea (sin caracteres de
+// control) y recortado como ultimo_error
+fun aCuentaDe(
+    cuerpo: String?,
+    token: String?
+): String? {
+    val json =
+        try {
+            JSON.readTree(cuerpo.orEmpty())
+        } catch (_: JacksonException) {
+            null
+        }
+    if (json == null || !json.isObject) return null
+    val marca = json["a_cuenta"]
+    if (marca == null || !marca.isBoolean || !marca.asBoolean()) return null
+    val motivo =
+        json["motivo"]
+            ?.takeIf { it.isString }
+            ?.asString()
+            ?.let { tachar(it, token) }
+            ?.replace(Regex("[\\p{Cntrl}\\s]+"), " ")
+            ?.trim()
+            ?.ifEmpty { null }
+            ?: SIN_MOTIVO_A_CUENTA
+    return recortar(motivo)
 }
 
 // no hay a dónde llamar: no es que no conteste, es que no se sabe dónde está. se reintenta, porque se arregla poniendo
@@ -210,7 +250,7 @@ fun marcaDe(
     maximos: Int
 ): Marca =
     when (respuesta) {
-        Respuesta.Entregado -> Marca.ENTREGADO
+        is Respuesta.Entregado -> Marca.ENTREGADO
         is Respuesta.Rechazado -> Marca.MUERTO
         is Respuesta.NoContesta -> if (intentosLeidos + 1 >= maximos) Marca.MUERTO else Marca.PENDIENTE
     }

@@ -4,6 +4,7 @@ import caja.comun.Importe
 import caja.turno.ArqueoRespuesta
 import caja.turno.EstadoDelTurno
 import caja.turno.ReciboRotoRespuesta
+import com.fasterxml.jackson.annotation.JsonProperty
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 import java.math.BigDecimal
@@ -106,7 +107,7 @@ data class ConciliacionRespuesta(
 )
 
 // lo que sale del buzón (los contadores y las cifras de los recibos) y lo que sale del origen (recibidos, aplicados,
-// rechazados, importe_aplicado) con la diferencia. si el origen no contestó, lo suyo y la diferencia van en NULL y
+// rechazados, importe_aplicado, recibidos_a_cuenta e importe_a_cuenta) con la diferencia. si el origen no contestó, lo suyo y la diferencia van en NULL y
 // por_que_no_se_sabe dice por qué: nunca ceros
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class LineaDeConciliacionRespuesta(
@@ -123,6 +124,12 @@ data class LineaDeConciliacionRespuesta(
     val aplicados: Long?,
     val rechazados: Long?,
     val importeAplicado: Importe?,
+    // lo que el origen recibió «a cuenta» (caja-backend#41). el nombre va escrito: el SnakeCase de jackson no separa
+    // dos mayúsculas seguidas, y «ACuenta» saldría «acuenta»
+    @param:JsonProperty("recibidos_a_cuenta")
+    val recibidosACuenta: Long?,
+    @param:JsonProperty("importe_a_cuenta")
+    val importeACuenta: Importe?,
     val diferencia: Importe?,
     val porQueNoSeSabe: String?,
     val cuadra: Boolean

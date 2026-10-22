@@ -145,8 +145,10 @@ class ShippedModelTests(unittest.TestCase):
         fields = self.fields("pago_evento")
         self.assertEqual({n: f["type"] for n, f in fields.items()}, {
             "evento_id": "UUID", "tipo": "ENUM", "sistema_destino": "TEXT", "cuerpo": "LONG_TEXT", "estado": "ENUM",
-            "intentos": "INTEGER", "ultimo_error": "TEXT", "entregado_en": "DATETIME", "explicacion": "LONG_TEXT"})
-        self.assertEqual({n for n, f in fields.items() if not f.get("required")}, {"ultimo_error", "entregado_en", "explicacion"})
+            "intentos": "INTEGER", "ultimo_error": "TEXT", "entregado_en": "DATETIME", "explicacion": "LONG_TEXT",
+            "a_cuenta": "BOOLEAN", "motivo_a_cuenta": "TEXT"})
+        self.assertEqual({n for n, f in fields.items() if not f.get("required")},
+                         {"ultimo_error", "entregado_en", "explicacion", "a_cuenta", "motivo_a_cuenta"})
         self.assertEqual([n for n, f in fields.items() if f.get("unique")], ["evento_id"])
         self.assertEqual((fields["tipo"]["enum"], fields["estado"]["enum"]), ("tipo_evento_pago", "estado_evento"))
         rels = self.relationships()
