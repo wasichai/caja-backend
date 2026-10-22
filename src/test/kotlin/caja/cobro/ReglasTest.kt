@@ -36,6 +36,15 @@ class ReglasTest {
     }
 
     @Test
+    fun `sustituye_a es opcional, opaca como la referencia y nunca la propia`() {
+        assertNull(sustituyeA(null, "ARB-1|2"))
+        assertNull(sustituyeA("  ", "ARB-1|2"))
+        assertEquals("ARB-1|1", sustituyeA(" ARB-1|1 ", "ARB-1|2"))
+        assertEquals("sustituye_a", rechazado { sustituyeA("ARB-1|2", "ARB-1|2") })
+        assertEquals("sustituye_a", rechazado { sustituyeA("x".repeat(121), "ARB-1|2") })
+    }
+
+    @Test
     fun `el concepto no puede faltar y el detalle si`() {
         assertEquals("IMPUESTO PREDIAL", concepto(" IMPUESTO PREDIAL "))
         assertEquals("concepto", rechazado { concepto(" ") })

@@ -43,6 +43,19 @@ fun sistemaOrigen(valor: String?): String {
 // opaca: no se analiza, no se compara por partes y no se ordena. solo se recorta
 fun referenciaExterna(valor: String?): String = texto(valor, "referencia_externa", LARGO_REFERENCIA)
 
+// la referencia, del mismo sistema, de la orden que esta reemplaza (caja-backend#40): opcional, opaca y con el largo de
+// la propia. no puede ser la propia: una orden que se sustituye a sí misma se retiraría al nacer
+fun sustituyeA(
+    valor: String?,
+    referencia: String?
+): String? {
+    val vieja = opcional(valor, "sustituye_a", LARGO_REFERENCIA) ?: return null
+    if (vieja == referencia) {
+        throw ValidationException("Una orden no se sustituye a sí misma", "sustituye_a", "la referencia de la orden que reemplaza, no la suya")
+    }
+    return vieja
+}
+
 fun concepto(valor: String?): String = texto(valor, "concepto", LARGO_CONCEPTO)
 
 fun detalle(valor: String?): String? = opcional(valor, "detalle", LARGO_DETALLE)

@@ -96,10 +96,11 @@ class ShippedModelTests(unittest.TestCase):
             "sistema_origen": "TEXT", "referencia_externa": "TEXT", "concepto": "TEXT",
             "detalle": "TEXT", "importe": "DECIMAL", "fecha_exigibilidad": "DATE", "actualizado_a": "DATE",
             "pagador_documento": "TEXT", "pagador_nombre": "TEXT", "pagador_externo_id": "INTEGER", "estado": "ENUM",
-            "observacion": "LONG_TEXT", "motivo_retiro": "TEXT", "retirada_en": "DATETIME"})
+            "observacion": "LONG_TEXT", "motivo_retiro": "TEXT", "retirada_en": "DATETIME", "sustituye_a": "TEXT",
+            "sustituida_por": "TEXT"})
         self.assertEqual({n for n, f in fields.items() if not f.get("required")},
                          {"detalle", "pagador_documento", "pagador_nombre", "pagador_externo_id", "motivo_retiro",
-                          "retirada_en"})
+                          "retirada_en", "sustituye_a", "sustituida_por"})
         self.assertEqual(fields["estado"]["enum"], "estado_orden")
 
     def relationships(self):

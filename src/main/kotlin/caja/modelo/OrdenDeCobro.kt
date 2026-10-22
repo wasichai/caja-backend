@@ -7,7 +7,9 @@ import java.time.Instant
 import java.time.LocalDate
 
 // la orden de cobro, lo único que la caja sabe cobrar, y estado_orden: PENDIENTE al nacer, PAGADA con el recibo que
-// la cobró, ANULADA si su sistema de origen la retiró (con su motivo y su fecha)
+// la cobró, ANULADA si su sistema de origen la retiró (con su motivo y su fecha). una versión nueva de la misma deuda
+// nombra la que reemplaza (sustituye_a), y la reemplazada, anulada, nombra a la nueva (sustituida_por): las dos son
+// referencias del mismo sistema, en texto, no relaciones
 
 const val PENDIENTE = "PENDIENTE"
 const val PAGADA = "PAGADA"
@@ -32,7 +34,9 @@ data class OrdenDeCobro(
     val observacion: String? = null,
     val recibo: String? = null,
     val motivoRetiro: String? = null,
-    val retiradaEn: Instant? = null
+    val retiradaEn: Instant? = null,
+    val sustituyeA: String? = null,
+    val sustituidaPor: String? = null
 ) {
     // OrdenDeCobro.cobrableA de caja: pendiente y ya exigible a la fecha de pago
     fun cobrableA(fecha: LocalDate): Boolean = estado == PENDIENTE && fechaExigibilidad != null && !fecha.isBefore(fechaExigibilidad)

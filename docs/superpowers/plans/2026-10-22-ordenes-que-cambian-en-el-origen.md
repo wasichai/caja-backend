@@ -36,7 +36,9 @@ Revisé srtm-backend en main `b940b50`. Esto cambia o precisa lo que piden los i
 **Decisiones que se apartan del texto de los issues:**
 1. **#39, el cobro de una orden ANULADA:** responde **422**, una clase nueva `OrdenRetirada`. La PAGADA y la no exigible siguen en 409.
    - La **vista previa** sigue respondiendo 200 con `cobrable:false` y el motivo, como documenta el README (742-751, «no es un error»). La UI distingue el caso por `estado` al volver a leer (caja-ui #27).
-2. **#39, quién escribe el retiro:** caja lo escribe **como plataforma** (con `EscrituraDeCaja`, como `BuzonStore.marcar`), después de comprobar que el sistema de la cuenta de servicio es el de la orden. No se agrega UPDATE a `SISTEMA_ORIGEN`: con UPDATE podría cambiar el importe por la API genérica.
+2. **#39, quién escribe el retiro:** caja lo escribe **como quien llama**, por `Registros` y con `EscrituraDeCaja`, después de comprobar que el sistema de la cuenta de servicio es el de la orden. Por eso `SISTEMA_ORIGEN` tiene UPDATE sobre `orden_de_cobro` (`roles.json`).
+   - El plan decía escribir como plataforma, como `BuzonStore.marcar`. No se puede: `asPlatform` de wasichai rechaza una escritura dentro de una petición, y el buzón escribe fuera de ellas.
+   - El UPDATE no abre otra puerta: `orden_de_cobro` es `apiOnly`, y `GuardiaDeEscrituras` rechaza cualquier escritura sin la marca `EscrituraDeCaja`, así que la API genérica no cambia el importe. La sustitución (#40) escribe `sustituida_por` de la misma forma.
 3. **#40, `sustituye_a`:** se guarda como texto, la `referencia_externa` de la orden sustituida del mismo sistema, no como relación. Es lo que la UI muestra («reemplaza a …»), y no hace falta navegar.
 4. **#41, el cuerpo del 202:** la entrega sigue decidiéndose solo por el código (`Entrega.kt:121-124`, «nunca el cuerpo»). Un 202 siempre es ENTREGADO. El cuerpo solo **anota** `a_cuenta` y el motivo, saneado con `tachar`/`recortar`. Un cuerpo ilegible es un ENTREGADO sin anotar.
 5. **#42, la configuración:** va en `caja.buzon.destinos.<sistema>.verificar` y `.sin-respuesta`, el mismo destino del buzón, en vez de un `caja.origenes.*` nuevo. El cliente HTTP queda en `buzon`, y `cobro` declara el puerto (`VigenciaEnElOrigen`), para que `DependenciasEntrePaquetesTest` no vea un ciclo.
@@ -85,7 +87,7 @@ Revisé srtm-backend en main `b940b50`. Esto cambia o precisa lo que piden los i
 - Produces:
   - `suspend fun OrdenesService.retirar(body: RetiroDeOrden): OrdenRespuesta`;
   - `class OrdenRetirada(orden: OrdenDeCobro) : WasichaiException(HttpStatus.UNPROCESSABLE_CONTENT, …)` en `Cobranza.kt`;
-  - `internal suspend fun OrdenesService.retirarBajoCandado(orden: OrdenDeCobro, motivo: String, ahora: OffsetDateTime): OrdenDeCobro`. Toma el candado ORDEN, relee la orden y escribe ANULADA como plataforma. La reutilizan el Task 2 y el Task 4.
+  - `internal suspend fun OrdenesService.retirarBajoCandado(orden: OrdenDeCobro, motivo: String, ahora: OffsetDateTime): OrdenDeCobro`. Toma el candado ORDEN, relee la orden y escribe ANULADA como quien llama. La reutilizan el Task 2 y el Task 4.
   - `fun motivoDeRetiro(valor: String?): String` en `Retiro.kt`: hace `trim`, es obligatorio, de 1 a 200 caracteres sin caracteres de control, y si no cumple da 400 en `motivo`.
 
 - [ ] **Step 1: Write the failing tests** in `RetiroApiTest : CajaApiTest`. Cada caso da de alta su orden con `cuentaDeServicio("rentas")`:
@@ -124,7 +126,7 @@ Revisé srtm-backend en main `b940b50`. Esto cambia o precisa lo que piden los i
     - PENDIENTE → ANULADA, con `motivo_retiro`, `retirada_en = now(reloj)` y la razón constante `"retiro de la orden por su sistema de origen"`;
     - ANULADA → la devuelve tal cual;
     - PAGADA → `ConflictException("La orden … ya se cobró con el recibo {serie-numero}: el sistema de origen la imputa cuando reciba el pago")`.
-  - **La escritura** va como plataforma con `EscrituraDeCaja`, igual que `BuzonStore.marcar`.
+  - **La escritura** va como quien llama, con `EscrituraDeCaja` (ver «Decisiones», 2).
   - **`impedimentosDelCobro`:** una ANULADA da `OrdenRetirada`. El resto no cambia.
 
 - [ ] **Step 4: Run** los dos comandos del Step 2, y además `./gradlew build` y `cd model && python3 -m unittest -v`. Expected: PASS.
