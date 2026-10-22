@@ -22,3 +22,12 @@ fun motivoDeRetiro(valor: String?): String {
     }
     return motivo
 }
+
+// la razón de la escritura que anota sustituida_por en la orden reemplazada (caja-backend#40): un texto fijo, como la
+// del retiro
+const val RAZON_SUSTITUCION = "sustitución de la orden por una versión nueva de su sistema de origen"
+
+// el motivo del retiro de la orden que una versión nueva reemplaza: «Sustituida por {nueva}». la referencia es opaca y
+// puede traer caracteres de control, que motivo_retiro no admite (es una línea del 422 del cobro): se quitan. cabe en
+// los 200: la referencia es de 120 a lo sumo
+fun motivoDeSustitucion(nueva: String): String = "Sustituida por " + nueva.filterNot(Char::isISOControl)

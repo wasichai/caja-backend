@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import java.math.BigDecimal
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -25,11 +26,50 @@ class OrdenesApiTest : CajaApiTest() {
         assertEquals(cuerpo["referencia_externa"], alta["referencia_externa"].asString())
         assertEquals(1234L, alta["pagador_externo_id"].asLong())
 
-        // el reintento devuelve la que ya estaba, como estaba: la caja no la rehace con lo que traiga
-        val reintento = tree(send("POST", ORDENES, cuerpo + ("importe" to "999.00"), HttpStatus.OK))
+        // el reintento devuelve la que ya estaba, como estaba
+        val reintento = tree(send("POST", ORDENES, cuerpo, HttpStatus.OK))
         assertEquals(alta["orden_id"].asString(), reintento["orden_id"].asString())
         assertEquals(false, reintento["nueva"].asBoolean())
         assertEquals("150.50", reintento["importe"]["importe"].asString())
+    }
+
+    @Test
+    fun `la misma referencia con otro importe es 409 y la orden no cambia`() {
+        val cuerpo = orden()
+        val alta = post(ORDENES, cuerpo)
+
+        val problema = tree(send("POST", ORDENES, cuerpo + ("importe" to "999.00"), HttpStatus.CONFLICT))
+
+        assertTrue(problema["detail"].asString().contains("importe"), problema.toString())
+        assertTrue(problema["detail"].asString().contains(cuerpo["referencia_externa"] as String), problema.toString())
+        val guardada = tree(send("GET", "/api/objects/orden_de_cobro/records/${alta["orden_id"].asString()}", null, HttpStatus.OK))["attributes"]
+        assertEquals(0, guardada["importe"].decimalValue().compareTo(BigDecimal("150.50")), guardada.toString())
+        // otra fecha de exigibilidad u otro pagador también chocan, y el detail nombra cada campo
+        val varios =
+            tree(send("POST", ORDENES, cuerpo + ("fecha_exigibilidad" to "2026-05-31") + ("pagador_documento" to "X1"), HttpStatus.CONFLICT))
+        assertTrue(varios["detail"].asString().contains("fecha_exigibilidad"), varios.toString())
+        assertTrue(varios["detail"].asString().contains("pagador_documento"), varios.toString())
+    }
+
+    @Test
+    fun `la misma referencia con los mismos datos es 200 nueva false`() {
+        val cuerpo = orden()
+        val alta = post(ORDENES, cuerpo)
+        // el importe escrito de otra forma y el documento en minúsculas son la misma deuda
+        val mismo = cuerpo + ("importe" to "150.5") + ("pagador_documento" to (cuerpo["pagador_documento"] as String).lowercase())
+        val reintento = tree(send("POST", ORDENES, mismo, HttpStatus.OK))
+        assertEquals(alta["orden_id"].asString(), reintento["orden_id"].asString())
+        assertEquals(false, reintento["nueva"].asBoolean())
+    }
+
+    @Test
+    fun `la misma referencia con otro actualizado_a es 200`() {
+        val cuerpo = orden()
+        val alta = post(ORDENES, cuerpo)
+        // srtm no tiene intereses: la cifra es la misma y solo cambió la fecha a la que la dice. la que ya estaba manda
+        val reintento = tree(send("POST", ORDENES, cuerpo + ("actualizado_a" to "2026-10-22"), HttpStatus.OK))
+        assertEquals(alta["orden_id"].asString(), reintento["orden_id"].asString())
+        assertEquals("2026-03-15", reintento["importe"]["actualizado_a"].asString())
     }
 
     @Test

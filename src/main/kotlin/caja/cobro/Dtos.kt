@@ -26,7 +26,8 @@ class NuevaOrden(
     val pagadorDocumento: String? = null,
     val pagadorNombre: String? = null,
     val pagadorExternoId: String? = null,
-    val observacion: String? = null
+    val observacion: String? = null,
+    val sustituyeA: String? = null
 ) : CuerpoEstricto()
 
 // lo que manda el sistema de origen para retirar una orden: la referencia en el cuerpo, nunca en la ruta (una referencia
@@ -39,8 +40,9 @@ class RetiroDeOrden(
     val sistemaOrigen: String? = null
 ) : CuerpoEstricto()
 
-// una orden como sale por la api: el importe con su fecha (regla 9). motivo_retiro y retirada_en, solo en una ANULADA. nueva solo en el alta: true si se creó ahora,
-// false si ya estaba. va en el cuerpo además de en el código (201 o 200), para quien solo mire el cuerpo
+// una orden como sale por la api: el importe con su fecha (regla 9). motivo_retiro y retirada_en, solo en una ANULADA;
+// sustituye_a, en la que reemplazó a otra, y sustituida_por, en la ANULADA que reemplazaron. nueva solo en el alta: true
+// si se creó ahora, false si ya estaba. va en el cuerpo además de en el código (201 o 200), para quien solo mire el cuerpo
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class OrdenRespuesta(
     val ordenId: String,
@@ -57,6 +59,8 @@ data class OrdenRespuesta(
     val observacion: String?,
     val motivoRetiro: String?,
     val retiradaEn: String?,
+    val sustituyeA: String?,
+    val sustituidaPor: String?,
     @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val nueva: Boolean? = null
 ) {
@@ -79,6 +83,8 @@ data class OrdenRespuesta(
             observacion = orden.observacion,
             motivoRetiro = orden.motivoRetiro,
             retiradaEn = orden.retiradaEn?.let(::enLima),
+            sustituyeA = orden.sustituyeA,
+            sustituidaPor = orden.sustituidaPor,
             nueva = nueva
         )
     }

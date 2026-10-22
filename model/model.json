@@ -426,6 +426,18 @@
           "label": "Retirada en",
           "type": "DATETIME",
           "description": "Cuándo la retiró su sistema de origen. Solo en una ANULADA; un segundo retiro no la cambia."
+        },
+        {
+          "name": "sustituye_a",
+          "label": "Sustituye a",
+          "type": "TEXT",
+          "description": "La referencia_externa, del mismo sistema, de la orden que esta reemplaza (una versión nueva de la misma deuda), hasta 120 caracteres. Se escribe en el alta y no cambia."
+        },
+        {
+          "name": "sustituida_por",
+          "label": "Sustituida por",
+          "type": "TEXT",
+          "description": "La referencia_externa, del mismo sistema, de la orden que la reemplazó. Solo en una ANULADA: la sustitución la retira y la anota en el mismo paso."
         }
       ]
     },

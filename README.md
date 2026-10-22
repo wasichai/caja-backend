@@ -240,6 +240,8 @@ mirar su importe.
 | `observacion`        | LONG_TEXT | Por qué se dio de alta (regla 10): de 5 a 500 caracteres. Obligatoria.                              | `orden_de_cobro.observacion`          |
 | `motivo_retiro`      | TEXT      | Por qué la retiró su sistema de origen, de 1 a 200, en una línea. Solo en una `ANULADA`.            | —                                     |
 | `retirada_en`        | DATETIME  | Cuándo la retiró. Solo en una `ANULADA`; un segundo retiro no la cambia.                            | —                                     |
+| `sustituye_a`        | TEXT      | La `referencia_externa`, del mismo sistema, de la orden que esta reemplaza, hasta 120 (ver «La sustitución»). | —                         |
+| `sustituida_por`     | TEXT      | La `referencia_externa` de la orden que la reemplazó. Solo en una `ANULADA`.                         | —                                     |
 | `recibo`             | relación  | El recibo que la cobró (`orden_recibo`, opcional). Una orden `PAGADA` lo nombra.                    | `orden_de_cobro.recibo_id` (`orden_recibo_ck`) |
 
 Los largos son de las columnas de `caja`: wasichai guarda TEXT sin largo, así que los comprueba el alta. `creada_en` es
@@ -405,7 +407,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 
 | Ruta                               | Qué hace                                                                                  | Permiso que exige                       |
 | ---------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
-| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba.     | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
+| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba con la misma deuda, **409** si ya estaba con otra (ver «El alta que choca»). Con `sustituye_a`, reemplaza otra orden (ver «La sustitución»): **201**, **200** en el reenvío, **409** si la vieja está `PAGADA` o ya la sustituyó otra, **404** si no existe. | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
 | `POST /api/caja/ordenes-de-cobro/retiro` | El sistema de origen retira una orden `PENDIENTE` (ver «El retiro»): **200** con la orden `ANULADA`, también si ya lo estaba; **409** si está `PAGADA`; **404** si no hay una de su sistema con esa referencia. | una cuenta de servicio (o un `ADMIN` que nombra el sistema), con READ y UPDATE sobre `orden_de_cobro` |
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
@@ -458,12 +460,62 @@ da de alta fija el `sistema_origen` de la orden:
 - **cualquier otra persona**, aunque tenga el rol `SISTEMA_ORIGEN` o permiso de CREATE: 403.
 
 El alta recibe `sistema_origen`, `referencia_externa`, `concepto`, `detalle`, `importe`, `fecha_exigibilidad`,
-`actualizado_a`, `pagador_documento`, `pagador_nombre`, `pagador_externo_id` y `observacion`. **Una propiedad que no
+`actualizado_a`, `pagador_documento`, `pagador_nombre`, `pagador_externo_id`, `observacion` y, opcional, `sustituye_a`
+(ver «La sustitución»). **Una propiedad que no
 sea una de ésas es un 400 que la nombra** (`tributo`, `ejercicio`…). El importe va en cadena, de hasta 13 enteros y 2
 decimales (`numeric(15,2)` de `caja`); `pagador_externo_id`, en cadena o en número, es un entero mayor que 0 (si no, 400
 en `pagador_externo_id`). La respuesta lleva `orden_id`, los campos (con `actualizado_a` dentro de `importe`), el
-`estado` y `nueva` (`true` en el 201, `false` en el 200), y `motivo_retiro` y `retirada_en` (`null` salvo en una
-`ANULADA`).
+`estado` y `nueva` (`true` en el 201, `false` en el 200), `motivo_retiro` y `retirada_en` (`null` salvo en una
+`ANULADA`), y `sustituye_a` y `sustituida_por` (`null` salvo en una sustitución).
+
+**El alta que choca** (caja-backend#40). El reenvío del alta es idempotente **si pide lo mismo**. Si la orden que ya
+estaba con esa referencia es otra deuda, responde **409** y no la cambia: el `detail` nombra los campos que difieren.
+Se comparan los que son la deuda (`Choque.kt`):
+
+- `importe`, con `compareTo`: `"100.0"` y `"100.00"` son el mismo;
+- `fecha_exigibilidad`;
+- `pagador_documento`, en mayúsculas: `"10203040a"` y `"10203040A"` son el mismo.
+
+**`actualizado_a` no se compara**: el origen no tiene intereses, así que la cifra no cambia con la fecha a la que se
+dice, y el reenvío con otra fecha es 200 con la orden como estaba. Tampoco el concepto, el detalle, el nombre ni el id
+externo del pagador, que se imprimen pero no cambian lo que se cobra. Un 200 con la orden vieja le haría creer al origen
+que caja cobrará lo que acaba de mandar: por eso el 409.
+
+**La sustitución** (caja-backend#40). Un origen que redetermina una deuda manda la versión nueva con **otra
+referencia** y nombra la vieja en `sustituye_a`, **aunque el importe sea el mismo**:
+
+```
+POST /api/caja/ordenes-de-cobro   {"referencia_externa": "ARB-p1|LIMP|2026|3|1|2", "sustituye_a": "ARB-p1|LIMP|2026|3|1|1", "importe": "48.20", …}
+```
+
+En una sola transacción, bajo el candado `ORDEN` de la vieja (el mismo del cobro y del retiro), caja relee la vieja y:
+
+- si está `PENDIENTE`, la retira: queda `ANULADA` con el motivo «Sustituida por ARB-p1|LIMP|2026|3|1|2»;
+- si ya está `ANULADA` sin sustituta (el origen la retiró antes), deja su motivo;
+- crea la nueva, `PENDIENTE`, con `sustituye_a`, y anota en la vieja `sustituida_por` (con la razón fija «sustitución de
+  la orden por una versión nueva de su sistema de origen»). Responde **201** con la nueva.
+
+O pasan las dos cosas o ninguna. Las otras respuestas, y en ninguna nace la nueva:
+
+- **200, `nueva: false`**: la nueva ya estaba con la misma deuda y la misma `sustituye_a` (el reenvío). Se reconoce
+  antes de la transacción y no cambia nada. Con otra deuda u otra `sustituye_a`, **409** como en «El alta que choca».
+- **409**: la vieja está `PAGADA` (el `detail` nombra su recibo: el origen imputa ese pago cuando lo reciba por el
+  buzón), o ya la sustituyó otra referencia: una orden se sustituye una sola vez, y la versión nueva sustituye a la
+  última.
+- **404**: no hay una orden **de su sistema** con la referencia de `sustituye_a`.
+- **400 en `sustituye_a`**: es la propia referencia, o pasa de 120 caracteres.
+
+**Las carreras.** Una sustitución y un cobro de la vieja a la vez se ordenan en el candado: o el cobro emite su recibo
+y la sustitución recibe 409, o la vieja queda `ANULADA` y el cobro recibe 422. Dos sustituciones iguales a la vez dan
+una sola nueva: la segunda espera el candado y su alta choca con la nueva que confirmó la primera. Ese choque aborta la
+transacción entera (postgres contesta 25P02 a todo lo que siga), así que se resuelve **fuera de ella**, ya revertida,
+como un reenvío: 200 con la nueva (`SustitucionApiTest`).
+
+**Cómo arma su referencia un origen que redetermina.** Una referencia por versión de la deuda, nunca la misma con otro
+importe. srtm, por ejemplo, guarda cada versión de una cuota de arbitrios con su propia clave
+(`predio|servicio|anio|periodo|secuencia|version`), y su referencia en caja es `ARB-{clave}`. Al redeterminar, da de alta
+la versión nueva con `sustituye_a` igual a la referencia de la anterior. Si la deuda se retira sin reemplazo (una
+anulación), usa el retiro.
 
 **El retiro** (caja-backend#39). Cuando el sistema de origen deja de cobrar una deuda (la redeterminó, la anuló, anuló
 la declaración que la generó), retira su orden para que la ventanilla no la cobre:
@@ -670,7 +722,7 @@ Con el origen contestando, `recibidos`, `aplicados`, `rechazados` y `recibidos_a
   recorta. Es lo que permite que mañana sea el contrato de un puesto de mercado.
 - **La idempotencia es del motor, no de un `if`** (#188 de `caja`). El alta inserta y, si la `uniqueConstraint` de
   `(sistema_origen, referencia_externa)` salta (`DuplicateKeyException`), relee la orden que ya estaba y la devuelve con
-  200, tal como estaba. No hay una
+  200, tal como estaba, si pide la misma deuda (si no, 409: ver «El alta que choca»). No hay una
   lectura previa: dos altas simultáneas la pasarían las dos y el mismo administrado tendría dos órdenes por la misma
   deuda. `OrdenesApiTest` lanza diez altas simultáneas de la misma clave y exige una sola orden.
 - **La caja no recalcula.** El importe y su fecha se guardan como llegan; la caja no comprueba el pagador contra ningún
@@ -1510,7 +1562,9 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `model/model.json` y falla si la orden de cobro gana `tributo`, `ejercicio` o `periodo`. `CobranzaTest` fija las de
   la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, el importe roto que no se cobra, las claves del
   cuerpo de `PAGO_REGISTRADO`, lo que llega en la petición y la retirada, que es un 422 con su motivo); `RetiroTest`, el
-  motivo del retiro (recortado, de 1 a 200, sin caracteres de control); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
+  motivo del retiro (recortado, de 1 a 200, sin caracteres de control) y el de la sustitución; `ChoqueTest`, el alta
+  que choca (`100.0` contra `100.00` no difiere, `100.01` sí, la fecha de exigibilidad, el documento en minúsculas que no
+  difiere, `actualizado_a` que no se compara, y `sustituye_a` solo cuando la pedida lo trae); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
   la tarifa vigente, `12.30 × 3 = 36.90` y `0.10 × 7 = 0.70`, la vigencia al revés, la cantidad y el precio en la
   petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF (el original y el duplicado, con y sin anulación, y que no se dibuja en el
   hilo que lo pide);
@@ -1544,7 +1598,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   línea de la conciliación (la diferencia, cuándo cuadra, lo que dice el origen y por qué no se sabe, sin ceros, los
   pagos a cuenta opcionales que se restan del neto y su importe mal escrito, y la fecha obligatoria); `PurezaDeLaRecaudacionTest`, que no dependen de Spring, del reloj, de la base ni de la red.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
-  comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
+  comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, el 409 de la misma referencia con otra deuda y el 200 con otro
+  `actualizado_a`, diez simultáneas, los 400, el 403 de un
   `CAJERO`), la cuenta de servicio que da de alta sin nombrar el sistema, la que nombra otro (403), la persona con el
   rol `SISTEMA_ORIGEN` (403), la cuenta sin CREATE (403) y el `ADMIN` que nombra el sistema (y recibe 400 si no lo hace),
   y la lista por pagador; `RetiroApiTest`, el retiro (la `PENDIENTE` que queda `ANULADA` con su motivo, su fecha y la
@@ -1553,6 +1608,11 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `SISTEMA_ORIGEN` y el `ADMIN` que nombra el sistema, los 400 en `motivo`, **retiro y cobro a la vez** (gana uno, nunca
   una `ANULADA` con recibo), el cobro de una `ANULADA` que da 422, la vista previa que sigue en 200 con `cobrable`
   `false`, la lista por estado y la orden devuelta a `PENDIENTE` por la anulación de su recibo, que se puede retirar);
+  `SustitucionApiTest`, la sustitución (la `PENDIENTE` que queda `ANULADA` con su motivo y `sustituida_por`, el mismo
+  importe que también se sustituye, el reenvío que es 200 y no cambia nada, la `PAGADA` que da 409 y no crea nada, la
+  vieja que no existe o es de otro sistema, que da 404, la ya `ANULADA` sin sustituta, la ya sustituida por otra, que da
+  409, el 400 de sustituirse a sí misma, **dos sustituciones iguales a la vez**, que dan una sola nueva, y **sustitución
+  y cobro de la vieja a la vez**, donde gana uno);
   `CajasApiTest`, el catálogo con y sin área. `VigenciaApiTest` cubre la comprobación con el origen contra
   `SistemaDeOrigenFalso` (todo vigente cobra con una sola pregunta; la no vigente y la de otro importe dan 422 y quedan
   `ANULADA` sin emitir nada; el origen caído cobra con la advertencia, que sale en `cobros/sin-verificar`, o da 503; sin

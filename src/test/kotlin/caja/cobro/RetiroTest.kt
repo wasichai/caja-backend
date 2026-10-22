@@ -21,4 +21,12 @@ class RetiroTest {
             assertEquals("motivo", error.violations.single().field)
         }
     }
+
+    @Test
+    fun `el motivo de la sustitucion nombra la nueva y es un motivo valido`() {
+        assertEquals("Sustituida por ARB-p1|LIMP|2026|3|1|2", motivoDeSustitucion("ARB-p1|LIMP|2026|3|1|2"))
+        assertEquals("Sustituida por ab", motivoDeSustitucion("a\u0007b"))
+        val larga = motivoDeSustitucion("x".repeat(LARGO_REFERENCIA))
+        assertEquals(larga, motivoDeRetiro(larga))
+    }
 }

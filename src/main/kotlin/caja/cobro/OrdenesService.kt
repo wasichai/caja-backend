@@ -34,7 +34,14 @@ import java.util.UUID
 // otra persona, aunque tenga el rol SISTEMA_ORIGEN, recibe 403.
 // el alta es idempotente por (sistema_origen, referencia_externa) y la garantía es del motor, no de un if (#188 de caja):
 // se inserta, y si la uniqueConstraint salta se relee la que ya estaba. una lectura previa se colaría por la carrera: dos altas
-// simultáneas pasarían las dos la comprobación, y el mismo administrado tendría dos órdenes por la misma deuda
+// simultáneas pasarían las dos la comprobación, y el mismo administrado tendría dos órdenes por la misma deuda.
+// idempotente quiere decir el mismo pedido: si la que ya estaba es otra deuda (otro importe, otra fecha de exigibilidad u
+// otro pagador, diferencias de Choque.kt), es un 409 que nombra los campos (caja-backend#40). un 200 con la vieja le
+// haría creer al origen que caja cobrará lo que acaba de mandar
+//
+// la sustitución (caja-backend#40): un origen que redetermina manda la versión nueva con otra referencia y nombra la
+// vieja en sustituye_a. la nueva nace y la vieja queda ANULADA en una sola transacción, bajo el candado de la vieja: o
+// pasan las dos cosas o ninguna, y un cobro de la vieja a la vez se ordena con ella como con el retiro
 //
 // el retiro (caja-backend#39): el sistema de origen retira una orden que ya no se debe, y queda ANULADA. la misma regla
 // del sistema que el alta: una cuenta solo retira lo suyo, y una orden de otro sistema no la encuentra (404, como si no
@@ -55,13 +62,94 @@ class OrdenesService(
             throw ForbiddenException("El alta de órdenes es de un sistema de origen (su cuenta de servicio); una persona no la da")
         }
         val atributos = atributos(body, cuenta)
-        return try {
-            OrdenRespuesta.de(registros.create(ORDEN_DE_COBRO, OrdenDeCobro::class.java, atributos, atributos.getValue("observacion") as String), nueva = true)
+        val vieja = atributos["sustituye_a"] as String?
+        return if (vieja == null) alta(atributos) else sustitucion(atributos, vieja)
+    }
+
+    private suspend fun alta(atributos: Map<String, Any?>): OrdenRespuesta =
+        try {
+            OrdenRespuesta.de(crear(atributos), nueva = true)
         } catch (choque: DataIntegrityViolationException) {
             // DuplicateKeyException incluida. RecordService no abre transacción: la orden que ganó ya está confirmada
             // cuando el motor rechaza esta. si no está, el choque fue otro y sigue su camino
-            OrdenRespuesta.de(porOrigen(atributos) ?: throw choque, nueva = false)
+            reenvio(atributos) ?: throw choque
         }
+
+    // 201 con la nueva y la vieja ANULADA con sustituida_por; 200 si la nueva ya estaba y pide lo mismo (el reenvío);
+    // 409 si la vieja está PAGADA o ya la sustituyó otra, o si la nueva ya estaba con otra deuda; 404 si la vieja no
+    // es de este sistema o no existe. en todos los errores no nace nada
+    private suspend fun sustitucion(
+        atributos: Map<String, Any?>,
+        vieja: String
+    ): OrdenRespuesta {
+        // el reenvío se reconoce fuera de la transacción, por la referencia nueva: la sustitución ya pasó entera
+        reenvio(atributos)?.let { return it }
+        val sistema = atributos.getValue("sistema_origen") as String
+        val anterior =
+            porOrigen(sistema, vieja)
+                ?: throw NotFoundException("sustituye_a: no hay ninguna orden de cobro de $sistema con la referencia $vieja")
+        val creada =
+            try {
+                transaccion.en { sustituirBajoCandado(anterior, atributos, OffsetDateTime.now(reloj)) }
+            } catch (choque: DataIntegrityViolationException) {
+                // dos sustituciones iguales a la vez: la segunda esperó el candado y su alta chocó con la nueva que
+                // confirmó la primera. un unique que salta aborta la transacción entera (25P02 a todo lo que siga), así
+                // que se resuelve fuera, ya revertida, como un reenvío
+                return reenvio(atributos) ?: throw choque
+            }
+        // null: la vieja ya la sustituyó esta misma nueva, que se confirmó mientras se esperaba el candado
+        return creada?.let { OrdenRespuesta.de(it, nueva = true) } ?: reenvio(atributos) ?: error("La sustitución de $vieja se perdió")
+    }
+
+    // dentro de la transacción: el candado de la vieja, la vieja releída y la decisión sobre lo que hay ahora. una
+    // PENDIENTE se retira con el motivo «Sustituida por …»; una ANULADA sin sustituta (el origen la retiró antes) se deja
+    // con su motivo. después nace la nueva y la vieja anota quién la sustituyó
+    private suspend fun sustituirBajoCandado(
+        anterior: OrdenDeCobro,
+        atributos: Map<String, Any?>,
+        ahora: OffsetDateTime
+    ): OrdenDeCobro? {
+        val id = anterior.id!!
+        val nueva = atributos.getValue("referencia_externa") as String
+        candados.bloquear(Candado.ORDEN, id)
+        val actual = registros.get(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(id))
+        val nombre = "${actual.sistemaOrigen}/${actual.referenciaExterna}"
+        when {
+            actual.estado == PAGADA ->
+                throw ConflictException(
+                    "La orden $nombre ya se cobró con el recibo ${actual.recibo}: no se sustituye y $nueva no se crea. El " +
+                        "sistema de origen imputa ese pago cuando lo reciba. Si ese recibo se anula, la orden vuelve a PENDIENTE " +
+                        "y se puede sustituir"
+                )
+            actual.sustituidaPor == nueva -> return null
+            actual.sustituidaPor != null ->
+                throw ConflictException(
+                    "La orden $nombre ya la sustituyó ${actual.sustituidaPor}: una orden se sustituye una sola vez, y $nueva no " +
+                        "se crea. La versión nueva sustituye a la última"
+                )
+            actual.estado == PENDIENTE -> retirarBajoCandado(actual, motivoDeSustitucion(nueva), ahora)
+        }
+        val creada = crear(atributos)
+        registros.replace(ORDEN_DE_COBRO, OrdenDeCobro::class.java, UUID.fromString(id), mapOf("sustituida_por" to nueva), RAZON_SUSTITUCION)
+        return creada
+    }
+
+    private suspend fun crear(atributos: Map<String, Any?>): OrdenDeCobro =
+        registros.create(ORDEN_DE_COBRO, OrdenDeCobro::class.java, atributos, atributos.getValue("observacion") as String)
+
+    // la que ya estaba con esa referencia, con 200, si pide lo mismo; si pide otra deuda, 409 con los campos que
+    // difieren. null si no hay ninguna
+    private suspend fun reenvio(atributos: Map<String, Any?>): OrdenRespuesta? {
+        val existente = porOrigen(atributos) ?: return null
+        val distintos = diferencias(existente, atributos)
+        if (distintos.isNotEmpty()) {
+            throw ConflictException(
+                "Ya hay una orden de cobro ${existente.sistemaOrigen}/${existente.referenciaExterna} con esa referencia y " +
+                    "otro ${distintos.joinToString(", ")}: caja no la cambia. Una versión nueva de la deuda lleva otra " +
+                    "referencia y nombra la anterior en sustituye_a"
+            )
+        }
+        return OrdenRespuesta.de(existente, nueva = false)
     }
 
     // 200 con la orden ANULADA, también si ya lo estaba (el reintento del origen): la primera vez manda, con su motivo y
@@ -173,22 +261,27 @@ class OrdenesService(
         val actualizado = campo(errores) { fecha(body.actualizadoA, "actualizado_a") }
         val pagador = campo(errores) { pagador(body.pagadorDocumento, body.pagadorNombre, body.pagadorExternoId) }
         val observacion = campo(errores) { Observacion.de(body.observacion) }
+        val vieja = campo(errores) { sustituyeA(body.sustituyeA, referencia) }
         if (errores.isNotEmpty()) throw ValidationException("La orden de cobro no es válida", errores)
 
-        return mapOf(
-            "sistema_origen" to sistema!!,
-            "referencia_externa" to referencia!!,
-            "concepto" to concepto,
-            "detalle" to detalle,
-            "importe" to importe!!.toPlainString(),
-            "fecha_exigibilidad" to exigible.toString(),
-            "actualizado_a" to actualizado.toString(),
-            "pagador_documento" to pagador!!.documento,
-            "pagador_nombre" to pagador.nombre,
-            "pagador_externo_id" to pagador.idExterno,
-            "estado" to PENDIENTE,
-            "observacion" to observacion!!.texto
-        )
+        val atributos =
+            mapOf(
+                "sistema_origen" to sistema!!,
+                "referencia_externa" to referencia!!,
+                "concepto" to concepto,
+                "detalle" to detalle,
+                "importe" to importe!!.toPlainString(),
+                "fecha_exigibilidad" to exigible.toString(),
+                "actualizado_a" to actualizado.toString(),
+                "pagador_documento" to pagador!!.documento,
+                "pagador_nombre" to pagador.nombre,
+                "pagador_externo_id" to pagador.idExterno,
+                "estado" to PENDIENTE,
+                "observacion" to observacion!!.texto
+            )
+        // sustituye_a solo va si viene: diferencias la compara cuando la pedida la trae, y un alta sin ella que repite
+        // la referencia de una nueva no es otro pedido
+        return if (vieja == null) atributos else atributos + ("sustituye_a" to vieja)
     }
 
     // el sistema de una cuenta de servicio es su nombre, que tiene que cumplir la regla de sistema_origen. el cuerpo puede
