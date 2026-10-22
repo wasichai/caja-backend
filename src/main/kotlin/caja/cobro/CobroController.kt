@@ -30,6 +30,13 @@ class CobroController(
         return ResponseEntity.status(if (alta.nueva == true) HttpStatus.CREATED else HttpStatus.OK).body(alta)
     }
 
+    // la llama el sistema de origen, servidor a servidor, para retirar una orden que ya no se debe. 200 con la orden
+    // ANULADA, también si ya lo estaba: un reintento recibe lo mismo. la referencia va en el cuerpo, no en la ruta
+    @PostMapping("/ordenes-de-cobro/retiro")
+    suspend fun retirar(
+        @RequestBody body: RetiroDeOrden
+    ) = ordenes.retirar(body)
+
     // la ventanilla: las órdenes de un pagador. sin estado, las pendientes
     @GetMapping("/ordenes-de-cobro")
     suspend fun ordenes(

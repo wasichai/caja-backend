@@ -400,7 +400,7 @@
           "type": "ENUM",
           "enum": "estado_orden",
           "required": true,
-          "description": "PENDIENTE al nacer. PAGADA la deja la cobranza, y nombra su recibo (orden_recibo_ck de caja). No hay VENCIDA: que sea exigible se deriva de fecha_exigibilidad."
+          "description": "PENDIENTE al nacer. PAGADA la deja la cobranza, y nombra su recibo (orden_recibo_ck de caja). ANULADA la deja el retiro de su sistema de origen (POST /api/caja/ordenes-de-cobro/retiro), con motivo_retiro y retirada_en, y ya no se cobra. No hay VENCIDA: que sea exigible se deriva de fecha_exigibilidad."
         },
         {
           "name": "observacion",
@@ -408,6 +408,18 @@
           "type": "LONG_TEXT",
           "required": true,
           "description": "Por qué se dio de alta (regla 10): de 5 a 500 caracteres."
+        },
+        {
+          "name": "motivo_retiro",
+          "label": "Motivo del retiro",
+          "type": "TEXT",
+          "description": "Por qué la retiró su sistema de origen, de 1 a 200 caracteres sin caracteres de control. Solo en una ANULADA."
+        },
+        {
+          "name": "retirada_en",
+          "label": "Retirada en",
+          "type": "DATETIME",
+          "description": "Cuándo la retiró su sistema de origen. Solo en una ANULADA; un segundo retiro no la cambia."
         }
       ]
     },

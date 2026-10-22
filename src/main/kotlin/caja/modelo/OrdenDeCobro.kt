@@ -3,10 +3,11 @@ package caja.modelo
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 import java.math.BigDecimal
+import java.time.Instant
 import java.time.LocalDate
 
 // la orden de cobro, lo único que la caja sabe cobrar, y estado_orden: PENDIENTE al nacer, PAGADA con el recibo que
-// la cobró, ANULADA si su sistema de origen la retiró
+// la cobró, ANULADA si su sistema de origen la retiró (con su motivo y su fecha)
 
 const val PENDIENTE = "PENDIENTE"
 const val PAGADA = "PAGADA"
@@ -29,7 +30,9 @@ data class OrdenDeCobro(
     val pagadorExternoId: Long? = null,
     val estado: String? = null,
     val observacion: String? = null,
-    val recibo: String? = null
+    val recibo: String? = null,
+    val motivoRetiro: String? = null,
+    val retiradaEn: Instant? = null
 ) {
     // OrdenDeCobro.cobrableA de caja: pendiente y ya exigible a la fecha de pago
     fun cobrableA(fecha: LocalDate): Boolean = estado == PENDIENTE && fechaExigibilidad != null && !fecha.isBefore(fechaExigibilidad)

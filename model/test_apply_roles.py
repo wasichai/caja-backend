@@ -40,8 +40,10 @@ class RolesJsonTests(unittest.TestCase):
     def test_valida_contra_el_modelo(self):
         self.assertEqual(apply_roles.validate(load(ROLES_PATH), load(MODEL_PATH)), [])
 
-    def test_el_sistema_de_origen_lee_y_da_de_alta_ordenes_y_nada_mas(self):
-        self.assertEqual(permisos(self.roles["SISTEMA_ORIGEN"]), {("orden_de_cobro", "READ"), ("orden_de_cobro", "CREATE")})
+    def test_el_sistema_de_origen_lee_da_de_alta_y_retira_ordenes_y_nada_mas(self):
+        # UPDATE es el retiro: caja escribe como quien llama, y la api genérica no escribe orden_de_cobro (apiOnly)
+        self.assertEqual(permisos(self.roles["SISTEMA_ORIGEN"]),
+                         {("orden_de_cobro", "READ"), ("orden_de_cobro", "CREATE"), ("orden_de_cobro", "UPDATE")})
 
     def test_el_cajero_lee_y_cobra(self):
         # cobra: abre su turno, emite el recibo con sus líneas, encola el evento y marca la orden PAGADA. ve las
@@ -165,7 +167,8 @@ class ApplyRolesTests(ApplyRolesTestCase):
         self.assertEqual(posts, ROLES)
         puts = {p: b for m, p, b in self.writes() if m == "PUT"}
         self.assertEqual(puts["/api/roles/SISTEMA_ORIGEN/permissions"], {"permissions": [
-            {"objectName": "orden_de_cobro", "action": "READ"}, {"objectName": "orden_de_cobro", "action": "CREATE"}]})
+            {"objectName": "orden_de_cobro", "action": "READ"}, {"objectName": "orden_de_cobro", "action": "CREATE"},
+            {"objectName": "orden_de_cobro", "action": "UPDATE"}]})
         self.assertEqual(len(puts), 4)
         for method, path, auth, body in self.core.requests:
             self.assertEqual(auth, None if path == "/api/auth/login" else "Bearer t")

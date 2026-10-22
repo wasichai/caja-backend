@@ -12,6 +12,7 @@ import caja.modelo.PAGADA
 import caja.modelo.PAGO_REGISTRADO
 import caja.modelo.PagoEvento
 import caja.modelo.Recibo
+import org.springframework.http.HttpStatus
 import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.ConflictException
 import wasichai.core.common.ForbiddenException
@@ -89,14 +90,28 @@ fun motivoNoCobrable(
     return cabecera +
         when (orden.estado) {
             PAGADA -> "ya se cobró con el recibo ${orden.recibo}. Si ese recibo se anula, la orden vuelve a PENDIENTE sola"
-            ANULADA -> "el sistema que la emitió la retiró. Eso no se arregla en ventanilla"
+            ANULADA -> retirada(orden)
             else -> "es exigible desde el ${orden.fechaExigibilidad} y se está cobrando al $fecha"
         }
 }
 
+private fun retirada(orden: OrdenDeCobro): String =
+    "el sistema que la emitió la retiró" + (orden.motivoRetiro?.let { " ($it)" } ?: "") + ". Eso no se arregla en ventanilla"
+
+// una orden que su sistema de origen retiró (caja-backend#39). 422 y no 409: no es que hoy no se pueda, como la pagada
+// (que vuelve a PENDIENTE si su recibo se anula) o la que todavía no es exigible; esa orden no se cobrará nunca más. la
+// deuda, si sigue, es otra orden. la ventanilla la quita y vuelve a leer las del pagador
+class OrdenRetirada(
+    orden: OrdenDeCobro
+) : WasichaiException(
+        HttpStatus.UNPROCESSABLE_CONTENT,
+        "La orden ${orden.id} (${orden.sistemaOrigen}/${orden.referenciaExterna}) no se puede cobrar: ${retirada(orden)}"
+    )
+
 // lo que impide cobrar esas órdenes a esa fecha, en el orden en que el cobro lo decide: las que no existen (404), dos
-// sistemas (400 en ordenes) y las que no se pueden cobrar (409). vacío si se pueden cobrar todas. el cobro lanza el
-// primero; la vista previa los dice todos. una sola fuente: ninguno de los dos decide por su cuenta
+// sistemas (400 en ordenes), las retiradas (422) y las demás que no se pueden cobrar (409). vacío si se pueden cobrar
+// todas. el cobro lanza el primero; la vista previa los dice todos. una sola fuente: ninguno de los dos decide por su
+// cuenta. una retirada lo es aunque su importe esté roto: lo que manda es que ya no se cobra
 fun impedimentosDelCobro(
     porId: List<String>,
     leidas: Map<String, OrdenDeCobro>,
@@ -105,7 +120,10 @@ fun impedimentosDelCobro(
     val faltan = porId.filter { it !in leidas }.map { NotFoundException("No hay ninguna orden de cobro $it") }
     val ordenes = porId.mapNotNull(leidas::get)
     val sistemas = ordenes.takeIf { it.isNotEmpty() }?.let { listOfNotNull(impedimento { sistemaUnico(it) }) }.orEmpty()
-    val noCobrables = ordenes.mapNotNull { orden -> motivoNoCobrable(orden, fecha)?.let(::ConflictException) }
+    val noCobrables =
+        ordenes.mapNotNull { orden ->
+            if (orden.estado == ANULADA) OrdenRetirada(orden) else motivoNoCobrable(orden, fecha)?.let(::ConflictException)
+        }
     return faltan + sistemas + noCobrables
 }
 
