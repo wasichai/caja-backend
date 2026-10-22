@@ -2,6 +2,9 @@ package caja.buzon
 
 import caja.cobro.Vigencia
 import caja.modelo.OrdenDeCobro
+import kotlinx.coroutines.runBlocking
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -110,6 +113,40 @@ class VigenciaPorHttpTest {
     fun `un codigo que no es 200 se nombra en el motivo`() {
         val noContesta = vigenciaDe(ordenes, Lectura.Contesto(503, ""), cobrar = true) as Vigencia.NoContesta
         assertTrue(noContesta.motivo.contains("503"), noContesta.motivo)
+    }
+
+    // srtm identifica cada cuota con una «clave», que tiene forma de credencial para tachar: el cuerpo se lee tal como
+    // llegó, y lo tachado es solo lo que se guarda. si se leyera el cuerpo tachado, «"clave":"p1|…"» dejaría de ser json
+    // y una respuesta válida de «no vigente» sería NoContesta: con sin-respuesta COBRAR, se cobraría lo que el origen
+    // dijo que ya no está
+    @Test
+    fun `una respuesta con la clave de cada cuota se lee tal cual llego, y el motivo se guarda tachado`() {
+        MockWebServer().use { servidor ->
+            servidor.start()
+            val cuerpo =
+                """{"ordenes":[""" +
+                    """{"referencia_externa":"ARB-1|LIMP|2026|3|1|2","clave":"p1|LIMP|2026|3|1|2","vigente":false,""" +
+                    """"motivo":"sustituida, ver clave:ARB-2"},""" +
+                    """{"referencia_externa":"PRED-2","clave":"p1|PRED|2026|1|1|1","vigente":true,"importe":"100.00","motivo":null}]}"""
+            servidor.enqueue(
+                MockResponse
+                    .Builder()
+                    .code(200)
+                    .setHeader("Content-Type", "application/json")
+                    .body(cuerpo)
+                    .build()
+            )
+            val destino = PropiedadesDelBuzon.Destino(url = servidor.url("/").toString(), verificar = true)
+            val propiedades = PropiedadesDelBuzon(destinos = mapOf("rentas" to destino))
+
+            val vigencia = runBlocking { VigenciaPorHttp(propiedades, ClienteDelSistemaDeOrigen(propiedades)).consultar("rentas", ordenes) }
+
+            val contesto = assertInstanceOf(Vigencia.Contesto::class.java, vigencia)
+            assertEquals(setOf("o1"), contesto.noVigentes.keys)
+            val motivo = contesto.noVigentes.getValue("o1")
+            assertTrue(motivo.startsWith("el origen dice: sustituida, ver clave:"), motivo)
+            assertTrue(!motivo.contains("ARB-2"), motivo)
+        }
     }
 
     private fun orden(

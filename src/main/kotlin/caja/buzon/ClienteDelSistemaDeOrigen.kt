@@ -62,8 +62,8 @@ class ClienteDelSistemaDeOrigen(
 
     // GET {url}{ruta}: una lectura del sistema de origen (AbonosAplicadosHttp y ClienteHttpDelSistemaDeOrigen.preguntar de
     // caja), la de la conciliación del día. el mismo destino, el mismo token en la cabecera y el mismo timeout que la
-    // entrega, y también fuera de toda transacción. nunca lanza y no interpreta: devuelve el código y el cuerpo, tachado,
-    // o por qué no contestó, o que no hay a dónde preguntar. quien pregunta decide, y nada de esto es un cero
+    // entrega, y también fuera de toda transacción. nunca lanza y no interpreta: devuelve el código y el cuerpo tal cual
+    // llegó (quien lo lee tacha lo que guarda o muestra, con Lectura.Contesto.tachado), o por qué no contestó, o que no hay a dónde preguntar. quien pregunta decide, y nada de esto es un cero
     suspend fun leer(
         sistema: String,
         ruta: String
@@ -82,7 +82,7 @@ class ClienteDelSistemaDeOrigen(
                     .GET()
                     .build()
             val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
-            Lectura.Contesto(respuesta.statusCode(), tachar(respuesta.body().orEmpty(), token))
+            Lectura.Contesto(respuesta.statusCode(), respuesta.body().orEmpty(), token)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -113,7 +113,7 @@ class ClienteDelSistemaDeOrigen(
                     .POST(HttpRequest.BodyPublishers.ofString(cuerpo))
                     .build()
             val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
-            Lectura.Contesto(respuesta.statusCode(), tachar(respuesta.body().orEmpty(), token))
+            Lectura.Contesto(respuesta.statusCode(), respuesta.body().orEmpty(), token)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

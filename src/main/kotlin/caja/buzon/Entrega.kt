@@ -55,14 +55,23 @@ sealed interface Respuesta {
     ) : Respuesta
 }
 
-// lo que contestó un sistema de origen a una LECTURA (GET {url}/pagos/conciliacion de la conciliación del día), sin
-// interpretar: su código y su cuerpo, ya tachado; o por qué no hubo respuesta; o que no hay a dónde preguntar. quien
-// pregunta decide qué es cada cosa, y ninguna de las tres es un cero
+// lo que contestó un sistema de origen a una LECTURA (GET {url}/pagos/conciliacion de la conciliación del día) o a una
+// pregunta (POST {url}/ordenes/vigencia), sin interpretar: su código y su cuerpo; o por qué no hubo respuesta; o que no
+// hay a dónde preguntar. quien pregunta decide qué es cada cosa, y ninguna de las tres es un cero
 sealed interface Lectura {
+    // el cuerpo llega TAL CUAL, sin tachar: se lee como json, y tacharlo antes lo rompe (srtm nombra cada cuota con una
+    // «clave», y «"clave":"p1|…"» tachado ya no es json). lo que de él se guarde o se muestre (un motivo, un mensaje de
+    // error, el porqué de una conciliación que no se sabe) pasa antes por tachado, que conoce el token del destino. por
+    // eso ni el cuerpo ni el token salen en el toString
     data class Contesto(
         val estado: Int,
-        val cuerpo: String
-    ) : Lectura
+        val cuerpo: String,
+        private val token: String? = null
+    ) : Lectura {
+        fun tachado(texto: String): String = tachar(texto, token)
+
+        override fun toString() = "Contesto(estado=$estado, cuerpo=${contestado(cuerpo, token)})"
+    }
 
     data class NoContesta(
         val motivo: String
@@ -127,8 +136,8 @@ sealed interface Salida {
 // tengo»: el receptor deduplicó por pagoId, y es un éxito. 401 y 403 hablan de quien llama, no del pago: se reintentan,
 // y cada uno dice dónde se arregla. el resto de los 4xx es un rechazo del pago. un 5xx, o cualquier otra cosa, no
 // contesta. EL CÓDIGO DECIDE LA ENTREGA, nunca el cuerpo: el cuerpo lo escribe el otro sistema. lo único que se lee del
-// cuerpo es el de un 202, y solo para ANOTAR el pago «a cuenta» (aCuentaDe): un 202 es ENTREGADO diga lo que diga, y
-// uno ilegible es un ENTREGADO sin anotar
+// cuerpo es el de un 202 o un 409, y solo para ANOTAR el pago «a cuenta» (aCuentaDe): un 202 o un 409 es ENTREGADO
+// diga lo que diga, y uno ilegible es un ENTREGADO sin anotar
 fun clasificar(
     sistema: String,
     estado: Int,
@@ -137,8 +146,10 @@ fun clasificar(
 ): Respuesta {
     val contesto = contestado(cuerpo, token)
     return when {
-        estado == 202 -> Respuesta.Entregado(aCuentaDe(cuerpo, token))
-        estado == 200 || estado == 201 || estado == 409 -> Respuesta.Entregado()
+        // un 409 es el reenvío de un pago que el origen ya tenía: si lo recibió a cuenta, lo repite en el cuerpo, y la marca
+        // no se pierde cuando caja no oyó el 202 del primer intento
+        estado == 202 || estado == 409 -> Respuesta.Entregado(aCuentaDe(cuerpo, token))
+        estado == 200 || estado == 201 -> Respuesta.Entregado()
         estado == 401 || estado == 403 -> Respuesta.NoContesta(deCredencial(sistema, estado, token, contesto))
         estado in 400..499 ->
             Respuesta.Rechazado("«$sistema» rechazó el pago con $estado. Esto NO se reintenta: el motivo no va a cambiar solo. Contestó $contesto")
@@ -149,7 +160,7 @@ fun clasificar(
 // lo que se guarda cuando el origen dice «a cuenta» y no dice por qué: la marca no se pierde por un motivo que falta
 const val SIN_MOTIVO_A_CUENTA = "el origen no dijo por qué"
 
-// el pago «a cuenta» (caja-backend#41): el motivo, si el cuerpo de un 202 es {"a_cuenta": true, "motivo": "…"}, o null.
+// el pago «a cuenta» (caja-backend#41): el motivo, si el cuerpo de un 202 (o el del 409 de un reenvío) es {"a_cuenta": true, "motivo": "…"}, o null.
 // el origen lo contesta cuando la deuda ya no estaba vigente (la sustituyó o la anuló) y guardó el pago como saldo a favor
 // del pagador. a_cuenta tiene que ser el booleano true: «"true"» o un cuerpo que no se entiende no anotan nada. el motivo
 // lo escribió el otro sistema y acaba en una columna que lee el cajero: va tachado, en una línea (sin caracteres de

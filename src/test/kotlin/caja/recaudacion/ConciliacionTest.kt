@@ -1,6 +1,11 @@
 package caja.recaudacion
 
+import caja.buzon.ClienteDelSistemaDeOrigen
 import caja.buzon.Lectura
+import caja.buzon.PropiedadesDelBuzon
+import kotlinx.coroutines.runBlocking
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -115,6 +120,45 @@ class ConciliacionTest {
 
     @Nested
     inner class DeLoQueDiceElOrigen {
+        // el cuerpo se lee tal como llegó: tachado, «"clave":"…"» deja de ser json y la conciliación no se sabría
+        @Test
+        fun `una conciliacion con una clave en el cuerpo se lee igual`() {
+            MockWebServer().use { servidor ->
+                servidor.start()
+                val cuerpo =
+                    """{"fecha":"2026-10-02","clave":"p1|LIMP|2026|3|1|2","recibidos":2,"aplicados":1,"rechazados":1,"importe_aplicado":"60.50"}"""
+                servidor.enqueue(
+                    MockResponse
+                        .Builder()
+                        .code(200)
+                        .setHeader("Content-Type", "application/json")
+                        .body(cuerpo)
+                        .build()
+                )
+                val propiedades = PropiedadesDelBuzon(destinos = mapOf("rentas" to PropiedadesDelBuzon.Destino(url = servidor.url("/").toString())))
+
+                val lectura = runBlocking { ClienteDelSistemaDeOrigen(propiedades).leer("rentas", "/pagos/conciliacion?fecha=$dia") }
+                val linea = lineaDe(recuento(), dia, lectura)
+
+                assertNull(linea.porQueNoSeSabe, linea.porQueNoSeSabe)
+                assertEquals(2L, linea.aplicado!!.recibidos)
+                assertEquals(1L, linea.aplicado!!.aplicados)
+            }
+        }
+
+        // lo que se cuenta de una respuesta que no se entiende sí va tachado: es lo que lee el supervisor
+        @Test
+        fun `lo que no se entiende se cuenta tachado`() {
+            val linea =
+                lineaDe(
+                    recuento(),
+                    dia,
+                    Lectura.Contesto(200, """{"fecha":"2026-10-02","recibidos":"token=el-secreto","aplicados":1,"rechazados":0,"importe_aplicado":"1.00"}""")
+                )
+            val porQue = linea.porQueNoSeSabe!!
+            assertTrue(!porQue.contains("el-secreto"), porQue)
+        }
+
         @Test
         fun `un 200 con las cuatro cifras es lo que aplico el origen`() {
             val linea =
