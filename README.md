@@ -282,6 +282,7 @@ exista su `anulacion_recibo`. Relaciones `recibo_caja` y `recibo_turno` (las dos
 | `actualizado_a`      | DATE      | A qué fecha están sus importes (regla 9): la fecha de pago. Obligatoria.                    | `recibo.actualizado_a`         |
 | `clave_idempotencia` | TEXT      | La cabecera `Idempotency-Key` del cobro, si vino. Única.                                    | `recibo.clave_idempotencia`    |
 | `observacion`        | LONG_TEXT | Por qué se cobró (regla 10). Obligatoria.                                                   | `recibo.observacion`           |
+| `advertencia_origen` | TEXT      | Por qué no se pudo comprobar con el origen antes de cobrar (sin-respuesta `COBRAR`; ver «La comprobación con el origen»), hasta 400. Vacía si se comprobó o no se pide. | nuevo                          |
 
 ### `linea_recibo`
 
@@ -408,7 +409,8 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `POST /api/caja/ordenes-de-cobro/retiro` | El sistema de origen retira una orden `PENDIENTE` (ver «El retiro»): **200** con la orden `ANULADA`, también si ya lo estaba; **409** si está `PAGADA`; **404** si no hay una de su sistema con esa referencia. | una cuenta de servicio (o un `ADMIN` que nombra el sistema), con READ y UPDATE sobre `orden_de_cobro` |
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
-| `POST /api/caja/cobros`            | Cobra órdenes y emite el recibo (ver «La cobranza»): **201** con el recibo, **200** si es el reenvío de una `Idempotency-Key` ya usada. | CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (403 antes de empezar, diciendo cuál falta); al escribir, core exige además CREATE sobre `turno`, `linea_recibo` y `pago_evento` |
+| `POST /api/caja/cobros`            | Cobra órdenes y emite el recibo (ver «La cobranza»): **201** con el recibo, **200** si es el reenvío de una `Idempotency-Key` ya usada. Con la comprobación con el origen, **422** si el origen ya no la cobra y **503** si no contesta y su `sin-respuesta` es `NO_COBRAR`. | CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (403 antes de empezar, diciendo cuál falta); al escribir, core exige además CREATE sobre `turno`, `linea_recibo` y `pago_evento` |
+| `GET /api/caja/cobros/sin-verificar` | Los recibos de `?fecha=AAAA-MM-DD` (por defecto hoy en Lima; mal escrita, **400** en `fecha`) cobrados sin poder comprobar con el origen (ver «La comprobación con el origen»): **200** con una lista, por `emitido_en`. | READ sobre `recibo` (403 antes de empezar) |
 | `POST /api/caja/cobros/vista-previa` | Lo que costaría cobrar unas órdenes hoy, **sin escribir nada** (ver «La vista previa del total»): **200**. | READ sobre `orden_de_cobro` |
 | `POST /api/caja/cobros/tasas`      | Cobra conceptos del TUPA y emite el recibo (ver «La caja de tasas»): **201**, o **200** en el reenvío de una `Idempotency-Key`. | CREATE sobre `recibo` (403 antes de empezar); al escribir, core exige además READ sobre `tasa` y CREATE sobre `turno` y `linea_recibo` |
 | `POST /api/caja/cobros/tasas/vista-previa` | Lo que costaría cobrar unos conceptos hoy, sin escribir nada: **200**. | READ sobre `tasa` |
@@ -703,7 +705,8 @@ Lima (una `fecha_de_pago` distinta es **400**); se exige CREATE sobre `recibo` y
 que dice cuál falta). **El reenvío de una `Idempotency-Key` ya emitida se contesta antes de la transacción**, con una
 lectura por la clave (un recibo confirmado no cambia): antes de abrir o crear el turno y de mirar si la caja sigue
 activa. Así un reenvío al día siguiente no abre un turno vacío, y uno posterior a dar de baja la caja devuelve el
-recibo original. Luego, en este orden:
+recibo original. Después, y todavía fuera de la transacción, **la comprobación con el origen**, si su sistema la pide
+(ver abajo). Luego, en este orden:
 
 1. **El turno.** Candado `TURNO_CLAVE` con la clave `<caja id>|<cajero>|<fecha>`; se busca por (`caja`, `cajero`,
    `fecha`) y, si no está, se crea con `abierto_en` según el reloj y la observación del cobro. El primer cobro del día abre el turno, una vez. Una caja inexistente es
@@ -755,6 +758,57 @@ podrían haberlo tomado en órdenes distintos y esperarse en cruz, 40P01); y la 
 `max(numero)` se lee como el usuario que llama: un rol con «solo sus registros» (`own_records_only`) no vería los
 recibos ajenos y su cobro chocaría con el `unique` de `numero_impreso` (409, sin datos). Los roles de `roles.json` no lo
 tienen.
+
+#### La comprobación con el origen
+
+Opcional, por sistema (caja-backend#42): con `caja.buzon.destinos.<sistema>.verificar: true`, la ventanilla le pregunta
+al origen, **antes de cobrar**, si las órdenes siguen vigentes y con el mismo importe. Así no se cobra una deuda que el
+origen ya redeterminó o anuló y que todavía no retiró en caja (el retiro, #39, llega por la red y puede llegar tarde).
+Sin `verificar` (lo normal, y el valor por defecto) no se pregunta nada y se cobra como siempre. srtm-backend#168
+implementa el lado del origen.
+
+- **Dónde.** En `Ventanilla.cobrar`, en `antes`: **después de buscar el reenvío** y **antes de abrir la transacción**.
+  El reenvío de una `Idempotency-Key` ya emitida devuelve el recibo de la primera vez **sin volver a preguntar**, aunque
+  el origen haya cambiado de idea entre tanto (lo ya cobrado está cobrado; el origen lo recibe por el buzón). La
+  pregunta va fuera de toda transacción (`ClienteDelSistemaDeOrigen.preguntar`, `check(!enTransaccion())`): la red no
+  retiene ningún candado. Su espera es `caja.buzon.timeout`, lo más que tarda de más un cobro.
+- **Qué se pregunta.** Solo si las órdenes se pueden cobrar: si alguna no existe, es de dos sistemas, ya está pagada o
+  retirada, no se pregunta y el cobro da su error de siempre. Una sola pregunta por cobro, con todas sus órdenes:
+
+  ```http
+  POST {url}/ordenes/vigencia
+  Authorization: Bearer <token, si hay>
+  Content-Type: application/json
+
+  {"ordenes": [{"referencia_externa": "ARB-p1|LIMP|2026|3|1|2", "importe": "12.50"}]}
+  ```
+
+- **Qué contesta el origen.** **200** con cada referencia pedida:
+
+  ```json
+  {"ordenes": [{"referencia_externa": "ARB-p1|LIMP|2026|3|1|2", "vigente": true, "importe": "12.50", "motivo": null}]}
+  ```
+
+  `vigente` es un booleano; `importe` (en cadena, o `null` si no lo dice) se compara con `compareTo` (`12.5` es
+  `12.50`); `motivo` es opcional.
+- **Una orden no vigente, o vigente con otro importe, no se cobra.** Caja la **retira ahí mismo**, con el candado de la
+  orden y en su propia transacción (`retirarBajoCandado`, la regla del retiro): queda `ANULADA` con
+  `motivo_retiro` «el origen dice: {motivo}» (sin motivo, «ya no está vigente») o «el origen dice otro importe: 13.00»,
+  sin caracteres de control y recortado a 200. El cobro es el **422** de una retirada (`OrdenRetirada`), y no se emite
+  nada: tampoco se cobran las demás órdenes del pedido, que siguen `PENDIENTE`. Si otra ventanilla la cobró entre
+  tanto, el retiro es el 409 de una `PAGADA` y este cobro tampoco sigue.
+- **Si el origen no contesta**: no conecta, tarda más que el timeout, contesta otro código que 200, un cuerpo que no
+  cumple el contrato (no es json, `vigente` no es booleano, `importe` no es una cifra) o **calla alguna referencia
+  pedida** (una respuesta a medias no autoriza a cobrar lo que calló). Decide `caja.buzon.destinos.<sistema>.sin-respuesta`:
+  - **`COBRAR`** (por defecto): se cobra, y el recibo lleva `advertencia_origen` (por qué no se comprobó, tachado y
+    hasta 400 caracteres; sale en la respuesta del cobro, en `recibo.advertencia_origen`). El recibo es inmutable: la
+    advertencia se escribe al emitirlo. **`GET /api/caja/cobros/sin-verificar?fecha=`** los lista para la hoja del día:
+    `numero_impreso`, `cajero`, `pagador_documento`, `pagador_nombre`, `emitido_en`, `total` y `advertencia_origen`.
+    Exige READ sobre `recibo`.
+  - **`NO_COBRAR`**: **503** (`OrigenSinRespuesta`), que nombra el sistema y por qué, y no se emite nada.
+- **Los paquetes.** El puerto (`VigenciaEnElOrigen`, con `Vigencia`: `NoSeConsulta`, `Contesto` y `NoContesta`) es de
+  `cobro`; la implementación por http (`VigenciaPorHttp`), de `buzon`, que ya conoce el destino. `cobro` no importa
+  `buzon` (`DependenciasEntrePaquetesTest`).
 
 ### La caja de tasas
 
@@ -1007,8 +1061,8 @@ de su tabla), p. ej. `"ordenId": "8f0c2a8e-1f0e-4d0b-9a8e-3c1d2b4a5e6f"`. `renta
 
 `caja.buzon.PublicadorDelBuzon` (de `PublicadorDelBuzon`, `EntregarEventos`, `AnotarLaEntrega` y
 `ClienteHttpDelSistemaDeOrigen` de `caja`) entrega cada `pago_evento` `PENDIENTE` (`PAGO_REGISTRADO` y `PAGO_ANULADO`)
-al sistema de origen de sus órdenes. **La ventanilla nunca le pregunta nada a nadie**: con el sistema de origen apagado
-se cobra igual, el pago queda `PENDIENTE` (`estado_del_pago: EN_TRANSITO`, con su hora) y sale cuando el destino vuelve.
+al sistema de origen de sus órdenes. **La ventanilla no le pregunta nada a nadie** (salvo la comprobación opcional de
+«La comprobación con el origen», con su `sin-respuesta`): con el sistema de origen apagado se cobra igual, el pago queda `PENDIENTE` (`estado_del_pago: EN_TRANSITO`, con su hora) y sale cuando el destino vuelve.
 
 #### La configuración
 
@@ -1024,10 +1078,13 @@ con el buzón apagado no arranca ningún bucle, los pagos quedan `PENDIENTE` y e
 | `caja.buzon.timeout` | `10s`: la espera de la conexión y de la respuesta |
 | `caja.buzon.destinos.<sistema>.url` | sin valor: la raíz del sistema de origen; se llama a `POST {url}/pagos` |
 | `caja.buzon.destinos.<sistema>.token` | opcional: va como `Authorization: Bearer`, nunca en el cuerpo |
+| `caja.buzon.destinos.<sistema>.verificar` | `false`: con `true`, la ventanilla pregunta `POST {url}/ordenes/vigencia` antes de cobrar (ver «La comprobación con el origen»). No depende de `habilitado` |
+| `caja.buzon.destinos.<sistema>.sin-respuesta` | `COBRAR`: si el origen no contesta, se cobra con `advertencia_origen`; `NO_COBRAR` contesta 503 |
 | `caja.conciliacion.responsable` y `.canal` | **obligatorios con el buzón habilitado**: si faltan, el arranque falla nombrándolos |
 
 `<sistema>` es el `sistema_origen` de las órdenes (`rentas`, `mercados`…): un sistema nuevo es una línea de
-configuración, no un despliegue. Por variables: `CAJA_BUZON_DESTINOS_RENTAS_URL` y `CAJA_BUZON_DESTINOS_RENTAS_TOKEN`.
+configuración, no un despliegue. Por variables: `CAJA_BUZON_DESTINOS_RENTAS_URL` y `CAJA_BUZON_DESTINOS_RENTAS_TOKEN`
+(y `_VERIFICAR` y `_SINRESPUESTA`, sin el guion: así lo une Spring).
 
 #### Una vuelta
 
@@ -1473,7 +1530,10 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `EntregaTest` fija las reglas del publicador: la clasificación de cada
   respuesta (también el 202 a cuenta, que solo anota, y el cuerpo ilegible o el 200 que no anotan), el recorte de
   `ultimo_error` y del motivo a cuenta, la marca de cada intento, la coherencia del evento con su recibo y la salida
-  de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`;
+  de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`; `VigenciaPorHttpTest`, las de la comprobación con el origen (la
+  pregunta con los importes en cadena, la no vigente con su motivo, el otro importe, el mismo importe con otra escala, el
+  motivo sin caracteres de control y recortado a 200, la referencia que falta y cada respuesta ilegible, que no contesta y
+  cobra o no según la configuración);
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
   `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado), con los
   recibos rotos que quedan fuera y se nombran;
@@ -1493,7 +1553,12 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `SISTEMA_ORIGEN` y el `ADMIN` que nombra el sistema, los 400 en `motivo`, **retiro y cobro a la vez** (gana uno, nunca
   una `ANULADA` con recibo), el cobro de una `ANULADA` que da 422, la vista previa que sigue en 200 con `cobrable`
   `false`, la lista por estado y la orden devuelta a `PENDIENTE` por la anulación de su recibo, que se puede retirar);
-  `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
+  `CajasApiTest`, el catálogo con y sin área. `VigenciaApiTest` cubre la comprobación con el origen contra
+  `SistemaDeOrigenFalso` (todo vigente cobra con una sola pregunta; la no vigente y la de otro importe dan 422 y quedan
+  `ANULADA` sin emitir nada; el origen caído cobra con la advertencia, que sale en `cobros/sin-verificar`, o da 503; sin
+  `verificar` o sin destino no pregunta; **el reenvío con la misma `Idempotency-Key` no vuelve a preguntar**; la
+  respuesta ilegible y la referencia callada cuentan como origen caído; una orden ya pagada no se pregunta; y
+  `sin-verificar` pide READ sobre `recibo` y una fecha válida). `CobroApiTest` cubre la cobranza: el
   caso feliz, el doble cobro, la idempotencia, los 400, 403, 404 y 409, **diez cobros simultáneos de la misma orden**
   (un recibo y nueve 409) y **veinte simultáneos en la misma caja** (del 1 al 20, sin huecos ni repetidos), los
   permisos y el PDF (con una reimpresión ya no sale el original), y **dos cobros simultáneos con la misma

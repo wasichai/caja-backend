@@ -15,7 +15,9 @@ import java.util.concurrent.TimeUnit
 // prueba le diga por su pagoId (503 si no le dijo nada) y guarda lo que recibió. alRecibir corre mientras el
 // publicador espera la respuesta: ahí se mira la base desde otra conexión. y contesta la conciliación del día (GET
 // /pagos/conciliacion?fecha=) con lo que la prueba le diga que aplicó esa fecha (404 si no le dijo nada), y guarda cada
-// consulta
+// consulta. y la comprobación en línea (POST /ordenes/vigencia, caja-backend#42): contesta de cada referencia lo que la
+// prueba le diga con vigencia (y calla las que no), guarda cada pregunta, y bajo la raíz /ilegible contesta algo que no
+// es json
 class SistemaDeOrigenFalso : AutoCloseable {
     private val servidor = MockWebServer()
     private val respuestas = ConcurrentHashMap<String, Pair<Int, String>>()
@@ -25,6 +27,10 @@ class SistemaDeOrigenFalso : AutoCloseable {
 
     // cada GET que llegó, con su ruta y su consulta, y la cabecera Authorization
     val consultadas = CopyOnWriteArrayList<Pair<String, String?>>()
+
+    // cada pregunta de vigencia que llegó, con su cuerpo
+    val preguntas = CopyOnWriteArrayList<String>()
+    private val vigencias = ConcurrentHashMap<String, String>()
 
     @Volatile
     var alRecibir: (String) -> Unit = {}
@@ -42,6 +48,7 @@ class SistemaDeOrigenFalso : AutoCloseable {
             object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
                     if (request.method == "GET") return conciliacion(request)
+                    if (request.url.encodedPath.endsWith(RUTA_VIGENCIA)) return vigencia(request)
                     val cuerpo = request.body?.utf8().orEmpty()
                     val pagoId = runCatching { JSON.readTree(cuerpo)["pagoId"]?.asString() }.getOrNull()
                     recibidas += Recibida(request.url.encodedPath, request.headers["Authorization"], request.headers["Content-Type"], cuerpo, pagoId)
@@ -107,11 +114,47 @@ class SistemaDeOrigenFalso : AutoCloseable {
             .build()
     }
 
+    // lo que el origen dice de una referencia cuando caja le pregunta si sigue vigente
+    fun vigencia(
+        referencia: String,
+        vigente: Boolean,
+        importe: String? = null,
+        motivo: String? = null
+    ) {
+        vigencias[referencia] =
+            JSON.writeValueAsString(linkedMapOf("referencia_externa" to referencia, "vigente" to vigente, "importe" to importe, "motivo" to motivo))
+    }
+
+    // las preguntas que nombran esa referencia
+    fun preguntasPor(referencia: String): List<String> = preguntas.filter { it.contains(referencia) }
+
+    private fun vigencia(request: RecordedRequest): MockResponse {
+        val cuerpo = request.body?.utf8().orEmpty()
+        preguntas += cuerpo
+        val respuesta =
+            if (request.url.encodedPath.startsWith("/ilegible")) {
+                "<html>no es json</html>"
+            } else {
+                val pedidas: List<String> =
+                    runCatching { JSON.readTree(cuerpo)["ordenes"].toList().map { it["referencia_externa"].asString() } }
+                        .getOrDefault(emptyList())
+                val dichas: List<String> = pedidas.mapNotNull { vigencias[it] }
+                "{\"ordenes\":[" + dichas.joinToString(",") + "]}"
+            }
+        return MockResponse
+            .Builder()
+            .code(200)
+            .setHeader("Content-Type", "application/json")
+            .body(respuesta)
+            .build()
+    }
+
     fun de(pagoId: String): List<Recibida> = recibidas.filter { it.pagoId == pagoId }
 
     override fun close() = servidor.close()
 
     private companion object {
         val JSON: JsonMapper = JsonMapper.builder().build()
+        const val RUTA_VIGENCIA = "/ordenes/vigencia"
     }
 }

@@ -311,6 +311,12 @@
           "type": "LONG_TEXT",
           "required": true,
           "description": "Por qué se cobró, escrito por quien cobró (regla 10)."
+        },
+        {
+          "name": "advertencia_origen",
+          "label": "Advertencia del origen",
+          "type": "TEXT",
+          "description": "Por qué no se pudo comprobar con el sistema de origen, antes de cobrar, que la deuda siguiera vigente (caja.buzon.destinos.<sistema>.verificar con sin-respuesta COBRAR), hasta 400 caracteres. Vacía si se comprobó o si ese sistema no lo pide. Se escribe al emitir: el recibo no cambia."
         }
       ]
     },

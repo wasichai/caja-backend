@@ -15,7 +15,8 @@ import kotlin.coroutines.cancellation.CancellationException
 // POST {url}/pagos con el cuerpo del evento TAL CUAL SE CONGELÓ al cobrar, sin recomponerlo ni agregarle nada. la ruta es
 // una para los dos tipos de evento: el tipo va dentro y el receptor decide. el token, si hay, va en la cabecera
 // Authorization: Bearer, y nunca en el cuerpo. y la única lectura: GET {url}/pagos/conciliacion?fecha= de la
-// conciliación del día (leer).
+// conciliación del día (leer). y la única pregunta: POST {url}/ordenes/vigencia, la comprobación en línea antes de cobrar
+// (preguntar, caja-backend#42).
 //
 // NUNCA DENTRO DE UNA TRANSACCIÓN: lo comprueba antes de llamar, y falla si hay una. una transacción abierta mientras el
 // destino tarda retendría su conexión y sus candados el tiempo de la red. la cobranza no lo llama nunca: con el sistema
@@ -79,6 +80,37 @@ class ClienteDelSistemaDeOrigen(
                     .header("Accept", "application/json")
                     .apply { if (token != null) header("Authorization", "Bearer $token") }
                     .GET()
+                    .build()
+            val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
+            Lectura.Contesto(respuesta.statusCode(), tachar(respuesta.body().orEmpty(), token))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Lectura.NoContesta(tachar("${e.javaClass.simpleName}: ${e.message ?: "sin mensaje"}", token))
+        }
+    }
+
+    // POST {url}{ruta} con un cuerpo json: una pregunta al sistema de origen que no es una entrega (la comprobación en línea
+    // antes de cobrar). como leer: el mismo destino, token y timeout, fuera de toda transacción, nunca lanza y no
+    // interpreta. la ventanilla espera su respuesta, así que el timeout es lo más que tarda un cobro de más
+    suspend fun preguntar(
+        sistema: String,
+        ruta: String,
+        cuerpo: String
+    ): Lectura {
+        check(!enTransaccion()) { "Se iba a preguntar a «$sistema» dentro de una transacción: la llamada al destino va siempre fuera" }
+        val destino = propiedades.destinos[sistema]
+        val raiz = destino?.url?.trim()?.ifEmpty { null } ?: return Lectura.SinDireccion
+        val token = destino.token?.trim()?.ifEmpty { null }
+        return try {
+            val peticion =
+                HttpRequest
+                    .newBuilder(URI.create(raiz.trimEnd('/') + ruta))
+                    .timeout(propiedades.timeout)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .apply { if (token != null) header("Authorization", "Bearer $token") }
+                    .POST(HttpRequest.BodyPublishers.ofString(cuerpo))
                     .build()
             val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
             Lectura.Contesto(respuesta.statusCode(), tachar(respuesta.body().orEmpty(), token))

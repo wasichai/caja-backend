@@ -37,7 +37,9 @@ data class Recibo(
     val total: BigDecimal? = null,
     val actualizadoA: LocalDate? = null,
     val claveIdempotencia: String? = null,
-    val observacion: String? = null
+    val observacion: String? = null,
+    // por qué no se pudo comprobar con el origen antes de cobrar (caja-backend#42), o null si se comprobó o no se pide
+    val advertenciaOrigen: String? = null
 )
 
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)

@@ -194,7 +194,9 @@ data class ReciboRespuesta(
     val tipoPago: String,
     val emitidoEn: String,
     val total: Importe,
-    val lineas: List<LineaRespuesta>
+    val lineas: List<LineaRespuesta>,
+    // el recibo se cobró sin poder comprobar con el origen (caja-backend#42): por qué. null si se comprobó o no se pide
+    val advertenciaOrigen: String? = null
 )
 
 // una línea del recibo o de la vista previa. la de una orden lleva su orden_id, su sistema, su detalle y su referencia;
