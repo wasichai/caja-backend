@@ -211,7 +211,7 @@ private fun deCredencial(
                 "la credencial SÍ vale (el destino la validó) y lo que falta es un permiso de esta caja sobre su buzón de pagos: se " +
                     "concede en el destino"
             token.isNullOrBlank() -> "esta caja no manda ninguna credencial: falta caja.buzon.destinos.$sistema.token"
-            else -> "la credencial que manda esta caja no vale o caducó (caja.buzon.destinos.$sistema.token)"
+            else -> "la credencial que manda esta caja no vale o caducó (caja.buzon.destinos.$sistema.token, o su client-id y client-secret)"
         }
     return "«$sistema» contestó $estado al publicar el pago: $porque. NO es un rechazo del pago: se reintenta. Contestó $contesto"
 }

@@ -6,6 +6,7 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import tools.jackson.databind.json.JsonMapper
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -32,6 +33,16 @@ class SistemaDeOrigenFalso : AutoCloseable {
     val preguntas = CopyOnWriteArrayList<String>()
     private val vigencias = ConcurrentHashMap<String, String>()
 
+    // el endpoint de token de la cuenta de servicio (POST /api/auth/token, ADR-043 de wasichai): cada pedido llega con su
+    // cuerpo y recibe un token nuevo («tok-1», «tok-2»…) que vence en expiraEn; estadoDelToken distinto de 200 lo falla
+    val pedidosDeToken = CopyOnWriteArrayList<String>()
+
+    @Volatile
+    var expiraEn: Instant = Instant.now().plus(Duration.ofMinutes(15))
+
+    @Volatile
+    var estadoDelToken: Int = 200
+
     @Volatile
     var alRecibir: (String) -> Unit = {}
 
@@ -47,6 +58,7 @@ class SistemaDeOrigenFalso : AutoCloseable {
         servidor.dispatcher =
             object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.url.encodedPath.endsWith(RUTA_TOKEN)) return token(request)
                     if (request.method == "GET") return conciliacion(request)
                     if (request.url.encodedPath.endsWith(RUTA_VIGENCIA)) return vigencia(request)
                     val cuerpo = request.body?.utf8().orEmpty()
@@ -125,6 +137,22 @@ class SistemaDeOrigenFalso : AutoCloseable {
             JSON.writeValueAsString(linkedMapOf("referencia_externa" to referencia, "vigente" to vigente, "importe" to importe, "motivo" to motivo))
     }
 
+    private fun token(request: RecordedRequest): MockResponse {
+        pedidosDeToken += request.body?.utf8().orEmpty()
+        val respuesta =
+            if (estadoDelToken == 200) {
+                """{"token":"tok-${pedidosDeToken.size}","expiresAt":"$expiraEn","tokenType":"Bearer"}"""
+            } else {
+                """{"error":"no"}"""
+            }
+        return MockResponse
+            .Builder()
+            .code(estadoDelToken)
+            .setHeader("Content-Type", "application/json")
+            .body(respuesta)
+            .build()
+    }
+
     // las preguntas que nombran esa referencia
     fun preguntasPor(referencia: String): List<String> = preguntas.filter { it.contains(referencia) }
 
@@ -156,5 +184,6 @@ class SistemaDeOrigenFalso : AutoCloseable {
     private companion object {
         val JSON: JsonMapper = JsonMapper.builder().build()
         const val RUTA_VIGENCIA = "/ordenes/vigencia"
+        const val RUTA_TOKEN = "/api/auth/token"
     }
 }

@@ -5,10 +5,13 @@ import kotlinx.coroutines.reactive.awaitSingle
 import org.springframework.stereotype.Component
 import org.springframework.transaction.NoTransactionException
 import org.springframework.transaction.reactive.TransactionSynchronizationManager
+import org.springframework.web.reactive.function.client.WebClient
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 
 // el único camino de caja hacia otro sistema (ClienteHttpDelSistemaDeOrigen y BuzonHttpDelSistemaDeOrigen de caja):
@@ -29,6 +32,26 @@ class ClienteDelSistemaDeOrigen(
     private val propiedades: PropiedadesDelBuzon
 ) {
     private val http: HttpClient = HttpClient.newBuilder().connectTimeout(propiedades.timeout).build()
+    private val web: WebClient = WebClient.create()
+
+    // la hora con la que se vence un token pedido: las pruebas la adelantan
+    internal var reloj: () -> Instant = Instant::now
+
+    // un TokenDelDestino por sistema, con su token en caché. un 401 o un 403 del origen lo olvida (caja-backend#50): la
+    // próxima llamada pide uno nuevo, y esta entrega queda en NoContesta como siempre
+    private val tokens = ConcurrentHashMap<String, TokenDelDestino>()
+
+    private fun tokenDe(
+        sistema: String,
+        destino: PropiedadesDelBuzon.Destino
+    ): TokenDelDestino = tokens.computeIfAbsent(sistema) { TokenDelDestino(destino, web, propiedades.timeout) { reloj() } }
+
+    private fun olvidarSiNoVale(
+        sistema: String,
+        estado: Int
+    ) {
+        if (estado == 401 || estado == 403) tokens[sistema]?.olvidar()
+    }
 
     suspend fun publicar(
         sistema: String,
@@ -37,21 +60,26 @@ class ClienteDelSistemaDeOrigen(
         check(!enTransaccion()) { "El pago a «$sistema» se iba a publicar dentro de una transacción: la llamada al destino va siempre fuera" }
         val destino = propiedades.destinos[sistema]
         val raiz = destino?.url?.trim()?.ifEmpty { null } ?: return sinDireccion(sistema)
-        val token = destino.token?.trim()?.ifEmpty { null }
+        var token: String? = null
         return try {
+            val bearer = tokenDe(sistema, destino).bearer()
+            token = bearer
             val peticion =
                 HttpRequest
                     .newBuilder(URI.create(raiz.trimEnd('/') + RUTA))
                     .timeout(propiedades.timeout)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
-                    .apply { if (token != null) header("Authorization", "Bearer $token") }
+                    .apply { if (bearer != null) header("Authorization", "Bearer $bearer") }
                     .POST(HttpRequest.BodyPublishers.ofString(cuerpo))
                     .build()
             val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
+            olvidarSiNoVale(sistema, respuesta.statusCode())
             clasificar(sistema, respuesta.statusCode(), respuesta.body(), token)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: TokenDelDestino.FalloDelToken) {
+            Respuesta.NoContesta("No se pudo publicar el pago: ${e.message}. Se reintenta")
         } catch (e: Exception) {
             // el tipo y el mensaje, tachados: un mensaje de la librería puede llevar la url, nunca debería llevar el token
             Respuesta.NoContesta(
@@ -71,20 +99,25 @@ class ClienteDelSistemaDeOrigen(
         check(!enTransaccion()) { "Se iba a preguntar a «$sistema» dentro de una transacción: la llamada al destino va siempre fuera" }
         val destino = propiedades.destinos[sistema]
         val raiz = destino?.url?.trim()?.ifEmpty { null } ?: return Lectura.SinDireccion
-        val token = destino.token?.trim()?.ifEmpty { null }
+        var token: String? = null
         return try {
+            val bearer = tokenDe(sistema, destino).bearer()
+            token = bearer
             val peticion =
                 HttpRequest
                     .newBuilder(URI.create(raiz.trimEnd('/') + ruta))
                     .timeout(propiedades.timeout)
                     .header("Accept", "application/json")
-                    .apply { if (token != null) header("Authorization", "Bearer $token") }
+                    .apply { if (bearer != null) header("Authorization", "Bearer $bearer") }
                     .GET()
                     .build()
             val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
+            olvidarSiNoVale(sistema, respuesta.statusCode())
             Lectura.Contesto(respuesta.statusCode(), respuesta.body().orEmpty(), token)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: TokenDelDestino.FalloDelToken) {
+            Lectura.NoContesta(e.message.orEmpty())
         } catch (e: Exception) {
             Lectura.NoContesta(tachar("${e.javaClass.simpleName}: ${e.message ?: "sin mensaje"}", token))
         }
@@ -101,21 +134,26 @@ class ClienteDelSistemaDeOrigen(
         check(!enTransaccion()) { "Se iba a preguntar a «$sistema» dentro de una transacción: la llamada al destino va siempre fuera" }
         val destino = propiedades.destinos[sistema]
         val raiz = destino?.url?.trim()?.ifEmpty { null } ?: return Lectura.SinDireccion
-        val token = destino.token?.trim()?.ifEmpty { null }
+        var token: String? = null
         return try {
+            val bearer = tokenDe(sistema, destino).bearer()
+            token = bearer
             val peticion =
                 HttpRequest
                     .newBuilder(URI.create(raiz.trimEnd('/') + ruta))
                     .timeout(propiedades.timeout)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
-                    .apply { if (token != null) header("Authorization", "Bearer $token") }
+                    .apply { if (bearer != null) header("Authorization", "Bearer $bearer") }
                     .POST(HttpRequest.BodyPublishers.ofString(cuerpo))
                     .build()
             val respuesta = http.sendAsync(peticion, HttpResponse.BodyHandlers.ofString()).await()
+            olvidarSiNoVale(sistema, respuesta.statusCode())
             Lectura.Contesto(respuesta.statusCode(), respuesta.body().orEmpty(), token)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: TokenDelDestino.FalloDelToken) {
+            Lectura.NoContesta(e.message.orEmpty())
         } catch (e: Exception) {
             Lectura.NoContesta(tachar("${e.javaClass.simpleName}: ${e.message ?: "sin mensaje"}", token))
         }
