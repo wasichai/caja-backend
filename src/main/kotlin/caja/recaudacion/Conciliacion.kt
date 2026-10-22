@@ -143,13 +143,13 @@ fun lineaDe(
             if (lectura.estado != 200) {
                 noSeSabe(
                     recuento,
-                    "$noContesto: a GET /pagos/conciliacion?fecha=$dia contestó ${lectura.estado}, ${contestado(lectura.cuerpo, token = null)}"
+                    "$noContesto: a GET /pagos/conciliacion?fecha=$dia contestó ${lectura.estado}, ${contestado(lectura.tachado(lectura.cuerpo), token = null)}"
                 )
             } else {
                 try {
-                    LineaDeConciliacion(recuento, aplicadoDe(lectura.cuerpo, dia), null)
+                    LineaDeConciliacion(recuento, aplicadoDe(lectura.cuerpo, dia, lectura::tachado), null)
                 } catch (e: IllegalArgumentException) {
-                    noSeSabe(recuento, "$noContesto una conciliación que se pueda leer: ${e.message}")
+                    noSeSabe(recuento, "$noContesto una conciliación que se pueda leer: ${lectura.tachado(e.message.orEmpty())}")
                 } catch (e: JacksonException) {
                     noSeSabe(recuento, "$noContesto una conciliación que se pueda leer: ${e.javaClass.simpleName}")
                 }
@@ -162,13 +162,15 @@ private fun noSeSabe(
     motivo: String
 ) = LineaDeConciliacion(recuento, null, motivo)
 
-// lo que dice el cuerpo de un 200. cada cifra se exige: la que falta o no se entiende no se rellena con cero.
-// importe_aplicado viaja en cadena (regla 1); se lee también importeAplicado, como lo contesta hoy rentas. las dos cifras
-// a cuenta son la excepción: un origen que no conoce el pago a cuenta no las manda, y entonces son cero (no recibió
-// ninguno así). si las manda, se leen con las mismas reglas que las otras
+// lo que dice el cuerpo de un 200, leído tal como llegó: tachado, una «clave» lo dejaría sin ser json. lo que se cuenta
+// de él va tachado. cada cifra se exige: la que falta o no se entiende no se rellena con cero. importe_aplicado viaja en
+// cadena (regla 1); se lee también importeAplicado, como lo contesta hoy rentas. las dos cifras a cuenta son la
+// excepción: un origen que no conoce el pago a cuenta no las manda, y entonces son cero (no recibió ninguno así). si las
+// manda, se leen con las mismas reglas que las otras
 private fun aplicadoDe(
     cuerpo: String,
-    dia: LocalDate
+    dia: LocalDate,
+    tachado: (String) -> String
 ): AplicadoEnElOrigen {
     val json =
         try {
@@ -176,7 +178,7 @@ private fun aplicadoDe(
         } catch (_: JacksonException) {
             null
         }
-    require(json != null && json.isObject) { "su respuesta no es un objeto JSON: ${contestado(cuerpo, token = null)}" }
+    require(json != null && json.isObject) { "su respuesta no es un objeto JSON: ${contestado(tachado(cuerpo), token = null)}" }
     // cada valor del otro sistema se nombra con toString(): asString() sobre un objeto o una lista lanza, y una respuesta
     // mal formada tiene que acabar en «no se sabe», no en un 500 de toda la conciliación
     json["fecha"]?.takeUnless { it.isNull }?.let { fecha ->

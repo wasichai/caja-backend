@@ -46,6 +46,24 @@ class RetiroApiTest : CajaApiTest() {
         assertEquals(MOTIVO, segundo["motivo_retiro"].asString())
     }
 
+    // el reenvío del alta de una orden que el origen ya retiró: un 200 nueva:false le haría creer que caja la va a cobrar.
+    // es un 409 que dice cuándo y por qué se retiró, y que la versión nueva lleva otra referencia (sustituye_a)
+    @Test
+    fun `reenviar el alta de una orden retirada es 409 con su fecha y su motivo`() {
+        val (_, rentas) = cuentaDeServicio("rentas")
+        val cuerpo = orden() - "sistema_origen"
+        val alta = post(ORDENES, cuerpo, rentas)
+        val retirada = tree(send("POST", RETIRO, retiro(alta), HttpStatus.OK, rentas))
+
+        val problema = tree(send("POST", ORDENES, cuerpo, HttpStatus.CONFLICT, rentas))
+
+        val detalle = problema["detail"].asString()
+        assertTrue(detalle.contains(retirada["retirada_en"].asString()), detalle)
+        assertTrue(detalle.contains(MOTIVO), detalle)
+        assertTrue(detalle.contains("sustituye_a"), detalle)
+        assertEquals("ANULADA", estadoDe(alta["orden_id"].asString()))
+    }
+
     @Test
     fun `retirar una PAGADA es 409 y dice el recibo`() {
         val (_, rentas) = cuentaDeServicio("rentas")

@@ -352,7 +352,7 @@ sin registrar) o `EXPLICADO` (un `MUERTO` del que alguien se hizo cargo por escr
 | `ultimo_error`    | TEXT      | Por qué falló el último intento, recortado a 400 caracteres y sin credenciales. Lo escribe el publicador. |
 | `entregado_en`    | DATETIME  | Solo si está `ENTREGADO`. Lo escribe el publicador.                                              |
 | `explicacion`     | LONG_TEXT | Solo si está `EXPLICADO`: qué pasó y qué se hizo, al menos 5 caracteres.                        |
-| `a_cuenta`        | BOOLEAN   | Solo si está `ENTREGADO`: `true` si el origen lo recibió **a cuenta** (un 202 que lo dice, ver «El pago a cuenta»). Lo escribe el publicador. |
+| `a_cuenta`        | BOOLEAN   | Solo si está `ENTREGADO`: `true` si el origen lo recibió **a cuenta** (un 202 que lo dice, o el 409 de su reenvío; ver «El pago a cuenta»). Lo escribe el publicador. |
 | `motivo_a_cuenta` | TEXT      | Solo si es a cuenta: el motivo del origen, sin credenciales, en una línea y recortado a 400 caracteres. |
 
 ### `cierre_turno`
@@ -407,7 +407,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 
 | Ruta                               | Qué hace                                                                                  | Permiso que exige                       |
 | ---------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
-| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba con la misma deuda, **409** si ya estaba con otra (ver «El alta que choca»). Con `sustituye_a`, reemplaza otra orden (ver «La sustitución»): **201**, **200** en el reenvío, **409** si la vieja está `PAGADA` o ya la sustituyó otra, **404** si no existe. | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
+| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba con la misma deuda, **409** si ya estaba con otra o si ya está `ANULADA` (ver «El alta que choca»). Con `sustituye_a`, reemplaza otra orden (ver «La sustitución»): **201**, **200** en el reenvío, **409** si la vieja está `PAGADA` o ya la sustituyó otra, **404** si no existe. | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
 | `POST /api/caja/ordenes-de-cobro/retiro` | El sistema de origen retira una orden `PENDIENTE` (ver «El retiro»): **200** con la orden `ANULADA`, también si ya lo estaba; **409** si está `PAGADA`; **404** si no hay una de su sistema con esa referencia. | una cuenta de servicio (o un `ADMIN` que nombra el sistema), con READ y UPDATE sobre `orden_de_cobro` |
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
@@ -480,6 +480,12 @@ Se comparan los que son la deuda (`Choque.kt`):
 dice, y el reenvío con otra fecha es 200 con la orden como estaba. Tampoco el concepto, el detalle, el nombre ni el id
 externo del pagador, que se imprimen pero no cambian lo que se cobra. Un 200 con la orden vieja le haría creer al origen
 que caja cobrará lo que acaba de mandar: por eso el 409.
+
+**El reenvío del alta de una orden retirada** también es **409**, aunque pida la misma deuda: si la que ya estaba está
+`ANULADA` (el origen la retiró, o la sustituyó otra), un 200 `nueva: false` le haría creer al origen que caja la va a
+cobrar, y no la cobra nunca. El `detail` dice cuándo se retiró (`retirada_en`) y con qué motivo (`motivo_retiro`), y
+que una versión nueva de la deuda lleva otra referencia y nombra la anterior en `sustituye_a`. El reenvío de una
+**sustitución** (el alta con `sustituye_a`) sigue siendo idempotente: 200 con la nueva, como en «La sustitución».
 
 **La sustitución** (caja-backend#40). Un origen que redetermina una deuda manda la versión nueva con **otra
 referencia** y nombra la vieja en `sustituye_a`, **aunque el importe sea el mismo**:
@@ -722,7 +728,7 @@ Con el origen contestando, `recibidos`, `aplicados`, `rechazados` y `recibidos_a
   recorta. Es lo que permite que mañana sea el contrato de un puesto de mercado.
 - **La idempotencia es del motor, no de un `if`** (#188 de `caja`). El alta inserta y, si la `uniqueConstraint` de
   `(sistema_origen, referencia_externa)` salta (`DuplicateKeyException`), relee la orden que ya estaba y la devuelve con
-  200, tal como estaba, si pide la misma deuda (si no, 409: ver «El alta que choca»). No hay una
+  200, tal como estaba, si pide la misma deuda y no está `ANULADA` (si no, 409: ver «El alta que choca»). No hay una
   lectura previa: dos altas simultáneas la pasarían las dos y el mismo administrado tendría dos órdenes por la misma
   deuda. `OrdenesApiTest` lanza diez altas simultáneas de la misma clave y exige una sola orden.
 - **La caja no recalcula.** El importe y su fecha se guardan como llegan; la caja no comprueba el pagador contra ningún
@@ -842,7 +848,10 @@ implementa el lado del origen.
   ```
 
   `vigente` es un booleano; `importe` (en cadena, o `null` si no lo dice) se compara con `compareTo` (`12.5` es
-  `12.50`); `motivo` es opcional.
+  `12.50`); `motivo` es opcional. Los demás campos se ignoran (srtm manda la `clave` de cada cuota). El cuerpo se lee
+  **tal como llegó**: lo que de él se guarda o se cuenta (el motivo, el porqué de una advertencia) va tachado como
+  `ultimo_error`, pero el json se lee sin tachar, porque tachar `"clave": "p1|…"` lo dejaría sin ser json y una
+  respuesta válida pasaría por un origen que no contesta.
 - **Una orden no vigente, o vigente con otro importe, no se cobra.** Caja la **retira ahí mismo**, con el candado de la
   orden y en su propia transacción (`retirarBajoCandado`, la regla del retiro): queda `ANULADA` con
   `motivo_retiro` «el origen dice: {motivo}» (sin motivo, «ya no está vigente») o «el origen dice otro importe: 13.00»,
@@ -858,6 +867,12 @@ implementa el lado del origen.
     `numero_impreso`, `cajero`, `pagador_documento`, `pagador_nombre`, `emitido_en`, `total` y `advertencia_origen`.
     Exige READ sobre `recibo`.
   - **`NO_COBRAR`**: **503** (`OrigenSinRespuesta`), que nombra el sistema y por qué, y no se emite nada.
+- **Dos cobros iguales a la vez.** El reenvío se busca antes de la pregunta, y la `Idempotency-Key` se vuelve a
+  mirar dentro de la transacción, después. Dos cobros con la misma clave en vuelo a la vez no encuentran el reenvío
+  ninguno de los dos, y los dos preguntan: el segundo puede recibir un **503** (el origen no contesta y su
+  `sin-respuesta` es `NO_COBRAR`) o un **409** (el origen ya no la da por vigente, y su retiro choca con la orden que el
+  primero ya cobró: el de una `PAGADA`) en vez del recibo de la primera vez. No se cobra dos veces, y un reintento posterior, con el primero ya confirmado, recibe el reenvío (200 con
+  ese recibo).
 - **Los paquetes.** El puerto (`VigenciaEnElOrigen`, con `Vigencia`: `NoSeConsulta`, `Contesto` y `NoContesta`) es de
   `cobro`; la implementación por http (`VigenciaPorHttp`), de `buzon`, que ya conoce el destino. `cobro` no importa
   `buzon` (`DependenciasEntrePaquetesTest`).
@@ -1188,7 +1203,7 @@ vuelve a esperar. En cada vuelta:
 
 | Respuesta | Qué es | Qué queda |
 |---|---|---|
-| 200, 201, 202 o **409** (el receptor ya lo tenía: deduplicó por `pagoId`) | Entregado | `ENTREGADO`, `entregado_en`, `intentos + 1` y `ultimo_error` vacío; un 202 que dice `a_cuenta`, además `a_cuenta` y `motivo_a_cuenta` (ver «El pago a cuenta») |
+| 200, 201, 202 o **409** (el receptor ya lo tenía: deduplicó por `pagoId`) | Entregado | `ENTREGADO`, `entregado_en`, `intentos + 1` y `ultimo_error` vacío; un 202 (o un 409) que dice `a_cuenta`, además `a_cuenta` y `motivo_a_cuenta` (ver «El pago a cuenta») |
 | 401 o 403 | No contesta, con un diagnóstico de credencial: sin token, token que no vale o caducó, o falta un permiso en el destino | `intentos + 1` y `ultimo_error`; se reintenta |
 | Otro 4xx | Rechazado: el motivo no va a cambiar solo | **`MUERTO` ya**, con `intentos + 1` |
 | 5xx, error de E/S, tiempo agotado o **sin URL configurada** | No contesta | `intentos + 1` y `ultimo_error`; `MUERTO` cuando `intentos + 1 ≥ caja.buzon.intentos` |
@@ -1243,11 +1258,15 @@ deuda le llega igual, y no tiene a qué imputarlo. En vez de rechazarlo (un 4xx:
 {"aplicado": false, "a_cuenta": true, "motivo": "la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida por ARB-p1|LIMP|2026|3|1|2"}
 ```
 
-- **La entrega la sigue decidiendo el código, nunca el cuerpo.** Un 202 es `ENTREGADO` diga lo que diga. El cuerpo
+- **La entrega la sigue decidiendo el código, nunca el cuerpo.** Un 202 (o un 409) es `ENTREGADO` diga lo que diga. El cuerpo
   **solo anota** (`aCuentaDe`): si es un objeto con `a_cuenta` igual al booleano `true`, el evento queda con
   `a_cuenta: true` y `motivo_a_cuenta`. Sin motivo (o en blanco, o que no es una cadena), el motivo es «el origen no dijo
   por qué». Un cuerpo vacío, ilegible, con `a_cuenta: false` o con `"true"` en cadena es un `ENTREGADO` sin anotar, con
-  `a_cuenta: false`. Un 200, 201 o 409 con ese cuerpo no se anota: **solo el 202 lo dice**.
+  `a_cuenta: false`. Un 200 o 201 con ese cuerpo no se anota: **solo el 202 y el 409 lo dicen**.
+- **El reenvío de un pago recibido a cuenta.** Si caja no oyó el 202 (se le agotó el tiempo) reintenta con el mismo
+  `pagoId`, y el origen lo deduplica con **409**. Para que la marca no se pierda, **el origen contesta ese 409 repitiendo
+  `{"a_cuenta": true, "motivo": "…"}`** cuando el pago original lo recibió a cuenta, y caja lo lee igual que el del 202
+  (`aCuentaDe`). Un 409 sin cuerpo, o sin `a_cuenta`, es un `ENTREGADO` sin anotar.
 - **El motivo lo escribió el otro sistema**: va tachado como `ultimo_error` (el token y lo que parece una credencial), en
   una línea (sin caracteres de control) y recortado a 400 caracteres.
 - **Un pago a cuenta no bloquea nada**: es un `ENTREGADO`, y el turno cierra. Por eso mismo se lista:

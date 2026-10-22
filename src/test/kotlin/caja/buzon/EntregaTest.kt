@@ -44,6 +44,19 @@ class EntregaTest {
             assertEquals(Respuesta.Entregado(SIN_MOTIVO_A_CUENTA), clasificar("rentas", 202, """{"a_cuenta":true,"motivo":{"x":1}}""", token = null))
         }
 
+        // el reenvío de un pago que el origen recibió a cuenta: caja no oyó el 202 (se le agotó el tiempo), reintenta, y el
+        // origen deduplica con 409 repitiendo {a_cuenta, motivo}. la marca no se pierde; la entrega la sigue decidiendo el
+        // código, y un 409 sin cuerpo es un entregado sin anotar
+        @Test
+        fun `409 con a_cuenta es entregado a cuenta, y sin cuerpo es entregado sin anotar`() {
+            val cuerpo = """{"a_cuenta":true,"motivo":"la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida"}"""
+
+            assertEquals(Respuesta.Entregado("la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida"), clasificar("rentas", 409, cuerpo, token = null))
+            listOf(null, "", "no es json", """{"detail":"ya lo tengo"}""").forEach { sinMarca ->
+                assertEquals(Respuesta.Entregado(), clasificar("rentas", 409, sinMarca, token = null), "$sinMarca")
+            }
+        }
+
         @Test
         fun `202 sin cuerpo o con cuerpo ilegible es entregado sin anotar`() {
             listOf(null, "", "no es json", "[]", "{}", """{"a_cuenta":false,"motivo":"x"}""", """{"a_cuenta":"true","motivo":"x"}""", "{\"a_cuenta\":tr")
@@ -53,9 +66,9 @@ class EntregaTest {
         }
 
         @Test
-        fun `200 con a_cuenta true no se anota, solo el 202 lo dice`() {
+        fun `200 con a_cuenta true no se anota, solo el 202 y el 409 lo dicen`() {
             val cuerpo = """{"aplicado":false,"a_cuenta":true,"motivo":"sustituida"}"""
-            listOf(200, 201, 409).forEach { estado ->
+            listOf(200, 201).forEach { estado ->
                 assertEquals(Respuesta.Entregado(), clasificar("rentas", estado, cuerpo, token = null), "$estado")
             }
         }
