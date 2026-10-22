@@ -72,8 +72,19 @@ class OrdenesService(
         } catch (choque: DataIntegrityViolationException) {
             // DuplicateKeyException incluida. RecordService no abre transacción: la orden que ganó ya está confirmada
             // cuando el motor rechaza esta. si no está, el choque fue otro y sigue su camino
-            reenvio(atributos) ?: throw choque
+            val existente = reenvio(atributos) ?: throw choque
+            // la que ya estaba la retiró el origen: un 200 le haría creer que caja la va a cobrar, y no la cobra nunca.
+            // el reenvío de una sustitución (con sustituye_a) no pasa por aquí: sigue siendo idempotente
+            if (existente.estado == ANULADA) throw yaRetirada(existente)
+            existente
         }
+
+    private fun yaRetirada(orden: OrdenRespuesta) =
+        ConflictException(
+            "La orden de cobro ${orden.sistemaOrigen}/${orden.referenciaExterna} ya está ANULADA: se retiró el " +
+                "${orden.retiradaEn ?: "(sin fecha)"} con el motivo «${orden.motivoRetiro ?: "sin motivo"}», y caja no la cobra. " +
+                "Una versión nueva de la deuda lleva otra referencia y nombra la anterior en sustituye_a"
+        )
 
     // 201 con la nueva y la vieja ANULADA con sustituida_por; 200 si la nueva ya estaba y pide lo mismo (el reenvío);
     // 409 si la vieja está PAGADA o ya la sustituyó otra, o si la nueva ya estaba con otra deuda; 404 si la vieja no

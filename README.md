@@ -407,7 +407,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 
 | Ruta                               | Qué hace                                                                                  | Permiso que exige                       |
 | ---------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
-| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba con la misma deuda, **409** si ya estaba con otra (ver «El alta que choca»). Con `sustituye_a`, reemplaza otra orden (ver «La sustitución»): **201**, **200** en el reenvío, **409** si la vieja está `PAGADA` o ya la sustituyó otra, **404** si no existe. | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
+| `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba con la misma deuda, **409** si ya estaba con otra o si ya está `ANULADA` (ver «El alta que choca»). Con `sustituye_a`, reemplaza otra orden (ver «La sustitución»): **201**, **200** en el reenvío, **409** si la vieja está `PAGADA` o ya la sustituyó otra, **404** si no existe. | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
 | `POST /api/caja/ordenes-de-cobro/retiro` | El sistema de origen retira una orden `PENDIENTE` (ver «El retiro»): **200** con la orden `ANULADA`, también si ya lo estaba; **409** si está `PAGADA`; **404** si no hay una de su sistema con esa referencia. | una cuenta de servicio (o un `ADMIN` que nombra el sistema), con READ y UPDATE sobre `orden_de_cobro` |
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
@@ -480,6 +480,12 @@ Se comparan los que son la deuda (`Choque.kt`):
 dice, y el reenvío con otra fecha es 200 con la orden como estaba. Tampoco el concepto, el detalle, el nombre ni el id
 externo del pagador, que se imprimen pero no cambian lo que se cobra. Un 200 con la orden vieja le haría creer al origen
 que caja cobrará lo que acaba de mandar: por eso el 409.
+
+**El reenvío del alta de una orden retirada** también es **409**, aunque pida la misma deuda: si la que ya estaba está
+`ANULADA` (el origen la retiró, o la sustituyó otra), un 200 `nueva: false` le haría creer al origen que caja la va a
+cobrar, y no la cobra nunca. El `detail` dice cuándo se retiró (`retirada_en`) y con qué motivo (`motivo_retiro`), y
+que una versión nueva de la deuda lleva otra referencia y nombra la anterior en `sustituye_a`. El reenvío de una
+**sustitución** (el alta con `sustituye_a`) sigue siendo idempotente: 200 con la nueva, como en «La sustitución».
 
 **La sustitución** (caja-backend#40). Un origen que redetermina una deuda manda la versión nueva con **otra
 referencia** y nombra la vieja en `sustituye_a`, **aunque el importe sea el mismo**:
@@ -722,7 +728,7 @@ Con el origen contestando, `recibidos`, `aplicados`, `rechazados` y `recibidos_a
   recorta. Es lo que permite que mañana sea el contrato de un puesto de mercado.
 - **La idempotencia es del motor, no de un `if`** (#188 de `caja`). El alta inserta y, si la `uniqueConstraint` de
   `(sistema_origen, referencia_externa)` salta (`DuplicateKeyException`), relee la orden que ya estaba y la devuelve con
-  200, tal como estaba, si pide la misma deuda (si no, 409: ver «El alta que choca»). No hay una
+  200, tal como estaba, si pide la misma deuda y no está `ANULADA` (si no, 409: ver «El alta que choca»). No hay una
   lectura previa: dos altas simultáneas la pasarían las dos y el mismo administrado tendría dos órdenes por la misma
   deuda. `OrdenesApiTest` lanza diez altas simultáneas de la misma clave y exige una sola orden.
 - **La caja no recalcula.** El importe y su fecha se guardan como llegan; la caja no comprueba el pagador contra ningún
@@ -861,6 +867,12 @@ implementa el lado del origen.
     `numero_impreso`, `cajero`, `pagador_documento`, `pagador_nombre`, `emitido_en`, `total` y `advertencia_origen`.
     Exige READ sobre `recibo`.
   - **`NO_COBRAR`**: **503** (`OrigenSinRespuesta`), que nombra el sistema y por qué, y no se emite nada.
+- **Dos cobros iguales a la vez.** El reenvío se busca antes de la pregunta, y la `Idempotency-Key` se vuelve a
+  mirar dentro de la transacción, después. Dos cobros con la misma clave en vuelo a la vez no encuentran el reenvío
+  ninguno de los dos, y los dos preguntan: el segundo puede recibir un **503** (el origen no contesta y su
+  `sin-respuesta` es `NO_COBRAR`) o un **409** (el origen ya no la da por vigente, y su retiro choca con la orden que el
+  primero ya cobró: el de una `PAGADA`) en vez del recibo de la primera vez. No se cobra dos veces, y un reintento posterior, con el primero ya confirmado, recibe el reenvío (200 con
+  ese recibo).
 - **Los paquetes.** El puerto (`VigenciaEnElOrigen`, con `Vigencia`: `NoSeConsulta`, `Contesto` y `NoContesta`) es de
   `cobro`; la implementación por http (`VigenciaPorHttp`), de `buzon`, que ya conoce el destino. `cobro` no importa
   `buzon` (`DependenciasEntrePaquetesTest`).
