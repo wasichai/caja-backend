@@ -1,6 +1,8 @@
 package caja.buzon
 
 import caja.comun.CuerpoEstricto
+import caja.comun.Importe
+import com.fasterxml.jackson.annotation.JsonProperty
 import tools.jackson.databind.PropertyNamingStrategies
 import tools.jackson.databind.annotation.JsonNaming
 
@@ -20,6 +22,20 @@ data class PagoDelBuzon(
     val creadoEn: String?,
     val entregadoEn: String?,
     val explicacion: String?
+)
+
+// un pago que el origen recibió «a cuenta» (caja-backend#41), como lo lee la hoja de cierre: el total es el de su recibo,
+// a la fecha del turno
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
+data class PagoACuenta(
+    val pagoId: String,
+    val tipo: String,
+    val recibo: String?,
+    val sistemaDestino: String,
+    val total: Importe?,
+    @param:JsonProperty("motivo_a_cuenta")
+    val motivoACuenta: String?,
+    val entregadoEn: String?
 )
 
 // lo que manda quien se hace cargo de un pago MUERTO: qué pasó y qué se hizo (queda en el evento), y por qué se registra

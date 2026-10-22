@@ -5,6 +5,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 // los pagos que no se pudieron entregar y su explicación (PagoController de caja). bajo /api/caja como el resto: el
@@ -13,11 +14,18 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/caja/pagos")
 class PagoController(
     private val sinEntregar: PagosSinEntregar,
-    private val explicar: ExplicarPagoSinEntregar
+    private val explicar: ExplicarPagoSinEntregar,
+    private val aCuenta: PagosACuenta
 ) {
     // los MUERTO: dinero cobrado sin registrar, lo que hay que resolver hoy. ruta propia y no un filtro de un listado
     @GetMapping("/sin-entregar")
     suspend fun sinEntregar() = sinEntregar.listar()
+
+    // los que el origen recibió a cuenta ese día (caja-backend#41): la hoja de cierre los muestra aparte
+    @GetMapping("/a-cuenta")
+    suspend fun aCuenta(
+        @RequestParam(required = false) fecha: String?
+    ) = aCuenta.del(fecha)
 
     // 200: cambia el estado de un evento que ya existe, no crea nada
     @PostMapping("/{pagoId}/explicacion")

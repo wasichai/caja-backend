@@ -166,6 +166,70 @@ class ConciliacionTest {
             assertEquals("100.00", linea.diferencia!!.toPlainString())
         }
 
+        // los pagos «a cuenta» (caja-backend#41): el origen los recibió como saldo a favor porque la deuda ya no estaba
+        // vigente. no son un rechazo: se cuentan aparte, y su importe también se resta del neto
+        @Test
+        fun `sin los campos a cuenta, el origen viejo sigue leyendose con ceros a cuenta`() {
+            val linea = lineaDe(recuento(), dia, Lectura.Contesto(200, """{"recibidos":1,"aplicados":1,"rechazados":0,"importe_aplicado":"100.00"}"""))
+
+            assertEquals(0L, linea.aplicado!!.recibidosACuenta)
+            assertEquals("0.00", linea.aplicado.importeACuenta.toPlainString())
+            assertTrue(linea.cuadra())
+        }
+
+        @Test
+        fun `diferencia = neto - importe_aplicado - importe_a_cuenta`() {
+            val linea =
+                lineaDe(
+                    recuento(),
+                    dia,
+                    Lectura.Contesto(
+                        200,
+                        """{"recibidos":2,"aplicados":1,"rechazados":0,"importe_aplicado":"50.00","recibidos_a_cuenta":1,"importe_a_cuenta":"30.00"}"""
+                    )
+                )
+
+            assertEquals(1L, linea.aplicado!!.recibidosACuenta)
+            assertEquals("30.00", linea.aplicado.importeACuenta.toPlainString())
+            assertEquals("20.00", linea.diferencia!!.toPlainString())
+            assertFalse(linea.cuadra())
+        }
+
+        @Test
+        fun `con pagos a cuenta y sin rechazos cuadra`() {
+            val linea =
+                lineaDe(
+                    recuento(),
+                    dia,
+                    Lectura.Contesto(
+                        200,
+                        """{"recibidos":2,"aplicados":1,"rechazados":0,"importeAplicado":"60.00","recibidos_a_cuenta":1,"importeACuenta":"40"}"""
+                    )
+                )
+
+            assertEquals("40.00", linea.aplicado!!.importeACuenta.toPlainString())
+            assertEquals("0.00", linea.diferencia!!.toPlainString())
+            assertTrue(linea.cuadra())
+            assertFalse(linea(recuento(), aplicado(importe = "60.00", rechazados = 1, aCuenta = "40.00")).cuadra(), "un rechazo sigue sin cuadrar")
+        }
+
+        @Test
+        fun `importe_a_cuenta con 3 decimales no se sabe`() {
+            listOf(
+                """"importe_a_cuenta":"40.005"""" to "2 decimales",
+                """"importe_a_cuenta":40.00""" to "cadena",
+                """"importe_a_cuenta":"-1.00"""" to "importe_a_cuenta",
+                """"recibidos_a_cuenta":-1""" to "recibidos_a_cuenta",
+                """"recibidos_a_cuenta":"1"""" to "recibidos_a_cuenta"
+            ).forEach { (campo, dice) ->
+                val cuerpo = """{"recibidos":2,"aplicados":1,"rechazados":0,"importe_aplicado":"60.00",$campo}"""
+                val linea = lineaDe(recuento(), dia, Lectura.Contesto(200, cuerpo))
+                assertNull(linea.aplicado, cuerpo)
+                assertTrue(linea.porQueNoSeSabe!!.contains(dice), "$cuerpo -> ${linea.porQueNoSeSabe}")
+                assertFalse(linea.cuadra())
+            }
+        }
+
         @Test
         fun `sin url configurada el destino no esta configurado, y no hay cifras`() {
             val linea = lineaDe(recuento(), dia, Lectura.SinDireccion)
@@ -246,8 +310,9 @@ class ConciliacionTest {
 
     private fun aplicado(
         importe: String,
-        rechazados: Long = 0
-    ) = AplicadoEnElOrigen(1 + rechazados, 1, rechazados, dinero(importe))
+        rechazados: Long = 0,
+        aCuenta: String = "0.00"
+    ) = AplicadoEnElOrigen(1 + rechazados, 1, rechazados, dinero(importe), if (dinero(aCuenta).signum() == 0) 0 else 1, dinero(aCuenta))
 
     private fun linea(
         recuento: RecuentoDelDia,

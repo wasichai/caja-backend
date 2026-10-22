@@ -171,13 +171,13 @@ class PublicadorDelBuzon(
         val marca = marcaDe(respuesta, evento.intentos, propiedades.intentos)
         val error =
             when (respuesta) {
-                Respuesta.Entregado -> null
+                is Respuesta.Entregado -> null
                 is Respuesta.NoContesta -> recortar(respuesta.motivo)
                 is Respuesta.Rechazado -> recortar(respuesta.motivo)
             }
         val anotado =
             if (error == null) {
-                store.entregado(buzon, evento, OffsetDateTime.now(reloj))
+                store.entregado(buzon, evento, OffsetDateTime.now(reloj), (respuesta as Respuesta.Entregado).aCuenta)
             } else {
                 store.fallido(buzon, evento, error, muere = marca == Marca.MUERTO)
             }

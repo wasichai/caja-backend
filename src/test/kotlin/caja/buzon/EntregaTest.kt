@@ -28,8 +28,46 @@ class EntregaTest {
         @Test
         fun `200, 201, 202 y 409 son entregado, y el 409 es que el receptor ya lo tenia`() {
             listOf(200, 201, 202, 409).forEach { estado ->
-                assertEquals(Respuesta.Entregado, clasificar("rentas", estado, "", token = null), "$estado")
+                assertEquals(Respuesta.Entregado(), clasificar("rentas", estado, "", token = null), "$estado")
             }
+        }
+
+        // el pago «a cuenta» (caja-backend#41): el origen lo recibió, pero la deuda ya no estaba vigente (la sustituyó o la
+        // anuló) y lo guardó como saldo a favor del pagador. sigue siendo una entrega: solo se anota
+        @Test
+        fun `202 con a_cuenta true es entregado a cuenta con su motivo`() {
+            val cuerpo = """{"aplicado":false,"a_cuenta":true,"motivo":"la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida"}"""
+
+            assertEquals(Respuesta.Entregado("la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida"), clasificar("rentas", 202, cuerpo, token = null))
+            assertEquals(Respuesta.Entregado(SIN_MOTIVO_A_CUENTA), clasificar("rentas", 202, """{"a_cuenta":true}""", token = null))
+            assertEquals(Respuesta.Entregado(SIN_MOTIVO_A_CUENTA), clasificar("rentas", 202, """{"a_cuenta":true,"motivo":"  "}""", token = null))
+            assertEquals(Respuesta.Entregado(SIN_MOTIVO_A_CUENTA), clasificar("rentas", 202, """{"a_cuenta":true,"motivo":{"x":1}}""", token = null))
+        }
+
+        @Test
+        fun `202 sin cuerpo o con cuerpo ilegible es entregado sin anotar`() {
+            listOf(null, "", "no es json", "[]", "{}", """{"a_cuenta":false,"motivo":"x"}""", """{"a_cuenta":"true","motivo":"x"}""", "{\"a_cuenta\":tr")
+                .forEach { cuerpo ->
+                    assertEquals(Respuesta.Entregado(), clasificar("rentas", 202, cuerpo, token = null), "$cuerpo")
+                }
+        }
+
+        @Test
+        fun `200 con a_cuenta true no se anota, solo el 202 lo dice`() {
+            val cuerpo = """{"aplicado":false,"a_cuenta":true,"motivo":"sustituida"}"""
+            listOf(200, 201, 409).forEach { estado ->
+                assertEquals(Respuesta.Entregado(), clasificar("rentas", estado, cuerpo, token = null), "$estado")
+            }
+        }
+
+        @Test
+        fun `el motivo se recorta a 400 y pierde los caracteres de control`() {
+            val largo = aCuentaDe("""{"a_cuenta":true,"motivo":"${"m".repeat(5000)}"}""", token = null)!!
+            assertEquals(LARGO_ULTIMO_ERROR, largo.length)
+            assertTrue(largo.endsWith("…"))
+            assertEquals("una línea más otra", aCuentaDe("""{"a_cuenta":true,"motivo":"una línea\r\nmás\u0007\totra"}""", token = null))
+            val tachado = aCuentaDe("""{"a_cuenta":true,"motivo":"vino con Bearer el-token-secreto"}""", token = "el-token-secreto")!!
+            assertFalse(tachado.contains("el-token-secreto"), tachado)
         }
 
         @Test
@@ -112,7 +150,8 @@ class EntregaTest {
     inner class LaMarca {
         @Test
         fun `entregado cuenta el intento`() {
-            assertEquals(Marca.ENTREGADO, marcaDe(Respuesta.Entregado, intentosLeidos = 3, maximos = 8))
+            assertEquals(Marca.ENTREGADO, marcaDe(Respuesta.Entregado(), intentosLeidos = 3, maximos = 8))
+            assertEquals(Marca.ENTREGADO, marcaDe(Respuesta.Entregado("a cuenta"), intentosLeidos = 3, maximos = 8))
         }
 
         @Test

@@ -79,12 +79,16 @@ fun recuentosDe(eventos: List<EventoDelDia>): List<RecuentoDelDia> =
         }.sortedBy { it.sistema }
 
 // lo que el origen dice haber aplicado ese día: cuántos pagos le llegaron, cuántos imputó, cuántos no pudo imputar y
-// esperan a alguien, y por cuánto dinero
+// esperan a alguien, y por cuánto dinero. y aparte, los que recibió «a cuenta» (caja-backend#41): la deuda ya no estaba
+// vigente (la sustituyó o la anuló) y el pago quedó como saldo a favor del pagador. no son un rechazo, nadie los espera,
+// y su dinero también lo tiene el origen. un origen que no los cuenta (el de antes) los deja en cero
 data class AplicadoEnElOrigen(
     val recibidos: Long,
     val aplicados: Long,
     val rechazados: Long,
-    val importeAplicado: BigDecimal
+    val importeAplicado: BigDecimal,
+    val recibidosACuenta: Long = 0,
+    val importeACuenta: BigDecimal = CERO
 )
 
 // una línea: un sistema de destino. O el origen contestó O hay un motivo por el que no se sabe: las dos cosas a la vez,
@@ -101,8 +105,9 @@ data class LineaDeConciliacion(
         }
     }
 
-    // lo que la caja cobró menos lo que el origen aplicó. null si el origen no contestó: nunca cero
-    val diferencia: BigDecimal? get() = aplicado?.let { recuento.neto.subtract(it.importeAplicado) }
+    // lo que la caja cobró menos lo que el origen aplicó y lo que recibió a cuenta. null si el origen no contestó: nunca
+    // cero
+    val diferencia: BigDecimal? get() = aplicado?.let { recuento.neto.subtract(it.importeAplicado).subtract(it.importeACuenta) }
 
     // tres condiciones y no una, porque se arreglan de tres maneras: que no quede nada en tránsito ni muerto, que el
     // origen haya contestado, y que la diferencia sea cero sin rechazos. un día con la diferencia en cero y tres pagos en
@@ -158,7 +163,9 @@ private fun noSeSabe(
 ) = LineaDeConciliacion(recuento, null, motivo)
 
 // lo que dice el cuerpo de un 200. cada cifra se exige: la que falta o no se entiende no se rellena con cero.
-// importe_aplicado viaja en cadena (regla 1); se lee también importeAplicado, como lo contesta hoy rentas
+// importe_aplicado viaja en cadena (regla 1); se lee también importeAplicado, como lo contesta hoy rentas. las dos cifras
+// a cuenta son la excepción: un origen que no conoce el pago a cuenta no las manda, y entonces son cero (no recibió
+// ninguno así). si las manda, se leen con las mismas reglas que las otras
 private fun aplicadoDe(
     cuerpo: String,
     dia: LocalDate
@@ -176,8 +183,10 @@ private fun aplicadoDe(
         require(fecha.isString && fecha.asString() == dia.toString()) { "contestó con la fecha $fecha y se le preguntó por el $dia" }
     }
 
-    fun cuenta(campo: String): Long {
-        val valor = json[campo]
+    fun cuenta(
+        campo: String,
+        valor: JsonNode? = json[campo]
+    ): Long {
         require(valor != null && valor.isIntegralNumber && valor.canConvertToLong() && valor.asLong() >= 0) {
             "$campo no es un número entero no negativo (${valor ?: "falta"})"
         }
@@ -186,15 +195,26 @@ private fun aplicadoDe(
     val recibidos = cuenta("recibidos")
     val aplicados = cuenta("aplicados")
     val rechazados = cuenta("rechazados")
-    val importe: JsonNode? = json["importe_aplicado"] ?: json["importeAplicado"]
-    require(importe != null && !importe.isNull) { "falta importe_aplicado" }
-    require(importe.isString) { "importe_aplicado llega como ${importe.nodeType} y no en cadena: un importe no viaja como número (regla 1)" }
+    val importe = importeDe("importe_aplicado", json["importe_aplicado"] ?: json["importeAplicado"])
+    val recibidosACuenta = json["recibidos_a_cuenta"]?.takeUnless { it.isNull }?.let { cuenta("recibidos_a_cuenta", it) } ?: 0
+    val importeACuenta =
+        (json["importe_a_cuenta"] ?: json["importeACuenta"])?.takeUnless { it.isNull }?.let { importeDe("importe_a_cuenta", it) } ?: CERO
+    return AplicadoEnElOrigen(recibidos, aplicados, rechazados, importe, recibidosACuenta, importeACuenta)
+}
+
+// un importe de la respuesta del origen: en cadena (regla 1), decimal sin signo con punto y a lo sumo 2 decimales
+private fun importeDe(
+    campo: String,
+    importe: JsonNode?
+): BigDecimal {
+    require(importe != null && !importe.isNull) { "falta $campo" }
+    require(importe.isString) { "$campo llega como ${importe.nodeType} y no en cadena: un importe no viaja como número (regla 1)" }
     val texto = importe.asString()
-    require(DECIMAL.matches(texto)) { "importe_aplicado no es un decimal sin signo escrito con punto: «$texto»" }
-    require(BigDecimal(texto).scale() <= 2) { "importe_aplicado tiene más de 2 decimales: «$texto»; un importe no tiene milésimos" }
+    require(DECIMAL.matches(texto)) { "$campo no es un decimal sin signo escrito con punto: «$texto»" }
+    require(BigDecimal(texto).scale() <= 2) { "$campo tiene más de 2 decimales: «$texto»; un importe no tiene milésimos" }
     // con la escala de un importe: «100» se lee 100.00, sin redondear nada (sumar el cero de dos decimales solo agrega
     // ceros), y la diferencia sale como las demás cifras
-    return AplicadoEnElOrigen(recibidos, aplicados, rechazados, BigDecimal(texto).add(CERO))
+    return BigDecimal(texto).add(CERO)
 }
 
 // la petición: la conciliación EXIGE EL DÍA. sin él habría que elegir uno («hoy»), y una conciliación que se responde

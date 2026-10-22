@@ -32,6 +32,7 @@ import tools.jackson.databind.node.ArrayNode
 import tools.jackson.databind.node.ObjectNode
 import wasichai.core.platform.WasichaiSchemas
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 // el publicador del buzón contra un sistema de origen falso por http (CobrarConElOrigenApagadoTest,
@@ -833,6 +834,58 @@ class BuzonApiTest : CajaApiTest() {
         assertEquals("CERRADO", post(CIERRE, cierre, cajero.token)["estado_del_turno"].asString())
     }
 
+    // el pago «a cuenta» (caja-backend#41): el origen lo recibió, la deuda ya no estaba vigente y lo guardó como saldo a
+    // favor. es una entrega: el turno cierra, y la hoja de cierre lo lista aparte
+    @Test
+    fun `un 202 a cuenta queda ENTREGADO con a_cuenta y su motivo, y aparece en pagos-a-cuenta del dia`() {
+        val supervisor = funcionario("SUPERVISOR_CAJA")
+        val cajero = cuenta("CAJERO")
+        val cobro = cobrar(PRUEBAS, importe = "42.10", cajero = cajero)
+        val normal = cobrar(PRUEBAS)
+        origen.contestar(cobro.pagoId, 202, """{"aplicado":false,"a_cuenta":true,"motivo":"la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida"}""")
+        origen.contestar(normal.pagoId, 202, """{"aplicado":true}""")
+
+        vuelta()
+
+        val entregado = evento(cobro.pagoId)["attributes"]
+        assertEquals("ENTREGADO", entregado["estado"].asString())
+        assertTrue(entregado["a_cuenta"].asBoolean(), entregado.toString())
+        assertEquals("la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida", entregado["motivo_a_cuenta"].asString())
+        assertTrue(entregado["ultimo_error"].isNull)
+        val sinAnotar = evento(normal.pagoId)["attributes"]
+        assertEquals("ENTREGADO", sinAnotar["estado"].asString())
+        assertFalse(sinAnotar["a_cuenta"].asBoolean(), sinAnotar.toString())
+        assertTrue(sinAnotar["motivo_a_cuenta"].isNull)
+
+        val fecha = registro("turno", cobro.turnoId)["attributes"]["fecha"].asString()
+        val lista = tree(send("GET", "$A_CUENTA?fecha=$fecha", null, HttpStatus.OK, supervisor)).toList()
+        val fila = lista.single { it["pago_id"].asString() == cobro.pagoId }
+        assertEquals(
+            setOf("pago_id", "tipo", "recibo", "sistema_destino", "total", "motivo_a_cuenta", "entregado_en"),
+            fila.propertyNames().asSequence().toSet()
+        )
+        assertEquals("PAGO_REGISTRADO", fila["tipo"].asString())
+        assertEquals(cobro.numero, fila["recibo"].asString())
+        assertEquals(PRUEBAS, fila["sistema_destino"].asString())
+        assertEquals("42.10", fila["total"]["importe"].asString())
+        assertEquals(fecha, fila["total"]["actualizado_a"].asString())
+        assertEquals("la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida", fila["motivo_a_cuenta"].asString())
+        assertTrue(fila["entregado_en"].asString().endsWith("-05:00"), fila.toString())
+        assertTrue(lista.none { it["pago_id"].asString() == normal.pagoId }, "el que se aplicó no es a cuenta")
+        // otro día no lo trae, y la fecha es obligatoria
+        val otroDia = LocalDate.parse(fecha).minusDays(1)
+        assertTrue(tree(send("GET", "$A_CUENTA?fecha=$otroDia", null, HttpStatus.OK, supervisor)).toList().none { it["pago_id"].asString() == cobro.pagoId })
+        send("GET", A_CUENTA, null, HttpStatus.BAD_REQUEST, supervisor)
+        send("GET", "$A_CUENTA?fecha=02/10/2026", null, HttpStatus.BAD_REQUEST, supervisor)
+        // tesorería lee, quien no lee el buzón no
+        send("GET", "$A_CUENTA?fecha=$fecha", null, HttpStatus.OK, funcionario("TESORERIA"))
+        send("GET", "$A_CUENTA?fecha=$fecha", null, HttpStatus.FORBIDDEN, funcionario(listOf(permiso("recibo", "READ"))))
+
+        // un pago a cuenta no impide cerrar el turno: se entregó
+        val cierre = mapOf("caja" to cobro.caja.codigo, "declarado" to mapOf("EFECTIVO" to "42.10"), "observacion" to "cierre del turno")
+        assertEquals("CERRADO", post(CIERRE, cierre, cajero.token)["estado_del_turno"].asString())
+    }
+
     @Test
     fun `con el buzon habilitado el bucle corre`() {
         assertTrue(bucle.isRunning)
@@ -1051,6 +1104,7 @@ class BuzonApiTest : CajaApiTest() {
         const val COBROS = "/api/caja/cobros"
         const val CIERRE = "/api/caja/turnos/cierre"
         const val SIN_ENTREGAR = "/api/caja/pagos/sin-entregar"
+        const val A_CUENTA = "/api/caja/pagos/a-cuenta"
         const val PRUEBAS = "buzon-ok"
         const val CON_TOKEN = "buzon-token"
         const val CAIDO = "buzon-caido"

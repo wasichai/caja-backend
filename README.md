@@ -349,6 +349,8 @@ sin registrar) o `EXPLICADO` (un `MUERTO` del que alguien se hizo cargo por escr
 | `ultimo_error`    | TEXT      | Por qué falló el último intento, recortado a 400 caracteres y sin credenciales. Lo escribe el publicador. |
 | `entregado_en`    | DATETIME  | Solo si está `ENTREGADO`. Lo escribe el publicador.                                              |
 | `explicacion`     | LONG_TEXT | Solo si está `EXPLICADO`: qué pasó y qué se hizo, al menos 5 caracteres.                        |
+| `a_cuenta`        | BOOLEAN   | Solo si está `ENTREGADO`: `true` si el origen lo recibió **a cuenta** (un 202 que lo dice, ver «El pago a cuenta»). Lo escribe el publicador. |
+| `motivo_a_cuenta` | TEXT      | Solo si es a cuenta: el motivo del origen, sin credenciales, en una línea y recortado a 400 caracteres. |
 
 ### `cierre_turno`
 
@@ -421,6 +423,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | `POST /api/caja/turnos/cierre`     | Cierra el turno con su arqueo (ver «El cierre»): **201** con el acta. | CREATE sobre `cierre_turno` y `cierre_turno_linea` (403 antes de empezar) |
 | `POST /api/caja/turnos/reversion`  | Reversa el cierre vigente y reabre el turno (ver «La reversión»): **201**. | CREATE sobre `reversion_cierre` (403 antes de empezar): `SUPERVISOR_CAJA` |
 | `GET /api/caja/pagos/sin-entregar` | Los pagos `MUERTO`, del más antiguo al más reciente (ver «Los pagos sin entregar»): **200** con una lista. | READ sobre `pago_evento` y `recibo` (403 antes de empezar) |
+| `GET /api/caja/pagos/a-cuenta`     | Los pagos que el origen recibió a cuenta en los turnos de `?fecha=AAAA-MM-DD`, **obligatoria** (sin ella o mal escrita, **400** en `fecha`; ver «El pago a cuenta»): **200** con una lista. | READ sobre `pago_evento` y `recibo` (403 antes de empezar); al leer, además `turno` |
 | `POST /api/caja/pagos/{pago_id}/explicacion` | Pasa un pago `MUERTO` a `EXPLICADO` con su `explicacion` y su `observacion`: **200** con el pago; **409** si no está `MUERTO`. | UPDATE sobre `pago_evento` (403 antes de empezar): `SUPERVISOR_CAJA` |
 | `GET /api/caja/recaudacion/avance` | Lo recaudado por origen en `?desde=&hasta=` (días del turno; por defecto, del 1 de enero a hoy), con `?origen=`, `?caja=` y `?cajero=`; con caja y cajero, además el arqueo en vivo de su turno de hoy (ver «La recaudación»): **200**; **404** sin ese turno; **400** con un rango al revés, una fecha mal escrita, una `caja` que no existe o un `cajero` que nunca abrió turno (en su campo, nunca un avance en cero). | READ sobre `recibo` y `linea_recibo` (403 antes de empezar); al leer, core exige además `turno` y `anulacion_recibo` (y `caja`, `cierre_turno` y `reversion_cierre` con caja y cajero) |
 | `GET /api/caja/recaudacion/por-area` | Lo recaudado por área, partida y concepto en `?desde=&hasta=`, con `?area=` (el código o «COD — nombre»), y `neto_sin_partida`: **200**; **400** como el avance. | READ sobre `recibo`, `linea_recibo`, `area` y `tasa` (403 antes de empezar); al leer, además `turno` y `anulacion_recibo` |
@@ -648,12 +651,13 @@ Con `caja` y `cajero`, `turno` es `{"turno_id", "caja", "cajero", "fecha", "esta
 {"fecha": "2026-10-02", "a_la_fecha": "2026-10-03", "cuadra": false,
  "lineas": [{"sistema_destino": "rentas", "registrados": 2, "anulados": 1, "en_transito": 0, "muertos": 0, "explicados": 0,
              "cobrado": {"importe": "150.00", "actualizado_a": "2026-10-02"}, "anulado": {…}, "neto": {…},
-             "recibidos": null, "aplicados": null, "rechazados": null, "importe_aplicado": null, "diferencia": null,
+             "recibidos": null, "aplicados": null, "rechazados": null, "importe_aplicado": null,
+             "recibidos_a_cuenta": null, "importe_a_cuenta": null, "diferencia": null,
              "por_que_no_se_sabe": "rentas no contestó: ConnectException: …", "cuadra": false}]}
 ```
 
-Con el origen contestando, `recibidos`, `aplicados` y `rechazados` son números, `importe_aplicado` y `diferencia` son
-`Importe` a la `fecha` conciliada, y `por_que_no_se_sabe` va en `null`.
+Con el origen contestando, `recibidos`, `aplicados`, `rechazados` y `recibidos_a_cuenta` son números,
+`importe_aplicado`, `importe_a_cuenta` y `diferencia` son `Importe` a la `fecha` conciliada, y `por_que_no_se_sabe` va en `null`.
 
 ## Reglas
 
@@ -996,7 +1000,8 @@ El cuerpo sigue `docs/50-api/contratos-que-consume/rentas.json` de `caja`: `pago
 lleva imputación: el origen decide qué extingue.
 
 **Cambio del contrato:** `ordenes[].ordenId` es ahora el UUID de la orden **en cadena** (en `caja` era un entero, el id
-de su tabla). `rentas` tiene que leerlo como texto.
+de su tabla), p. ej. `"ordenId": "8f0c2a8e-1f0e-4d0b-9a8e-3c1d2b4a5e6f"`. `rentas` tiene que leerlo como texto. El
+`rentas.json` de `caja` todavía lo declara entero (ver «Siguientes pasos»).
 
 ### El buzón de salida
 
@@ -1074,7 +1079,7 @@ vuelve a esperar. En cada vuelta:
 
 | Respuesta | Qué es | Qué queda |
 |---|---|---|
-| 200, 201, 202 o **409** (el receptor ya lo tenía: deduplicó por `pagoId`) | Entregado | `ENTREGADO`, `entregado_en`, `intentos + 1` y `ultimo_error` vacío |
+| 200, 201, 202 o **409** (el receptor ya lo tenía: deduplicó por `pagoId`) | Entregado | `ENTREGADO`, `entregado_en`, `intentos + 1` y `ultimo_error` vacío; un 202 que dice `a_cuenta`, además `a_cuenta` y `motivo_a_cuenta` (ver «El pago a cuenta») |
 | 401 o 403 | No contesta, con un diagnóstico de credencial: sin token, token que no vale o caducó, o falta un permiso en el destino | `intentos + 1` y `ultimo_error`; se reintenta |
 | Otro 4xx | Rechazado: el motivo no va a cambiar solo | **`MUERTO` ya**, con `intentos + 1` |
 | 5xx, error de E/S, tiempo agotado o **sin URL configurada** | No contesta | `intentos + 1` y `ultimo_error`; `MUERTO` cuando `intentos + 1 ≥ caja.buzon.intentos` |
@@ -1118,6 +1123,34 @@ salto de línea no inyecta otra línea en el registro. Es dinero que entró por 
 También salta por un `PAGO_ANULADO` que muere sin salir porque su `PAGO_REGISTRADO` nunca llegó (caja-backend#23):
 el par se explica entero. **Es un registro, no un correo**: llega a una persona si la observabilidad del despliegue alerta sobre las líneas ERROR, y
 aquí nada comprueba que llegue (el mismo hueco declarado que `AlertaEnElRegistro` de `caja`).
+
+#### El pago a cuenta
+
+srtm puede sustituir o anular una deuda ya cobrada (una redeterminación, días después; caja-backend#41). El pago de esa
+deuda le llega igual, y no tiene a qué imputarlo. En vez de rechazarlo (un 4xx: `MUERTO`, alerta y turno bloqueado),
+**lo recibe a cuenta**: lo guarda como saldo a favor del pagador y contesta **202** con:
+
+```json
+{"aplicado": false, "a_cuenta": true, "motivo": "la deuda ARB-p1|LIMP|2026|3|1|1 fue sustituida por ARB-p1|LIMP|2026|3|1|2"}
+```
+
+- **La entrega la sigue decidiendo el código, nunca el cuerpo.** Un 202 es `ENTREGADO` diga lo que diga. El cuerpo
+  **solo anota** (`aCuentaDe`): si es un objeto con `a_cuenta` igual al booleano `true`, el evento queda con
+  `a_cuenta: true` y `motivo_a_cuenta`. Sin motivo (o en blanco, o que no es una cadena), el motivo es «el origen no dijo
+  por qué». Un cuerpo vacío, ilegible, con `a_cuenta: false` o con `"true"` en cadena es un `ENTREGADO` sin anotar, con
+  `a_cuenta: false`. Un 200, 201 o 409 con ese cuerpo no se anota: **solo el 202 lo dice**.
+- **El motivo lo escribió el otro sistema**: va tachado como `ultimo_error` (el token y lo que parece una credencial), en
+  una línea (sin caracteres de control) y recortado a 400 caracteres.
+- **Un pago a cuenta no bloquea nada**: es un `ENTREGADO`, y el turno cierra. Por eso mismo se lista:
+  **`GET /api/caja/pagos/a-cuenta?fecha=`** (`PagosACuenta`) da los de los **turnos** de ese día (como la conciliación),
+  para la hoja de cierre (caja-ui#28): `pago_id`, `tipo`, `recibo` (el número impreso), `sistema_destino`, `total` (el
+  del recibo, como `Importe` a la `fecha`), `motivo_a_cuenta` y `entregado_en` (en ISO con el offset de Lima). Exige
+  READ sobre `pago_evento` y `recibo`; la fecha es obligatoria (400 en `fecha`).
+- **El `PAGO_ANULADO` de un pago recibido a cuenta** sale como cualquier otro, con su `pagoOriginalId`. El origen
+  **revierte el saldo** a favor que había guardado; si ya lo usó, eso se resuelve en el origen, no en la caja. Por
+  ejemplo, `{"pagoId": "…", "tipo": "PAGO_ANULADO", "pagoOriginalId": "<el pagoId del 202 a cuenta>", …}`: el origen
+  busca el saldo que nació de ese `pagoId` y lo anula.
+- **En la conciliación** se cuenta aparte (ver «La conciliación del día»).
 
 #### Los pagos sin entregar
 
@@ -1332,7 +1365,10 @@ reproducible al día siguiente. Hay una línea por `sistema_destino` con eventos
 - **Lo que sale del origen**: `GET {url}/pagos/conciliacion?fecha=` al destino de `caja.buzon.destinos.<sistema>`, con
   su token y su `timeout` (`ClienteDelSistemaDeOrigen.leer`), **fuera de toda transacción**. Contesta `recibidos`,
   `aplicados`, `rechazados` e `importe_aplicado` (en cadena; se lee también `importeAplicado`, como contesta hoy
-  `rentas`). `diferencia = neto − importe_aplicado`. El importe tiene a lo sumo 2 decimales y se lee con la escala de
+  `rentas`), y **los pagos a cuenta aparte**: `recibidos_a_cuenta` (entero) e `importe_a_cuenta` (en cadena; también
+  `importeACuenta`). Estos dos son **opcionales**: un origen que no conoce el pago a cuenta no los manda y valen cero;
+  si los manda, se leen con las mismas reglas que los demás. `diferencia = neto − importe_aplicado − importe_a_cuenta`:
+  el dinero de un pago a cuenta también lo tiene el origen, y no es un rechazo. El importe tiene a lo sumo 2 decimales y se lee con la escala de
   un importe (`"100"` es `100.00`); con más decimales, con otra `fecha` que la preguntada, o con cualquier valor que no
   se entienda (una lista, un objeto, un entero que no cabe), la línea dice por qué no se sabe.
 - **Falla en voz alta.** Si el origen no contesta, contesta otro código, contesta algo que no se puede leer o no tiene
@@ -1340,7 +1376,8 @@ reproducible al día siguiente. Hay una línea por `sistema_destino` con eventos
   no está configurado…», «rentas no contestó: …»). **Nunca ceros**: un cero se leería como «no aplicaron nada», que es
   indistinguible de un día sin cobros, y la conciliación diría que cuadra. La línea no cuadra, y el día tampoco. Lo que
   sale del buzón se dice igual: un origen caído deja la conciliación incompleta, no ciega.
-- **`cuadra`**, por línea: nada en tránsito ni muerto, el origen contestó, la diferencia es cero y no hay rechazos. Un
+- **`cuadra`**, por línea: nada en tránsito ni muerto, el origen contestó, la diferencia es cero y no hay rechazos
+  (los pagos a cuenta no son rechazos: con ellos y sin rechazos, la línea cuadra). Un
   día con la diferencia en cero y un pago en tránsito no cuadra: cuadra por casualidad. **El día cuadra** si cuadran
   todas sus líneas, y un día sin cobros cuadra.
 
@@ -1434,7 +1471,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   clave que no conoce para rechazarla con su nombre. `DependenciasEntrePaquetesTest` lee los imports de `src/main` y
   falla si aparece un ciclo entre paquetes o si `comun` o `modelo` importan uno de negocio (ver «Los paquetes»).
   `EntregaTest` fija las reglas del publicador: la clasificación de cada
-  respuesta, el recorte de `ultimo_error`, la marca de cada intento, la coherencia del evento con su recibo y la salida
+  respuesta (también el 202 a cuenta, que solo anota, y el cuerpo ilegible o el 200 que no anotan), el recorte de
+  `ultimo_error` y del motivo a cuenta, la marca de cada intento, la coherencia del evento con su recibo y la salida
   de un `PAGO_ANULADO` según su `PAGO_REGISTRADO`;
   `ResponsableDeLaConciliacionTest`, que con el buzón encendido el arranque falla sin responsable ni canal.
   `ArqueoDelTurnoTest` es el de `caja` portado (la suma, la diferencia, lo imposible, el cuadre y el estado), con los
@@ -1443,8 +1481,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   peticiones del turno; `PurezaDelTurnoTest`, que el arqueo y el cierre no dependen de Spring, del reloj ni de la base.
   `RecaudacionTest` fija las agregaciones de la recaudación (el origen, el sello de las líneas, lo anulado que se resta,
   las partes que suman el total, el hueco de la partida, el recibo roto, el rango y el área de la petición); `ConciliacionTest`, la
-  línea de la conciliación (la diferencia, cuándo cuadra, lo que dice el origen y por qué no se sabe, sin ceros, y la
-  fecha obligatoria); `PurezaDeLaRecaudacionTest`, que no dependen de Spring, del reloj, de la base ni de la red.
+  línea de la conciliación (la diferencia, cuándo cuadra, lo que dice el origen y por qué no se sabe, sin ceros, los
+  pagos a cuenta opcionales que se restan del neto y su importe mal escrito, y la fecha obligatoria); `PurezaDeLaRecaudacionTest`, que no dependen de Spring, del reloj, de la base ni de la red.
 - **Integración de la API**: `CajaApiTest` es su base (aplica `model.json` y `roles.json`, da usuarios con un rol y
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
   `CAJERO`), la cuenta de servicio que da de alta sin nombrar el sistema, la que nombra otro (403), la persona con el
@@ -1498,7 +1536,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   `PAGO_ANULADO` forjado antes que no impide entregar el legítimo**, **el `PAGO_ANULADO` que espera a su
   `PAGO_REGISTRADO` sin contar intento y sale detrás de él**, **la anulación que no se envía y muere si su pago murió, y
   el turno que cierra al explicar los dos**, la explicación que solo vale con un
-  `MUERTO` y **`elPagoMuertoSeExplicaYEntoncesCierra`**. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
+  `MUERTO`, **`elPagoMuertoSeExplicaYEntoncesCierra`** y **el 202 a cuenta**, que queda `ENTREGADO` con `a_cuenta` y
+  su motivo, sale en `GET /pagos/a-cuenta` de su día (no en otro, 400 sin fecha, 403 sin READ) y deja cerrar el turno. `BucleDelBuzonApiTest` deja correr el bucle; `BuzonApagadoApiTest`
   comprueba que apagado no arranca; `CerrojoBuzonTest`, que el cerrojo del buzón (`ClusterLock.tryLock`) es exclusivo (un
   segundo `tomar()` da `null` y, suelto con `release()`, se toma otra vez); `BuzonApiTest` prueba además que una marca
   espera el candado de su evento (el de la explicación) y que dos publicadores cuentan un solo intento, y que cada marca
@@ -1511,7 +1550,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   guarda (`forjarEnLaBase` y `cambiarEnLaBase` de `CajaApiTest`). `CajaApiTest` da también `cuentaDeServicio()` (la
   cuenta de un sistema de origen y su token) y `organizacion()` (la del admin sembrado, para `asPlatform`). `RecaudacionApiTest` cubre la recaudación y la conciliación contra el mismo sistema de origen falso, con
   un `Clock` movible y días lejanos propios: **ocho días que cuadran** con la línea y sus dos mitades, el día sin cobros
-  que cuadra, el origen que aplicó de menos o rechazó, el pago en tránsito, **el origen apagado y el destino sin
+  que cuadra, el origen que aplicó de menos o rechazó, **la línea con pagos a cuenta que cuadra** (y la del origen que
+  no los manda, con ceros de verdad), el pago en tránsito, **el origen apagado y el destino sin
   configurar, sin un solo cero** (recorre el JSON), la fecha obligatoria, **las partes que suman el total**, lo de una
   orden sin partida, el filtro por área, la anulación que se resta, la línea forjada que no cuenta, **el cobro nocturno
   que va a su día de Lima** y **la cifra del día que cuadra con el arqueo de su turno**, el 404 y los 400, **el avance
@@ -1581,9 +1621,10 @@ Un registro que solo usa un paquete vive en él (el cierre y su reversión en `t
   `importe_aplicado`, y que caja tenga su `caja.buzon.destinos.rentas` (url y token). Y la otra mitad: que dé de alta
   sus órdenes con su **cuenta de servicio** (`rentas`, con el rol `SISTEMA_ORIGEN`) y pida su token cada 15 minutos; el
   usuario con contraseña ya no existe, y nadie integra todavía. Hoy solo se probó contra el sistema de origen falso.
-- **`rentas.json` declara `ordenId` entero, y ahora es un UUID** en cadena: el contrato de `caja`
-  (`docs/50-api/contratos-que-consume/rentas.json`) y quien lo lea tienen que cambiar (ver «El evento
-  `PAGO_REGISTRADO`»).
+- **`rentas.json` declara `ordenId` entero, y ahora es un UUID** en cadena, y **no tiene el 202 a cuenta** ni
+  `recibidos_a_cuenta` e `importe_a_cuenta` en la conciliación: el contrato de `caja`
+  (`docs/50-api/contratos-que-consume/rentas.json`, generado en hneyra/caja) y su generador tienen que cambiar en ese
+  repositorio (ver «El evento `PAGO_REGISTRADO`» y «El pago a cuenta»).
 - **El sistema de origen tiene que comprobar el importe** de cada `PAGO_REGISTRADO` contra su propia deuda (la
   `referenciaExterna` y su importe): la guarda impide bajarlo por la API genérica, pero no a quien escribe en la base
   (ver «La segunda puerta»).
