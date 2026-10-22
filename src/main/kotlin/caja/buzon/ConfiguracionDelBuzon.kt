@@ -10,8 +10,8 @@ import java.time.Duration
 // caja.buzon en application.yml. EL DESTINO ES CONFIGURABLE Y ESTÁ APAGADO POR DEFECTO (decisión 5 del plan, como PIDE
 // en srtm): con habilitado=false no arranca ningún bucle, los pagos quedan PENDIENTE y el turno que los tiene no cierra
 // (la regla del PR 7). cada sistema de origen es una entrada de destinos, por su nombre (el sistema_origen de sus
-// órdenes): uno nuevo es una línea de configuración, no un despliegue. el token, si hay, viaja como Authorization:
-// Bearer y nunca en el cuerpo
+// órdenes): uno nuevo es una línea de configuración, no un despliegue. el token, si hay (fijo, o pedido con la cuenta de
+// servicio del origen), viaja como Authorization: Bearer y nunca en el cuerpo
 @ConfigurationProperties("caja.buzon")
 data class PropiedadesDelBuzon(
     val habilitado: Boolean = false,
@@ -39,12 +39,28 @@ data class PropiedadesDelBuzon(
     data class Destino(
         val url: String? = null,
         val token: String? = null,
+        // la cuenta de servicio del origen (caja-backend#50), en vez del token fijo: los dos a la vez no arrancan
+        val tokenUrl: String? = null,
+        val clientId: String? = null,
+        val clientSecret: String? = null,
         val verificar: Boolean = false,
         val sinRespuesta: SinRespuesta = SinRespuesta.COBRAR
     ) {
-        // el token nunca sale en un toString (un registro de arranque, un volcado de la configuración)
+        init {
+            val conCuenta = !clientId.isNullOrBlank()
+            require(!(conCuenta && !token.isNullOrBlank())) {
+                "Un destino se autentica con token o con client-id, no con los dos (caja.buzon.destinos.*.token y .client-id): " +
+                    "o el token fijo, o la cuenta de servicio del origen"
+            }
+            require(!conCuenta || (!tokenUrl.isNullOrBlank() && !clientSecret.isNullOrBlank())) {
+                "Con caja.buzon.destinos.*.client-id hacen falta también .token-url y .client-secret"
+            }
+        }
+
+        // el token y el client-secret nunca salen en un toString (un registro de arranque, un volcado de la configuración)
         override fun toString() =
-            "Destino(url=$url, token=${if (token.isNullOrBlank()) "ninguno" else "«…»"}, verificar=$verificar, sinRespuesta=$sinRespuesta)"
+            "Destino(url=$url, token=${if (token.isNullOrBlank()) "ninguno" else "«…»"}, tokenUrl=$tokenUrl, clientId=$clientId, " +
+                "clientSecret=${if (clientSecret.isNullOrBlank()) "ninguno" else "«…»"}, verificar=$verificar, sinRespuesta=$sinRespuesta)"
     }
 
     enum class SinRespuesta { COBRAR, NO_COBRAR }

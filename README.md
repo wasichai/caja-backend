@@ -66,6 +66,7 @@ ese puerto queda en el loopback del servidor: llega por un túnel, `ssh -N -L 54
 | `CAJA_MUNICIPALIDAD_NOMBRE` | ninguno | el nombre que encabeza el recibo. **Obligatorio**: sin él la app no arranca |
 | `CAJA_BUZON_HABILITADO` | `false` | enciende el publicador del buzón (ver «El buzón de salida») |
 | `CAJA_BUZON_DESTINOS_<SISTEMA>_URL` / `_TOKEN` | ninguno | a dónde se entregan los pagos de ese sistema de origen, y su token Bearer opcional |
+| `CAJA_BUZON_DESTINOS_<SISTEMA>_TOKENURL` / `_CLIENTID` / `_CLIENTSECRET` | ninguno | en vez de `_TOKEN`: la cuenta de servicio con la que caja pide su token al origen |
 | `CAJA_CONCILIACION_RESPONSABLE` / `CAJA_CONCILIACION_CANAL` | ninguno | a quién avisa un pago que muere. **Obligatorios con el buzón habilitado**: sin ellos la app no arranca |
 
 ## Cargar el modelo
@@ -1145,13 +1146,14 @@ con el buzón apagado no arranca ningún bucle, los pagos quedan `PENDIENTE` y e
 | `caja.buzon.timeout` | `10s`: la espera de la conexión y de la respuesta |
 | `caja.buzon.destinos.<sistema>.url` | sin valor: la raíz del sistema de origen; se llama a `POST {url}/pagos` |
 | `caja.buzon.destinos.<sistema>.token` | opcional: va como `Authorization: Bearer`, nunca en el cuerpo |
+| `caja.buzon.destinos.<sistema>.token-url`, `.client-id`, `.client-secret` | opcionales, en vez de `token`: la cuenta de servicio del origen. Caja pide `POST {token-url}` con `{"clientId","clientSecret"}`, recibe `{"token","expiresAt"}`, lo reusa hasta 60 s antes de `expiresAt` y lo manda como `Authorization: Bearer`. Un 401 o 403 del origen lo olvida (la entrega queda en `NoContesta` y la siguiente vuelta pide uno nuevo); si el endpoint de token falla, también es `NoContesta`. `token` y `client-id` a la vez no arrancan. El `client-secret` nunca se loguea |
 | `caja.buzon.destinos.<sistema>.verificar` | `false`: con `true`, la ventanilla pregunta `POST {url}/ordenes/vigencia` antes de cobrar (ver «La comprobación con el origen»). No depende de `habilitado` |
 | `caja.buzon.destinos.<sistema>.sin-respuesta` | `COBRAR`: si el origen no contesta, se cobra con `advertencia_origen`; `NO_COBRAR` contesta 503 |
 | `caja.conciliacion.responsable` y `.canal` | **obligatorios con el buzón habilitado**: si faltan, el arranque falla nombrándolos |
 
 `<sistema>` es el `sistema_origen` de las órdenes (`rentas`, `mercados`…): un sistema nuevo es una línea de
 configuración, no un despliegue. Por variables: `CAJA_BUZON_DESTINOS_RENTAS_URL` y `CAJA_BUZON_DESTINOS_RENTAS_TOKEN`
-(y `_VERIFICAR` y `_SINRESPUESTA`, sin el guion: así lo une Spring).
+(y `_TOKENURL`, `_CLIENTID`, `_CLIENTSECRET`, `_VERIFICAR` y `_SINRESPUESTA`, sin el guion: así lo une Spring).
 
 #### Una vuelta
 
@@ -1204,7 +1206,7 @@ vuelve a esperar. En cada vuelta:
 | Respuesta | Qué es | Qué queda |
 |---|---|---|
 | 200, 201, 202 o **409** (el receptor ya lo tenía: deduplicó por `pagoId`) | Entregado | `ENTREGADO`, `entregado_en`, `intentos + 1` y `ultimo_error` vacío; un 202 (o un 409) que dice `a_cuenta`, además `a_cuenta` y `motivo_a_cuenta` (ver «El pago a cuenta») |
-| 401 o 403 | No contesta, con un diagnóstico de credencial: sin token, token que no vale o caducó, o falta un permiso en el destino | `intentos + 1` y `ultimo_error`; se reintenta |
+| 401 o 403 | No contesta (y olvida el token pedido con la cuenta de servicio), con un diagnóstico de credencial: sin token, token que no vale o caducó, o falta un permiso en el destino | `intentos + 1` y `ultimo_error`; se reintenta |
 | Otro 4xx | Rechazado: el motivo no va a cambiar solo | **`MUERTO` ya**, con `intentos + 1` |
 | 5xx, error de E/S, tiempo agotado o **sin URL configurada** | No contesta | `intentos + 1` y `ultimo_error`; `MUERTO` cuando `intentos + 1 ≥ caja.buzon.intentos` |
 
