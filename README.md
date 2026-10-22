@@ -236,8 +236,10 @@ mirar su importe.
 | `pagador_documento`  | TEXT      | Con lo que se busca en ventanilla, en mayúsculas, hasta 20.                                         | `orden_de_cobro.pagador_documento`    |
 | `pagador_nombre`     | TEXT      | Lo que se imprime en el recibo, hasta 150.                                                          | `orden_de_cobro.pagador_nombre`       |
 | `pagador_externo_id` | INTEGER   | El id que le da el sistema de origen (en rentas, el contribuyente), mayor que 0.                    | `orden_de_cobro.pagador_externo_id`   |
-| `estado`             | ENUM      | `estado_orden`: `PENDIENTE` (al nacer), `PAGADA` o `ANULADA`. Obligatorio.                          | `orden_de_cobro.estado`               |
+| `estado`             | ENUM      | `estado_orden`: `PENDIENTE` (al nacer), `PAGADA` o `ANULADA` (la retiró su origen). Obligatorio.    | `orden_de_cobro.estado`               |
 | `observacion`        | LONG_TEXT | Por qué se dio de alta (regla 10): de 5 a 500 caracteres. Obligatoria.                              | `orden_de_cobro.observacion`          |
+| `motivo_retiro`      | TEXT      | Por qué la retiró su sistema de origen, de 1 a 200, en una línea. Solo en una `ANULADA`.            | —                                     |
+| `retirada_en`        | DATETIME  | Cuándo la retiró. Solo en una `ANULADA`; un segundo retiro no la cambia.                            | —                                     |
 | `recibo`             | relación  | El recibo que la cobró (`orden_recibo`, opcional). Una orden `PAGADA` lo nombra.                    | `orden_de_cobro.recibo_id` (`orden_recibo_ck`) |
 
 Los largos son de las columnas de `caja`: wasichai guarda TEXT sin largo, así que los comprueba el alta. `creada_en` es
@@ -401,6 +403,7 @@ Bajo `/api/caja`, con el token de core (`Authorization: Bearer …`; sin token, 
 | Ruta                               | Qué hace                                                                                  | Permiso que exige                       |
 | ---------------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------- |
 | `POST /api/caja/ordenes-de-cobro`  | Da de alta una orden (servidor a servidor): **201** si es nueva, **200** si ya estaba.     | una cuenta de servicio (o un `ADMIN`; ver abajo), con CREATE sobre `orden_de_cobro` y READ para releer la que ya estaba |
+| `POST /api/caja/ordenes-de-cobro/retiro` | El sistema de origen retira una orden `PENDIENTE` (ver «El retiro»): **200** con la orden `ANULADA`, también si ya lo estaba; **409** si está `PAGADA`; **404** si no hay una de su sistema con esa referencia. | una cuenta de servicio (o un `ADMIN` que nombra el sistema), con READ y UPDATE sobre `orden_de_cobro` |
 | `GET /api/caja/ordenes-de-cobro`   | Lista paginada para la ventanilla: `?pagador_documento=&estado=&page=&size=`, por fecha de exigibilidad. Sin `estado`, las `PENDIENTE`. | READ sobre `orden_de_cobro` |
 | `GET /api/caja/cajas`              | Lista paginada de cajas por código: `codigo`, `nombre`, `serie`, `area_codigo`, `area_nombre` y `activa`. La de baja sale con `activa: false`; una sin área, con el área en `null`. | READ sobre `caja` y sobre `area` |
 | `POST /api/caja/cobros`            | Cobra órdenes y emite el recibo (ver «La cobranza»): **201** con el recibo, **200** si es el reenvío de una `Idempotency-Key` ya usada. | CREATE sobre `recibo` y UPDATE sobre `orden_de_cobro` (403 antes de empezar, diciendo cuál falta); al escribir, core exige además CREATE sobre `turno`, `linea_recibo` y `pago_evento` |
@@ -454,7 +457,44 @@ El alta recibe `sistema_origen`, `referencia_externa`, `concepto`, `detalle`, `i
 sea una de ésas es un 400 que la nombra** (`tributo`, `ejercicio`…). El importe va en cadena, de hasta 13 enteros y 2
 decimales (`numeric(15,2)` de `caja`); `pagador_externo_id`, en cadena o en número, es un entero mayor que 0 (si no, 400
 en `pagador_externo_id`). La respuesta lleva `orden_id`, los campos (con `actualizado_a` dentro de `importe`), el
-`estado` y `nueva` (`true` en el 201, `false` en el 200).
+`estado` y `nueva` (`true` en el 201, `false` en el 200), y `motivo_retiro` y `retirada_en` (`null` salvo en una
+`ANULADA`).
+
+**El retiro** (caja-backend#39). Cuando el sistema de origen deja de cobrar una deuda (la redeterminó, la anuló, anuló
+la declaración que la generó), retira su orden para que la ventanilla no la cobre:
+
+```
+POST /api/caja/ordenes-de-cobro/retiro   {"referencia_externa": "ARB-p1|LIMP|2026|3|1|2", "motivo": "Redeterminación por la DJ n° 12"}
+```
+
+La referencia va **en el cuerpo, nunca en la ruta**: es opaca y puede llevar `|`, `/` o cualquier otro carácter. El
+sistema sale de quien llama, como en el alta: la cuenta de servicio retira solo las suyas (con otro `sistema_origen` en el
+cuerpo, 403), un `ADMIN` nombra el sistema (sin él, 400 en `sistema_origen`) y cualquier otra persona recibe 403. El
+`motivo` es obligatorio, de 1 a 200 caracteres en una línea, sin caracteres de control (si no, 400 en `motivo`), y un
+campo desconocido es un 400 que lo nombra. Sus cinco respuestas:
+
+- **200, `ANULADA`**: la orden estaba `PENDIENTE` y ya no se cobra. Lleva `motivo_retiro` y `retirada_en`; la razón de la
+  escritura en la auditoría es el texto fijo «retiro de la orden por su sistema de origen».
+- **200, la misma**: ya estaba `ANULADA`. El reintento recibe lo mismo, con el primer motivo y la primera fecha.
+- **409**: está `PAGADA`. El `detail` nombra el recibo (su id: la cuenta de servicio no lee recibos) y dice que el origen
+  la imputa cuando reciba el pago, que llega por el buzón (`PAGO_REGISTRADO`). El origen no lo parsea.
+- **404**: no hay una orden **de su sistema** con esa referencia; la de otro sistema tampoco se ve. El `detail` repite la
+  referencia tal cual.
+- **400 o 403**: el cuerpo o quien llama, como arriba.
+
+**La carrera con el cobro.** El retiro decide bajo el candado `ORDEN` de la orden, el mismo que toma el cobro, y la
+relee después de tomarlo. Un retiro y un cobro a la vez se ordenan: o el cobro emite su recibo y el retiro recibe 409, o
+el retiro la deja `ANULADA` y el cobro recibe 422. **Nunca queda una `ANULADA` con recibo** (`RetiroApiTest`).
+
+**El recibo anulado el mismo día.** Si el origen intentó retirar una orden `PAGADA` (409) y después ese recibo se anula,
+la orden vuelve a `PENDIENTE` y **vuelve a ser cobrable, con el importe viejo**: caja no sabe que el origen la quería
+retirada. El `PAGO_ANULADO` del buzón se lo avisa, y el origen tiene que **reintentar el retiro** al recibirlo (anotado
+en srtm-backend#164). La orden devuelta a `PENDIENTE` se retira como cualquier otra.
+
+**Quién escribe el retiro.** Caja escribe como el usuario que llama, por su api (`Registros`, con `EscrituraDeCaja`):
+por eso `SISTEMA_ORIGEN` tiene UPDATE sobre `orden_de_cobro`. La plataforma no puede escribir dentro de una petición
+(`asPlatform` de wasichai lo rechaza), y ese UPDATE no abre ninguna otra puerta: la API genérica no escribe
+`orden_de_cobro` (`apiOnly` y la guarda, ver «La segunda puerta»), y el cobro exige además CREATE sobre `recibo`.
 
 El cobro recibe `caja` (el código), `forma_pago`, `ordenes` (los `orden_id`), `observacion` y, opcionales, `cajero` y
 `fecha_de_pago`, con la cabecera opcional `Idempotency-Key` (de 1 a 64 caracteres). Contesta:
@@ -673,8 +713,11 @@ recibo original. Luego, en este orden:
 4. **El turno cerrado no cobra: 409 «Turno cerrado».** Se mira bajo el candado del turno, el mismo que toma el cierre:
    un cobro que esperaba a un cierre en curso lo encuentra cerrado. Para seguir cobrando ese día hay que reversarlo.
 5. **Las órdenes.** Candado `ORDEN` con el id de cada una, **ordenadas por id**, y se leen después de tomarlos. Una que no
-   existe es **404**; de dos sistemas de origen, **400** en `ordenes` (un recibo se anula entero); una ya pagada,
-   anulada o todavía no exigible a la fecha de pago, **409** con su id. La misma orden dos veces en la petición es 400.
+   existe es **404**; de dos sistemas de origen, **400** en `ordenes` (un recibo se anula entero); una ya pagada o
+   todavía no exigible a la fecha de pago, **409** con su id. **Una que su origen retiró (`ANULADA`) es 422**
+   (`OrdenRetirada`), con su id y su motivo, «el sistema que la emitió la retiró»: no se cobrará nunca más, a
+   diferencia de la pagada (que vuelve a `PENDIENTE` si su recibo se anula). La ventanilla la quita y vuelve a leer las
+   del pagador. La misma orden dos veces en la petición es 400.
    **Una orden con el importe roto es 409 «dato roto»**, con su id: cero, negativo, con más de 2 decimales o de 13
    enteros, lo que el alta habría rechazado (`defectoDelImporte`, la misma regla). Solo llega así por la API genérica,
    y cobrarla daría un recibo en negativo que rompe el arqueo y la recaudación.
@@ -744,7 +787,7 @@ cambia desplegando, y esas son las que se acaban cobrando mal. **La tarifa es un
 La garantía de la UI es que **ningún total sale del cliente**, y el cajero necesita saber cuánto cobrar antes de emitir.
 `POST /api/caja/cobros/vista-previa` y `POST /api/caja/cobros/tasas/vista-previa` aplican **las mismas funciones** que
 su cobro (`impedimentosDelCobro`, `lineaDeOrden`, `cotizar`, `lineaDeTasa`, `totalDe`), sin candados ni escritura. Lo que
-impediría el cobro (una orden que no existe, ya pagada o no exigible, con el importe roto, dos sistemas; una tasa sin
+impediría el cobro (una orden que no existe, ya pagada, retirada por su origen o no exigible, con el importe roto, dos sistemas; una tasa sin
 tarifa vigente o en cero, una vigencia al revés) **no es un error**: va en `motivos`, `cobrable` es `false` y **queda fuera de las líneas y
 del total**, en las dos vistas previas por igual: el total es el de lo que sí se puede cobrar. Una petición mal hecha (sin órdenes, un campo
 desconocido, una fecha que no es hoy) sí es 400. `VistaPreviaApiTest` compara el total de la vista previa con el del
@@ -1310,7 +1353,7 @@ modelo declare para ese objeto: `ANULAR_AJENO` sobre `recibo`) sobre cada uno de
 
 | Rol               | Puede                                                    |
 | ----------------- | -------------------------------------------------------- |
-| `SISTEMA_ORIGEN`  | READ y CREATE sobre `orden_de_cobro`: es el rol de la **cuenta de servicio** de un sistema de origen (el nombre de la cuenta es el sistema), y da de alta órdenes. Una persona con este rol recibe 403 en el alta (ver «El alta de órdenes») |
+| `SISTEMA_ORIGEN`  | READ, CREATE y UPDATE sobre `orden_de_cobro`: es el rol de la **cuenta de servicio** de un sistema de origen (el nombre de la cuenta es el sistema); da de alta órdenes y retira las suyas (UPDATE es el retiro, ver «El retiro»). Una persona con este rol recibe 403 en el alta y en el retiro (ver «El alta de órdenes») |
 | `CAJERO`          | READ sobre `area`, `caja` y `tasa`; READ y UPDATE sobre `orden_de_cobro`; READ y CREATE sobre `turno`, `recibo`, `linea_recibo` y `pago_evento`: cobra. READ sobre `anulacion_recibo` y `reimpresion_recibo`: no anula ni reimprime. READ y CREATE sobre `cierre_turno` y `cierre_turno_linea`: cierra su turno. READ sobre `reversion_cierre`: no reversa |
 | `SUPERVISOR_CAJA` | lo mismo que `CAJERO`, y además CREATE sobre `anulacion_recibo` (anula) y la acción **`ANULAR_AJENO`** sobre `recibo` (anula también el recibo de otro cajero), CREATE sobre `reimpresion_recibo` (reimprime) y sobre `reversion_cierre` (reversa el cierre de su propio turno), y **UPDATE sobre `pago_evento`** (explica un pago sin entregar) |
 | `TESORERIA`       | READ sobre cada objeto del modelo                        |
@@ -1372,7 +1415,8 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
 - **Unitarias**: `ReglasTest` y `ObservacionTest` fijan las reglas del alta; `FronteraDeLaOrdenTest` lee
   `model/model.json` y falla si la orden de cobro gana `tributo`, `ejercicio` o `periodo`. `CobranzaTest` fija las de
   la cobranza (el número impreso, el total exacto, una sola fuente, cobrable a la fecha, el importe roto que no se cobra, las claves del
-  cuerpo de `PAGO_REGISTRADO` y lo que llega en la petición); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
+  cuerpo de `PAGO_REGISTRADO`, lo que llega en la petición y la retirada, que es un 422 con su motivo); `RetiroTest`, el
+  motivo del retiro (recortado, de 1 a 200, sin caracteres de control); `TasasTest`, las de la caja de tasas (la vigencia con sus extremos,
   la tarifa vigente, `12.30 × 3 = 36.90` y `0.10 × 7 = 0.70`, la vigencia al revés, la cantidad y el precio en la
   petición); `PdfRendererTest` y `ReciboPdfTest`, el PDF (el original y el duplicado, con y sin anulación, y que no se dibuja en el
   hilo que lo pide);
@@ -1405,7 +1449,13 @@ yarn format:check           # prettier sobre yaml y json (yarn format lo corrige
   comprueba los 400 por campo). `OrdenesApiTest` cubre el alta (201, 200, diez simultáneas, los 400, el 403 de un
   `CAJERO`), la cuenta de servicio que da de alta sin nombrar el sistema, la que nombra otro (403), la persona con el
   rol `SISTEMA_ORIGEN` (403), la cuenta sin CREATE (403) y el `ADMIN` que nombra el sistema (y recibe 400 si no lo hace),
-  y la lista por pagador; `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
+  y la lista por pagador; `RetiroApiTest`, el retiro (la `PENDIENTE` que queda `ANULADA` con su motivo, su fecha y la
+  razón fija, el segundo retiro idempotente, la `PAGADA` que da 409 con su recibo, el 404 que repite la referencia con
+  `|`, la referencia con barras por el cuerpo, la cuenta de otro sistema que no la ve, la persona con el rol
+  `SISTEMA_ORIGEN` y el `ADMIN` que nombra el sistema, los 400 en `motivo`, **retiro y cobro a la vez** (gana uno, nunca
+  una `ANULADA` con recibo), el cobro de una `ANULADA` que da 422, la vista previa que sigue en 200 con `cobrable`
+  `false`, la lista por estado y la orden devuelta a `PENDIENTE` por la anulación de su recibo, que se puede retirar);
+  `CajasApiTest`, el catálogo con y sin área. `CobroApiTest` cubre la cobranza: el
   caso feliz, el doble cobro, la idempotencia, los 400, 403, 404 y 409, **diez cobros simultáneos de la misma orden**
   (un recibo y nueve 409) y **veinte simultáneos en la misma caja** (del 1 al 20, sin huecos ni repetidos), los
   permisos y el PDF (con una reimpresión ya no sale el original), y **dos cobros simultáneos con la misma

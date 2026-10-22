@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.springframework.http.HttpStatus
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.json.JsonMapper
 import wasichai.core.common.ConflictException
@@ -97,6 +98,28 @@ class CobranzaTest {
         assertTrue(motivoNoCobrable(anulada, hoy)!!.contains("la retiró"))
         assertTrue(motivoNoCobrable(futura, hoy)!!.contains("es exigible desde el ${hoy.plusDays(1)}"))
         assertTrue(motivoNoCobrable(futura, hoy)!!.contains(futura.id!!))
+    }
+
+    // la retirada no es un conflicto que se resuelva esperando: el sistema que la emitió ya no la cobra. 422, con su
+    // motivo; la pagada y la no exigible siguen en 409
+    @Test
+    fun `el impedimento de una ANULADA es OrdenRetirada, un 422 con su motivo`() {
+        val anulada = orden(estado = ANULADA).copy(motivoRetiro = "Redeterminación por la DJ n° 12")
+        val pagada = orden(estado = PAGADA, recibo = UUID.randomUUID().toString())
+        val leidas = listOf(anulada, pagada).associateBy { it.id!! }
+
+        val impedimentos = impedimentosDelCobro(listOf(anulada.id!!, pagada.id!!), leidas, hoy)
+
+        val retirada = impedimentos[0]
+        assertTrue(retirada is OrdenRetirada, impedimentos.toString())
+        assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, retirada.status)
+        assertTrue(retirada.message.contains("el sistema que la emitió la retiró"), retirada.message)
+        assertTrue(retirada.message.contains("Redeterminación por la DJ n° 12"), retirada.message)
+        assertTrue(retirada.message.contains(anulada.id), retirada.message)
+        assertTrue(impedimentos[1] is ConflictException, impedimentos.toString())
+        // anulada y con el importe roto: lo que manda es que se retiró
+        val rota = orden(estado = ANULADA, importe = BigDecimal("-1"))
+        assertTrue(impedimentosDelCobro(listOf(rota.id!!), mapOf(rota.id to rota), hoy).single() is OrdenRetirada)
     }
 
     // una orden escrita en la base no pasó por el alta: el cobro vuelve a mirar su importe, y un

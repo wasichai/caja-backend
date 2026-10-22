@@ -3,9 +3,9 @@
     {
       "name": "SISTEMA_ORIGEN",
       "label": "Sistema de origen",
-      "description": "El rol de la cuenta de servicio de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta y las lee, servidor a servidor. Su nombre es el sistema de origen de sus órdenes. Una persona con este rol no da de alta.",
+      "description": "El rol de la cuenta de servicio de un sistema que manda órdenes de cobro (rentas, mercados): las da de alta, las lee y retira las que ya no se deben, servidor a servidor. Su nombre es el sistema de origen de sus órdenes. Una persona con este rol no da de alta ni retira. UPDATE es el retiro: caja escribe como quien llama, y la API genérica no escribe orden_de_cobro (apiOnly).",
       "permisos": {
-        "orden_de_cobro": ["READ", "CREATE"]
+        "orden_de_cobro": ["READ", "CREATE", "UPDATE"]
       }
     },
     {

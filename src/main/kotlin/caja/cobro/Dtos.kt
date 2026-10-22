@@ -2,6 +2,7 @@ package caja.cobro
 
 import caja.comun.CuerpoEstricto
 import caja.comun.Importe
+import caja.comun.enLima
 import caja.modelo.OrdenDeCobro
 import com.fasterxml.jackson.annotation.JsonInclude
 import tools.jackson.databind.PropertyNamingStrategies
@@ -28,7 +29,17 @@ class NuevaOrden(
     val observacion: String? = null
 ) : CuerpoEstricto()
 
-// una orden como sale por la api: el importe con su fecha (regla 9). nueva solo en el alta: true si se creó ahora,
+// lo que manda el sistema de origen para retirar una orden: la referencia en el cuerpo, nunca en la ruta (una referencia
+// lleva cualquier carácter, también «|» o «/»), y el motivo. el sistema es el de la cuenta de servicio; un ADMIN lo
+// nombra, de contingencia, como en el alta
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
+class RetiroDeOrden(
+    val referenciaExterna: String? = null,
+    val motivo: String? = null,
+    val sistemaOrigen: String? = null
+) : CuerpoEstricto()
+
+// una orden como sale por la api: el importe con su fecha (regla 9). motivo_retiro y retirada_en, solo en una ANULADA. nueva solo en el alta: true si se creó ahora,
 // false si ya estaba. va en el cuerpo además de en el código (201 o 200), para quien solo mire el cuerpo
 @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy::class)
 data class OrdenRespuesta(
@@ -44,6 +55,8 @@ data class OrdenRespuesta(
     val pagadorExternoId: Long?,
     val estado: String?,
     val observacion: String?,
+    val motivoRetiro: String?,
+    val retiradaEn: String?,
     @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val nueva: Boolean? = null
 ) {
@@ -64,6 +77,8 @@ data class OrdenRespuesta(
             pagadorExternoId = orden.pagadorExternoId,
             estado = orden.estado,
             observacion = orden.observacion,
+            motivoRetiro = orden.motivoRetiro,
+            retiradaEn = orden.retiradaEn?.let(::enLima),
             nueva = nueva
         )
     }
