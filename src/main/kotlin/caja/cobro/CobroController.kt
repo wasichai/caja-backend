@@ -63,6 +63,13 @@ class CobroController(
         @RequestBody body: VistaPreviaDeOrdenes
     ) = cobros.vistaPrevia(body)
 
+    // los recibos de un día (hoy si no se dice) cobrados sin poder comprobar con el origen (caja-backend#42): los que el
+    // cierre tiene que mirar
+    @GetMapping("/cobros/sin-verificar")
+    suspend fun sinVerificar(
+        @RequestParam(required = false) fecha: String?
+    ) = cobros.sinVerificar(fecha)
+
     @GetMapping("/cajas")
     suspend fun cajas(
         @RequestParam(required = false) page: Int?,

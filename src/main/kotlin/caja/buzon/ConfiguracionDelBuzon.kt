@@ -32,13 +32,22 @@ data class PropiedadesDelBuzon(
         require(!intervalo.isNegative && !intervalo.isZero) { "caja.buzon.intervalo es una espera positiva" }
     }
 
+    // verificar: si la ventanilla le pregunta a este origen, antes de cobrar, si sus órdenes siguen vigentes
+    // (caja-backend#42). apagado por defecto: un origen que no implementa POST /ordenes/vigencia cobra como siempre.
+    // sinRespuesta: qué hace la ventanilla si el origen no contesta, o no se le entiende: COBRAR (con la advertencia en el
+    // recibo) o NO_COBRAR (503). por defecto COBRAR: con el origen caído, la ventanilla cobra igual (decisión del buzón)
     data class Destino(
         val url: String? = null,
-        val token: String? = null
+        val token: String? = null,
+        val verificar: Boolean = false,
+        val sinRespuesta: SinRespuesta = SinRespuesta.COBRAR
     ) {
         // el token nunca sale en un toString (un registro de arranque, un volcado de la configuración)
-        override fun toString() = "Destino(url=$url, token=${if (token.isNullOrBlank()) "ninguno" else "«…»"})"
+        override fun toString() =
+            "Destino(url=$url, token=${if (token.isNullOrBlank()) "ninguno" else "«…»"}, verificar=$verificar, sinRespuesta=$sinRespuesta)"
     }
+
+    enum class SinRespuesta { COBRAR, NO_COBRAR }
 }
 
 @Configuration(proxyBeanMethods = false)

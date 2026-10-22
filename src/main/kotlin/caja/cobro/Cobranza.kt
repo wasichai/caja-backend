@@ -200,7 +200,8 @@ fun respuestaDelCobro(
                 tipoPago = recibo.tipoPago!!,
                 emitidoEn = enLima(recibo.emitidoEn!!),
                 total = Importe.de(recibo.total!!, fecha),
-                lineas = lineasEnOrden(lineas).map { lineaRespuesta(it, fecha, codigos) }
+                lineas = lineasEnOrden(lineas).map { lineaRespuesta(it, fecha, codigos) },
+                advertenciaOrigen = recibo.advertenciaOrigen
             ),
         pagoId = evento?.eventoId,
         estadoDelPago =

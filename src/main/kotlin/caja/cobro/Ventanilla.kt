@@ -81,12 +81,15 @@ class Ventanilla(
 
     // preparar: lo propio de cada cobro antes del número (sus candados, sus lecturas y sus 404, 400 y 409), en el lugar
     // que le toca en el orden de los candados. despues: lo que cada cobro agrega al recibo emitido, en la misma
-    // transacción. reenviado: la respuesta de un reenvío de la misma clave, con el recibo de la primera vez y sus líneas
+    // transacción. reenviado: la respuesta de un reenvío de la misma clave, con el recibo de la primera vez y sus líneas.
+    // antes: lo que el cobro hace fuera de la transacción y después de buscar el reenvío (la comprobación en línea con el
+    // origen, caja-backend#42): puede rechazar el cobro, o devolver la advertencia que queda en el recibo
     suspend fun <D, R> cobrar(
         apertura: Apertura,
         preparar: suspend () -> Contenido<D>,
         despues: suspend (Emitido, D) -> R,
-        reenviado: suspend (Recibo, List<LineaRecibo>) -> R
+        reenviado: suspend (Recibo, List<LineaRecibo>) -> R,
+        antes: suspend () -> String? = { null }
     ): R {
         // el reenvío de un intento ya emitido se contesta ANTES de la transacción: antes de abrir o crear el turno y de
         // mirar si la caja sigue activa. un recibo confirmado no cambia, así que basta una lectura por su clave: el reenvío
@@ -98,8 +101,11 @@ class Ventanilla(
                 val caja = registros.primero(CAJA, Caja::class.java, mapOf("codigo" to apertura.caja))
                 return reenvio(recibo, apertura, caja?.id, reenviado)
             }
+        // después del reenvío y antes de la transacción: un reenvío no vuelve a preguntarle al origen (devuelve lo que ya se
+        // cobró), y la pregunta no retiene ningún candado mientras la red tarda
+        val advertencia = antes()
         return try {
-            transaccion.en { emitir(apertura, preparar, despues, reenviado) }
+            transaccion.en { emitir(apertura, preparar, despues, reenviado, advertencia) }
         } catch (choque: DuplicateKeyException) {
             // la red de un unique saltó: otro cobro se confirmó a la vez. la transacción ya se revirtió entera
             throw ConflictException("El cobro chocó con otro que se confirmó a la vez y no se emitió nada: vuelva a intentarlo")
@@ -112,7 +118,8 @@ class Ventanilla(
         apertura: Apertura,
         preparar: suspend () -> Contenido<D>,
         despues: suspend (Emitido, D) -> R,
-        reenviado: suspend (Recibo, List<LineaRecibo>) -> R
+        reenviado: suspend (Recibo, List<LineaRecibo>) -> R,
+        advertencia: String?
     ): R {
         val caja = cajaQueCobra(apertura.caja)
         val cajaId = caja.id!!
@@ -184,7 +191,8 @@ class Ventanilla(
                     "total" to totalDe(contenido.lineas.map { it.monto!! }).toPlainString(),
                     "actualizado_a" to apertura.hoy.toString(),
                     "clave_idempotencia" to apertura.clave,
-                    "observacion" to apertura.observacion.texto
+                    "observacion" to apertura.observacion.texto,
+                    "advertencia_origen" to advertencia
                 ),
                 apertura.observacion.texto
             )

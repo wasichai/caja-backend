@@ -8,6 +8,7 @@ import caja.comun.PAGO_EVENTO
 import caja.comun.Permisos
 import caja.comun.RECIBO
 import caja.comun.Registros
+import caja.comun.Transaccion
 import caja.comun.campo
 import caja.comun.codigoDeCaja
 import caja.comun.sinCamposDesconocidos
@@ -23,14 +24,22 @@ import org.springframework.stereotype.Service
 import wasichai.core.common.Actions
 import wasichai.core.common.FieldViolation
 import wasichai.core.common.ValidationException
+import wasichai.core.data.RecordCriterion
 import wasichai.core.identity.CurrentUser
+import wasichai.core.platform.SqlIdentifier
 import java.time.Clock
 import java.time.LocalDate
+import java.time.OffsetDateTime
 import java.util.UUID
 
 // el cobro de órdenes (CobrarOrdenes de caja): cobra órdenes y emite su recibo con el acto de ventanilla (Ventanilla),
 // en UNA transacción. a lo común agrega sus candados de orden, las órdenes PAGADA con su recibo y el evento
-// PAGO_REGISTRADO en el buzón: si la fila del buzón está, el recibo está. y la vista previa, con las mismas reglas
+// PAGO_REGISTRADO en el buzón: si la fila del buzón está, el recibo está. y la vista previa, con las mismas reglas.
+//
+// si el sistema de las órdenes lo pide (caja.buzon.destinos.<sistema>.verificar, caja-backend#42), antes de cobrar le
+// pregunta si siguen vigentes: fuera de la transacción y después de buscar el reenvío (Ventanilla.cobrar, antes). una que
+// ya no cobra la retira aquí mismo, bajo su candado (retirarBajoCandado, la misma regla del retiro), y el cobro es el
+// 422 de una retirada. sin respuesta, lo que diga su sin-respuesta: cobrar con la advertencia en el recibo, o 503
 @Service
 class CobroService(
     private val ventanilla: Ventanilla,
@@ -38,7 +47,10 @@ class CobroService(
     private val candados: Candados,
     private val permisos: Permisos,
     private val currentUser: CurrentUser,
-    private val reloj: Clock
+    private val reloj: Clock,
+    private val transaccion: Transaccion,
+    private val ordenesService: OrdenesService,
+    private val vigencia: VigenciaEnElOrigen
 ) {
     suspend fun cobrar(
         body: NuevoCobro,
@@ -60,8 +72,54 @@ class CobroService(
             pedido.apertura,
             preparar = { ordenes(pedido.ordenes, hoy) },
             despues = ::pagar,
-            reenviado = ::reenviado
+            reenviado = ::reenviado,
+            antes = { comprobarConElOrigen(pedido.ordenes, hoy) }
         )
+    }
+
+    // la comprobación en línea, fuera de la transacción: la advertencia para el recibo, o null. las órdenes se leen sin
+    // candado solo para saber qué preguntar; si algo ya impide cobrarlas (no existen, dos sistemas, ya pagadas), no se
+    // pregunta: el cobro lo rechazará dentro con su error de siempre. la decisión final sigue siendo la de dentro, bajo
+    // los candados
+    private suspend fun comprobarConElOrigen(
+        ordenes: List<UUID>,
+        hoy: LocalDate
+    ): String? {
+        val porId = ordenes.map(UUID::toString)
+        val leidas = registros.byIds(ORDEN_DE_COBRO, OrdenDeCobro::class.java, porId)
+        if (impedimentosDelCobro(porId, leidas, hoy).isNotEmpty()) return null
+        val cobradas = porId.map(leidas::getValue)
+        val sistema = sistemaUnico(cobradas)
+        return when (val dicho = vigencia.consultar(sistema, cobradas)) {
+            Vigencia.NoSeConsulta -> null
+            is Vigencia.NoContesta -> if (dicho.cobrar) advertenciaDelOrigen(sistema, dicho.motivo) else throw OrigenSinRespuesta(sistema, dicho.motivo)
+            is Vigencia.Contesto -> {
+                // cada una en su transacción, en orden de id: el retiro queda aunque el cobro no siga. si un cobro de otra
+                // ventanilla la pagó entre tanto, el retiro es el 409 de una PAGADA y este cobro tampoco sigue
+                val retiradas =
+                    dicho.noVigentes.keys.sorted().map { id ->
+                        transaccion.en { ordenesService.retirarBajoCandado(leidas.getValue(id), dicho.noVigentes.getValue(id), OffsetDateTime.now(reloj)) }
+                    }
+                retiradas.firstOrNull()?.let { throw OrdenRetirada(it) }
+                null
+            }
+        }
+    }
+
+    // los recibos del día cobrados sin poder comprobar con el origen (sin-respuesta COBRAR): los que alguien tiene que
+    // mirar, porque el origen recibirá el pago de una deuda que quizá ya no cobraba. por emitido_en
+    suspend fun sinVerificar(pedida: String?): List<CobroSinVerificar> {
+        val usuario = currentUser.require()
+        permisos.exigir(usuario, "Los cobros sin verificar", "lee los recibos del día", Actions.READ to RECIBO)
+        // sin fecha, la de hoy en Lima: es la hoja del día que se está cobrando
+        val dia = pedida?.trim()?.ifEmpty { null }?.let { fecha(it, "fecha") } ?: LocalDate.now(reloj)
+        val conAdvertencia =
+            RecordCriterion { recibo, _ ->
+                "${SqlIdentifier.quote(recibo.fields.first { it.name == "advertencia_origen" }.columnName)} IS NOT NULL"
+            }
+        return registros
+            .all(RECIBO, Recibo::class.java, filters = mapOf("actualizado_a" to dia.toString()), sort = "emitido_en", criteria = listOf(conAdvertencia))
+            .map(CobroSinVerificar::de)
     }
 
     // lo que costaría cobrar esas órdenes hoy, sin candados ni escritura: las mismas reglas que el cobro

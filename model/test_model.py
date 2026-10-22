@@ -120,9 +120,11 @@ class ShippedModelTests(unittest.TestCase):
             "serie": "TEXT", "numero": "INTEGER", "numero_impreso": "TEXT", "cajero": "TEXT",
             "pagador_documento": "TEXT", "pagador_nombre": "TEXT", "pagador_externo_id": "INTEGER",
             "emitido_en": "DATETIME", "forma_pago": "ENUM", "tipo_pago": "ENUM", "total": "DECIMAL",
-            "actualizado_a": "DATE", "clave_idempotencia": "TEXT", "observacion": "LONG_TEXT"})
+            "actualizado_a": "DATE", "clave_idempotencia": "TEXT", "observacion": "LONG_TEXT",
+            "advertencia_origen": "TEXT"})
         self.assertEqual({n for n, f in fields.items() if not f.get("required")},
-                         {"pagador_documento", "pagador_nombre", "pagador_externo_id", "clave_idempotencia"})
+                         {"pagador_documento", "pagador_nombre", "pagador_externo_id", "clave_idempotencia",
+                          "advertencia_origen"})
         self.assertEqual({n for n, f in fields.items() if f.get("unique")}, {"numero_impreso", "clave_idempotencia"})
         self.assertEqual((fields["forma_pago"]["enum"], fields["tipo_pago"]["enum"]), ("forma_pago", "tipo_pago"))
         rels = self.relationships()
