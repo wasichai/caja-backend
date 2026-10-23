@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+# packages: the wasichai libraries come from github packages (settings.gradle.kts reads GITHUB_ACTOR / GITHUB_TOKEN)
+# contents: write: attaches the jar to the release
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  jar:
+    name: Boot jar
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      # unit tests and ktlint run in ci.yml on the merge commit; the release builds the jar from the tag
+      - name: Build
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew bootJar --no-daemon -Pversion="${GITHUB_REF_NAME#v}"
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          jar="caja-backend-${GITHUB_REF_NAME#v}.jar"
+          cp build/libs/app.jar "$jar"
+          sha256sum "$jar" > "$jar.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$jar" "$jar.sha256" --clobber
