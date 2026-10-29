@@ -6,7 +6,7 @@ openhtmltopdf = "1.1.97"
 pdfbox = "3.0.8"
 thymeleaf = "3.1.5.RELEASE"
 # el destino http falso de las pruebas del buzón (la misma versión que gisxp)
-mockwebserver = "5.5.0"
+mockwebserver = "5.5.1"
 
 [libraries]
 openhtmltopdf-pdfbox = { module = "io.github.openhtmltopdf:openhtmltopdf-pdfbox", version.ref = "openhtmltopdf" }
